@@ -618,6 +618,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Left(physical)
 
   private def clockResetSafe(value: Expr[Reset], receiving: ClockDomain): Boolean =
+    boundDomainCharge()
     val memo = new IdentityHashMap[Expr[Reset], java.lang.Boolean]()
     val owner = domainRef(receiving).module
     val identity = clockIdentity(receiving.clock.get, owner)
@@ -631,6 +632,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ) == identity &&
         inheritedClockEdge(other) == edge
     def visit(input: Expr[Reset], depth: Int): Boolean =
+      boundDomainCharge()
       clockProofWork += 1
       if depth > 128 || clockProofWork > 524288 then
         clockFailure("parent reset proof exceeds budget")
@@ -6714,8 +6716,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       conservativeDimensions: Vector[Dimension] = Vector.empty,
       interfaceBoundary: Option[InterfaceBoundaryRecord] = None
   ): Unit =
-    boundaryClosureOwner.filter(_.incremental).foreach: closure =>
-      val proxy = Set(KernelSignalKind.InstanceInput, KernelSignalKind.InstanceOutput)(kind) ||
+    registrationOwner(conservativeDimensions, interfaceBoundary).foreach: closure =>
+      val proxy = admitPort(value, kind, dataType, explicitName, domain, attributes) ||
         interfaceBoundary.nonEmpty || (value match
           case endpoint: DigitalInout[?, ?] => endpoint.boundary && instanceSelectionStack.nonEmpty
           case _: InterfaceResolvedMember[?, ?] => true
@@ -7698,7 +7700,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       binding.scope.map(region => expressionPath(region.reference))
     )
 
-  def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
+  private def instanceDigitalPortBody[A <: Data](value: Signal[A]): Signal[A] =
     val selected = instanceSelectionStack.lastOption.getOrElse(
       fail("NODAL-HIERARCHY-057-001", "digital child reference requires an exact Instance selector")
     )
@@ -7729,14 +7731,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val kind = if declaration.kind == KernelSignalKind.Input then KernelSignalKind.InstanceInput
       else KernelSignalKind.InstanceOutput
       val proxy = new Signal(
-        new KernelInstanceDataType[A](CandidateRuntime.typeDescriptor(value.dataType)),
+        preparedDirectPortType(value.dataType),
         kind,
         Some(s"instance_${instance.ordinal}_port_${port.index}" +
           selected.generated.map(_ => s"_selected_${currentModule.declarations.size}").getOrElse(
             ""
           ))
       )
-      val reference = declarationIds.get(proxy)
+      val reference = completeDirectPortRegistration(proxy)
       val owner = records(reference.module)
       owner.declarations.update(
         reference.index,
@@ -8159,21 +8161,33 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       actual: DomainRecord,
       physical: DomainRecord
   ): (Option[Expr[Clock]], Option[Expr[Reset]]) =
+    boundDomainCharge()
     val reset = Option(effectiveResets.get(physical.domain)).map: value =>
+      boundDomainCharge()
       if actual.kind == KernelDomainKind.Required then actual.domain.reset else value
     actual.domain.clock -> reset
 
   /** Final bindings, not eager binding calls, own the physical edges through isolated arms. */
   private def materializeInstanceControlCaptures(resolved: Map[DomainRef, String]): Unit =
-    val byPath = records.valuesIterator.flatMap(_.domains).map(domain =>
+    val byPath = records.valuesIterator.flatMap(module =>
+      boundDomainCharge(1L + module.domains.size.toLong)
+      module.domains
+    ).map(domain =>
+      boundDomainCharge()
       domainPath(domain.reference) -> domain
     ).toMap
+    // Prepay copies plus restoration: exact profile cannot mutate these stacks.
+    boundDomainCharge(
+      3L * (moduleStack.size.toLong + collectionStack.size.toLong + generationStack.size.toLong)
+    )
     val previousModules = moduleStack.toVector
     val previousRegions = collectionStack.toVector
     val previousGeneration = generationStack.toVector
     try
       records.valuesIterator.foreach: module =>
+        boundDomainCharge()
         module.instances.foreach: instance =>
+          boundDomainCharge()
           instance.generatedScope.foreach: family =>
             val scope = family.digitalRegion.getOrElse(
               collectionFailure("generated instance has no actual digital family body")
@@ -10323,7 +10337,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       captured,
       activeGeneratedRegion
     )
-    parent.instances += record
+    parent.instances += stampAllocation(parent, record)
     child.attached = true
     instanceIds.put(instance, record)
     instanceObjects.put(childModule, instance)
@@ -12740,6 +12754,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
   private def resolveDomains(): Map[DomainRef, String] =
     val resolved = mutable.LinkedHashMap.empty[DomainRef, String]
+    boundDomainCharge(selectedRequirementBindings.size.toLong + records.size.toLong * 2L)
     selectedRequirementBindings.clear()
     val roots = records.values.filter(_.parentAtConstruction.isEmpty).toVector
     if roots.size != 1 then fail("NODAL-ROOT-016", s"expected one root Module, found ${roots.size}")
@@ -12747,13 +12762,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val visited = mutable.HashSet.empty[Long]
     var edges = 0L
     while pending.nonEmpty do
+      boundDomainCharge()
       val (handle, depth) = pending.removeHead()
       if depth > 128 || visited.size >= 65536 || !visited.add(handle) then
         fail("NODAL-HIERARCHY-057-002", "recursive or excessive concrete hierarchy")
       val module = records(handle)
+      boundDomainCharge(module.domains.size.toLong)
       module.domains.filter(_.kind != KernelDomainKind.Required).foreach: domain =>
+        boundDomainCharge()
         resolved.update(domain.reference, domainPath(domain.reference))
       if module.parentAtConstruction.isEmpty then
+        boundDomainCharge(module.domains.size.toLong)
         module.domains.filter(_.kind == KernelDomainKind.Required).foreach: requirement =>
           fail(
             "NODAL-ROOT-DOMAIN-016",
@@ -12761,12 +12780,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             Some(modulePath(handle))
           )
       module.instances.foreach: instance =>
+        boundDomainCharge()
         edges += 1
         if edges > 262144 then
           fail("NODAL-HIERARCHY-057-002", "hierarchy binding edge budget exceeded")
         val child = records(instance.child)
+        boundDomainCharge(child.domains.size.toLong * 2L)
         val requirements = child.domains.filter(_.kind == KernelDomainKind.Required).toVector
         requirements.foreach: requirement =>
+          boundDomainCharge(1L + instance.namedBindings.size.toLong)
           val named = instance.namedBindings.collectFirst:
             case (selected, actual) if selected eq requirement.domain => actual -> "named"
           val binding = named
@@ -12789,6 +12811,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 reference,
                 fail("NODAL-BINDING-020", "bound domain is not resolved in its parent occurrence")
               )
+              boundDomainCharge(2L)
               selectedRequirementBindings(requirement.reference) =
                 (reference, origin, handle, instance.ordinal)
               resolved.update(requirement.reference, physical)
@@ -12801,19 +12824,27 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         pending.append((instance.child, depth + 1))
     if visited.size != records.size then
       fail("NODAL-HIERARCHY-057-002", "construction contains an unreachable module occurrence")
-    val byPath = records.valuesIterator.flatMap(_.domains).map(domain =>
+    val byPath = records.valuesIterator.flatMap(module =>
+      boundDomainCharge(1L + module.domains.size.toLong)
+      module.domains
+    ).map(domain =>
+      boundDomainCharge()
       domainPath(domain.reference) -> domain
     ).toMap
+    boundDomainCharge(selectedRequirementBindings.size.toLong * 2L)
     selectedRequirementBindings.keysIterator.map(reference => resolved(reference)).toSet.foreach:
       path =>
+        boundDomainCharge()
         val actual = byPath(path).domain
         Option(effectiveResets.get(actual)).foreach: reset =>
+          boundDomainCharge()
           if !clockResetSafe(reset, actual) then
             fail(
               "NODAL-RDC-057-001",
               "instance actual reset does not release safely for its exact receiving clock",
               Some(path)
             )
+    boundDomainCharge(resolved.size.toLong)
     occurrenceDomains = resolved.toMap
     occurrenceDomains
 
@@ -13034,6 +13065,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
   private def markConservativeBindingDependencies(): Unit =
     operations.foreach: operation =>
+      boundDomainCharge(1L + operation.values.size.toLong)
       operation.values.foreach:
         case root: InstanceArrayRootRecord =>
           markInstanceShapeDependencies(
@@ -13042,6 +13074,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           )
         case _ => ()
     instanceInterfacePorts.foreach: (_, binding) =>
+      boundDomainCharge()
       val port = binding.port
       records(port.module).declarations(port.index).value match
         case array: InterfaceArray[?, ?] =>
@@ -13052,6 +13085,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     // Type validation records structural effects on parameter declarations. Capture
     // endpoint identities first, before those existing declaration entries mutate.
     val endpoints = records.valuesIterator.flatMap: module =>
+      boundDomainCharge(1L + module.declarations.size.toLong)
       module.declarations.iterator.collect:
         case declaration
             if declaration.value.isInstanceOf[InterfaceEndpoint] &&
@@ -13293,7 +13327,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
   private def finalizeConservativeArrayBindings(snapshot: ConstructionSnapshot): Unit =
     def merge[K, V](left: Map[K, V], right: Iterable[(K, V)]): Map[K, V] =
-      if !publicationAccountingActive then left ++ right
+      if !publicationWorkActive then left ++ right
       else left ++ publicationElements(right)
     val declarations = snapshot.modules.flatMap(module =>
       publicationProbe {
@@ -13305,7 +13339,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       publicationProbe(value.path -> value.conservativeDimensions)
     )
     val declarationMap =
-      if !publicationAccountingActive then declarationPairs.toMap
+      if !publicationWorkActive then declarationPairs.toMap
       else publicationElements(declarationPairs).toMap
     val dimensions = merge(
       merge(
@@ -13638,20 +13672,29 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         snapshotCharge(1L)
         val child = records(instance.child)
         snapshotCharge(1L)
+        boundDomainCharge(child.domains.size.toLong)
         val bindings = child.domains.filter(_.kind == KernelDomainKind.Required).map: domain =>
+          boundDomainCharge()
           domain.name -> domainPath(selectedRequirementBindings(domain.reference)._1)
         val actualBindings =
+          boundDomainCharge(child.domains.size.toLong)
           snapshotCharge(1L)
           child.domains.filter(_.kind == KernelDomainKind.Required).flatMap: requirement =>
+            boundDomainCharge()
             val (actualRef, origin, _, _) = selectedRequirementBindings(requirement.reference)
             val actual = records(actualRef.module).domains(actualRef.index)
             val (clock, reset) = actualDomainControls(actual, byPath(resolved(actualRef)))
+            boundDomainCharge(clock.size.toLong)
             clock.toVector.map: clock =>
+              boundDomainCharge()
               KernelInstanceDomainBindingSnapshot(
-                snapshotProbe(instancePath(
-                  module.handle,
-                  instance.ordinal
-                )) + "." + requirement.name,
+                boundDomainBindingPath(
+                  snapshotProbe(instancePath(
+                    module.handle,
+                    instance.ordinal
+                  )),
+                  requirement.name
+                ),
                 domainPath(requirement.reference),
                 domainPath(actualRef),
                 domainSourcePath(clock),
@@ -13857,7 +13900,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val pairs = publicationVector(entries).map(entry =>
       publicationProbe(entry.semanticPath -> entry.source)
     )
-    if !publicationAccountingActive then pairs.toMap
+    if !publicationWorkActive then pairs.toMap
     else publicationElements(pairs).toMap
 
   private def waiverSnapshots(
@@ -14881,7 +14924,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       }
     )
     val kinds =
-      if !publicationAccountingActive then kindValues.toSet
+      if !publicationWorkActive then kindValues.toSet
       else publicationElements(kindValues).toSet
     publicationCharge(7L)
     val analogKinds = Set(
@@ -14912,10 +14955,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       Set("parameter", "variable")
     else Set.empty[String]
     val nonAnalog =
-      if !publicationAccountingActive then kinds -- analogKinds
+      if !publicationWorkActive then kinds -- analogKinds
       else kinds -- publicationElements(analogKinds)
     val digitalKinds =
-      if !publicationAccountingActive then nonAnalog -- storageKinds
+      if !publicationWorkActive then nonAnalog -- storageKinds
       else nonAnalog -- publicationElements(storageKinds)
     val digital = digitalKinds.nonEmpty ||
       snapshot.interfaceAbi.nonEmpty ||
@@ -15435,22 +15478,24 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
     private def snapshot(): ConstructionSnapshot =
       if exportAccountingActive then reject("snapshot accounting is not reentrant")
-      val exact = constructionMode && exactSnapshotEligible()
+      val bound = if boundDomainAccountingCandidate then exactBoundDomainRaw() else None
+      val exact = bound.nonEmpty || (constructionMode && exactSnapshotEligible())
       prechargeCanonicalPass(quadratic = !exact)
       val previous = snapshotAccountingActive
       snapshotAccountingActive = exact
-      try
-        ConstructionSnapshot(
-          root = snapshotProbe(modulePath(rootHandle)),
-          modules = snapshots(resolved),
-          parameterExpressions = parameterExpressionSnapshots(interfaceFormalTypes),
-          generatedRegions = generatedSnapshots(staticDependenciesOnly = true),
-          staticPredicates = snapshotProbe(staticPredicateSnapshots()),
-          structuralIfs = snapshotProbe(structuralIfSnapshots(staticDependenciesOnly = true)),
-          interfaceAbi = Vector.empty,
-          resolvedNets = Vector.empty,
-          topology = Vector.empty
-        )
+      try withBoundDomainAccounting(bound.nonEmpty):
+          bound.foreach(requireBoundDomainExport(_, publication = false))
+          ConstructionSnapshot(
+            root = snapshotProbe(modulePath(rootHandle)),
+            modules = snapshots(resolved),
+            parameterExpressions = parameterExpressionSnapshots(interfaceFormalTypes),
+            generatedRegions = generatedSnapshots(staticDependenciesOnly = true),
+            staticPredicates = snapshotProbe(staticPredicateSnapshots()),
+            structuralIfs = snapshotProbe(structuralIfSnapshots(staticDependenciesOnly = true)),
+            interfaceAbi = Vector.empty,
+            resolvedNets = Vector.empty,
+            topology = Vector.empty
+          )
       finally snapshotAccountingActive = previous
 
     def resolveSemanticNames(): SemanticOriginResult =
@@ -15540,17 +15585,771 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             case _ => ()
 
     def prepareIncrementalInputs(): Unit = guard:
-      prechargeCanonicalPass()
-      prepareAreaNames()
-      val named = resolveSemanticNames()
-      semanticResult = Some(named)
-      preparedNames = Some(revision -> named)
-      resolved = resolveDomains()
-      materializeInstanceControlCaptures(resolved)
-      markConservativeBindingDependencies()
-      interfaceFormalTypes = prepareInterfaceFormalTypes()
+      val bound = if boundDomainAccountingCandidate then exactBoundDomainRaw() else None
+      bound match
+        case Some(proof) =>
+          prechargeCanonicalPass(quadratic = false)
+          prepareAreaNames()
+          val named = resolveSemanticNames()
+          semanticResult = Some(named)
+          preparedNames = Some(revision -> named)
+          prepareBoundDomainInputs(proof)
+          ()
+        case None =>
+          prechargeCanonicalPass()
+          prepareAreaNames()
+          val named = resolveSemanticNames()
+          semanticResult = Some(named)
+          preparedNames = Some(revision -> named)
+          resolved = resolveDomains()
+          materializeInstanceControlCaptures(resolved)
+          markConservativeBindingDependencies()
+          interfaceFormalTypes = prepareInterfaceFormalTypes()
+
+    private def prepareBoundDomainInputs(proof: BoundDomainAccountingProof)
+        : (Map[DomainRef, String], Vector[DataType[?]]) =
+      withBoundDomainAccounting(enabled = true):
+        resolved = resolveDomains()
+        requireBoundDomainResolved(proof)
+        materializeInstanceControlCaptures(resolved)
+        markConservativeBindingDependencies()
+        interfaceFormalTypes = prepareInterfaceFormalTypes()
+        resolved -> interfaceFormalTypes
+
+    def tryFinalBoundDomainInputs(): Option[(Map[DomainRef, String], Vector[DataType[?]])] =
+      if !boundDomainAccountingCandidate then None
+      else
+        guard:
+          exactBoundDomainRaw() match
+            case None => None
+            case Some(proof) =>
+              prechargeCanonicalPass(quadratic = false)
+              Some(prepareBoundDomainInputs(proof))
 
     // A disqualified profile retains the old fee; debit failures are never caught/refunded.
+    private def bdChecked(test: => Boolean): Boolean =
+      charge(1L)
+      test
+
+    private def bdEvery[A](values: IterableOnce[A])(test: A => Boolean): Boolean =
+      charge(1L)
+      val iterator = values.iterator
+      while iterator.hasNext do
+        charge(1L)
+        if !test(iterator.next()) then return false
+      true
+
+    private def bdTextEqual(left: String, right: String): Boolean =
+      charge(1L + left.length.toLong + right.length.toLong)
+      left == right
+
+    // Mechanical extraction of the existing publication hidden-owner block. In legacy
+    // mode the two arguments evaluate exactly the original expressions at their original
+    // positions. In new raw mode, derived bindings and digital ports are checked separately.
+    private def exactConstructionHiddenOwnersEmpty(
+        root: Module,
+        requirementBindingsAbsent: => Boolean,
+        digitalPortsAbsent: => Boolean,
+        boundChild: Option[Module] = None
+    ): Boolean =
+      def checked(test: => Boolean): Boolean = bdChecked(test)
+      val absent =
+        checked(expressionRegions.isEmpty) && checked(collectionRegions.isEmpty) &&
+          checked(collectionArguments.isEmpty) && checked(loopRegions.isEmpty) &&
+          checked(structuralArms.isEmpty) && checked(behavioralArms.isEmpty) &&
+          checked(fsmActionRegions.isEmpty) && checked(enumSwitchArms.isEmpty) &&
+          checked(iterationIndices.isEmpty) && checked(staticPredicates.isEmpty) &&
+          checked(structuralIfs.isEmpty) && checked(behavioralIfs.isEmpty) &&
+          checked(flatFsms.isEmpty) && checked(fsmResults.isEmpty) && checked(
+            enumSwitches.isEmpty
+          ) &&
+          checked(privateFsmStorage.isEmpty) && checked(fsmObservations.isEmpty) &&
+          checked(openFsms.isEmpty) && checked(behavioralChains.isEmpty) &&
+          checked(collectionStack.isEmpty) && checked(generationStack.isEmpty) &&
+          checked(compositionObservationRoot.isEmpty) && checked(areas.isEmpty) &&
+          checked(generatedOwnershipRecords.isEmpty) && checked(analogRegions.isEmpty) &&
+          checked(continuousOperators.isEmpty) && checked(waveformOperators.isEmpty) &&
+          checked(transferOperators.isEmpty) && checked(noiseOperators.isEmpty) &&
+          checked(eventProcesses.isEmpty) && checked(eventStorage.isEmpty) &&
+          checked(activeEventProcess.isEmpty) && checked(clockRecords.isEmpty) &&
+          checked(requirementBindingsAbsent) && checked(instanceInterfacePorts.isEmpty) &&
+          checked(instanceDigitalInouts.isEmpty) && checked(instanceInterfaceDimensions.isEmpty) &&
+          checked(instanceInterfaceTypes.isEmpty) && checked(resolvedInterfaceViews.isEmpty) &&
+          checked(conservativeInterfaceViews.isEmpty) && checked(
+            globalInterfaceInitializers.isEmpty
+          ) &&
+          checked(interfaceFormalTypes.isEmpty) && checked(shapeViews.isEmpty)
+      if !absent ||
+        !checked(
+          eventStateBits.isEmpty && executableCrossings.isEmpty && crossingStateBits == 0 && pulseValues.isEmpty
+        ) ||
+        !checked(
+          executableWaivers.isEmpty && waiverIds.isEmpty && provedClockIdentities.isEmpty && rawClockResets.isEmpty
+        ) ||
+        !checked(clockState == 0L && resetState == 0L && auxiliaryFsmStateBits == 0) ||
+        !checked(
+          nodeSelectionLookup.isEmpty && instanceSelectionStack.isEmpty && areaStack.isEmpty && areaRecords.isEmpty
+        ) ||
+        !checked(
+          domainStack.isEmpty && generationStack.isEmpty && analogStack.isEmpty && analogSemanticContext.isEmpty
+        ) ||
+        !checked(nextDigitalEffectOrdinal.isEmpty && digitalPortsAbsent) ||
+        !checked(
+          reductionExact.isEmpty && reductionDomains.isEmpty && !reductionChecking && !reductionProofBuilding
+        )
+      then return false
+      // These pure owner observers inspect 1 + 7 + 32 fixed fields, no lazy owner creation.
+      charge(if boundChild.isEmpty then 40L else 8L)
+      if !userFunctions.publicationEmpty || !analogSemanticRecorder.publicationEmpty ||
+        !(boundChild match
+          case None => AnalogProceduralConstruction.publicationEmpty(root)
+          case Some(child) =>
+            AnalogProceduralConstruction.boundPairPublicationEmpty(root, child, charge)
+        )
+      then return false
+      true
+
+    // Phase-local evidence consists only of canonical owner identities, never replacement
+    // domain facts, snapshots, names, binding caches or type descriptors. Do not retain it
+    // across a preparation/export phase or use it to skip the normal owner traversals.
+    private final case class BoundDomainAccountingProof(
+        rootObject: Module,
+        childObject: Module,
+        root: ModuleRecord,
+        child: ModuleRecord,
+        occurrence: InstanceRecord,
+        actual: DomainRecord,
+        requirement: DomainRecord,
+        clock: DeclarationRef,
+        reset: DeclarationRef,
+        boundary: KernelExpr[?],
+        singletonReference: ExpressionRef,
+        singleton: KernelExpr[?]
+    )
+
+    // Zero-debit routing only, keeping eager/C1/no-intent/domain-free/root-local fees intact.
+    // Every condition is re-established by charged raw eligibility before removing any fee.
+    def boundDomainAccountingCandidate: Boolean =
+      incremental && constructionMode && registeredConstructionAdmission &&
+        records.size == 2 && records.get(rootHandle).exists(module =>
+          module.domains.size == 1 && module.instances.size == 1 &&
+            module.domains.head.kind == KernelDomainKind.External &&
+            records.get(module.instances.head.child).exists(child =>
+              child.domains.size == 1 && child.domains.head.kind == KernelDomainKind.Required
+            )
+        )
+
+    // Same bounded literal grammar as exactPublicationEligible. Extraction/reuse by the
+    // legacy method is optional only after old debit-order parity is demonstrated; this
+    // new helper is not an alternative type resolver, and admits no parameter or alias.
+    private def bdScalar(value: KernelTypeDescriptor, controls: Boolean = false): Boolean =
+      charge(1L + value.kind.length.toLong + value.arguments.size.toLong)
+      value.kind match
+        case "Bool" => value.arguments.isEmpty
+        case "Clock" | "Reset" => controls && value.arguments.isEmpty
+        case "Bits" | "UInt" | "SInt" => value.arguments match
+            case Vector(width: Int) => width > 0
+            case _ => false
+        case _ => false
+
+    private def bdLiteralDescriptor(value: KernelTypeDescriptor): Boolean =
+      charge(1L + value.kind.length.toLong + value.arguments.size.toLong)
+      value.kind match
+        case "Vec" => value.arguments match
+            case Vector(element: DataType[?], dimensions: Seq[?]) =>
+              !element.isInstanceOf[KernelInstanceDataType[?]] &&
+              bdScalar(CandidateRuntime.typeDescriptor(element)) &&
+              bdChecked(dimensions.nonEmpty) && bdEvery(dimensions) {
+                case extent: Int => extent > 0
+                case _ => false
+              }
+            case _ => false
+        case _ => bdScalar(value)
+
+    private def bdLiteralData(value: DataType[?]): Boolean = value match
+      case _: KernelInstanceDataType[?] => false
+      case _ => bdLiteralDescriptor(CandidateRuntime.typeDescriptor(value))
+
+    /** This method must run in guard. None selects the old coarse route BEFORE exact work.
+      * Exhaustion/poison throws through guard, never becomes None or a refunded fallback. No
+      * semanticResult/name/domainPath/resolved/occurrenceDomains/binding-map reads occur. Pending
+      * KernelExpr payloads and pending KernelInstanceDataType descriptors are opaque.
+      */
+    private def exactBoundDomainRaw(): Option[BoundDomainAccountingProof] =
+      if !bdChecked(incremental && constructionMode && registeredConstructionAdmission) ||
+        !bdChecked(records.size == 2 && moduleIds.size == 2 && records.contains(rootHandle))
+      then return None
+      val root = records(rootHandle)
+      if !bdChecked(root.handle == rootHandle && root.attached &&
+          root.parentAtConstruction.isEmpty && root.externalName.isEmpty) ||
+        !bdChecked(root.domains.size == 1 && root.instances.size == 1 &&
+          root.generatedRegions.isEmpty && root.scaffoldExpressionCount == 0) ||
+        !bdChecked(rootParameterBindings.isEmpty && instanceIds.size == 1 &&
+          instanceObjects.size == 1 && domainIds.size == 2) ||
+        !bdChecked(expressionIds.size == expressionValues.size)
+      then return None
+      val occurrence = root.instances.head
+      val childOption = records.get(occurrence.child)
+      if !bdChecked(occurrence.ordinal == 0 && occurrence.child != rootHandle &&
+          childOption.nonEmpty && occurrence.generatedScope.isEmpty &&
+          occurrence.lexicalDomain.isEmpty && occurrence.namedBindings.isEmpty &&
+          occurrence.namedBindingSources.isEmpty && occurrence.parameterOverrides.isEmpty)
+      then return None
+      val child = childOption.get
+      if !bdChecked(child.handle == occurrence.child && child.attached &&
+          child.parentAtConstruction.contains(rootHandle) && child.externalName.isEmpty) ||
+        !bdChecked(child.instances.isEmpty && child.generatedRegions.isEmpty &&
+          child.domains.size == 1 && child.scaffoldExpressionCount == 0) ||
+        !bdChecked(declarationIds.size == root.declarations.size + child.declarations.size)
+      then return None
+
+      var rootObject = Option.empty[Module]
+      var childObject = Option.empty[Module]
+      charge(1L)
+      val modules = moduleIds.entrySet().iterator()
+      while modules.hasNext do
+        charge(1L)
+        val entry = modules.next()
+        entry.getKey match
+          case module: Module if entry.getValue.longValue == rootHandle && rootObject.isEmpty =>
+            rootObject = Some(module)
+          case module: Module if entry.getValue.longValue == child.handle && childObject.isEmpty =>
+            childObject = Some(module)
+          case _ => return None
+      if !bdChecked(rootObject.nonEmpty && childObject.nonEmpty &&
+          (rootObject.get ne childObject.get))
+      then return None
+      val instance = Option(instanceObjects.get(childObject.get))
+      if !bdChecked(instance.nonEmpty && (instance.get.module eq childObject.get) &&
+          Option(instanceIds.get(instance.get)).exists(_ eq occurrence))
+      then return None
+      // Cardinality + exact forward identities excludes rogue reverse-map entries.
+      if !exactConstructionHiddenOwnersEmpty(
+          rootObject.get,
+          requirementBindingsAbsent = true,
+          digitalPortsAbsent = true,
+          boundChild = Some(childObject.get)
+        )
+      then return None
+      if !bdChecked(directPortRequest.isEmpty && directPortPermit.isEmpty &&
+          constructorFailure.isEmpty && waveformForbiddenDepth == 0) ||
+        !bdChecked(moduleStack.isEmpty ||
+          (moduleStack.size == 1 && (moduleStack.head eq root)))
+      then return None
+
+      val allocationSerials = mutable.HashSet.empty[Long]
+      def allocated(value: AllocationIdentity, owner: ModuleRecord): Boolean =
+        bdChecked(value.constructionAllocation.exists(stamp =>
+          (stamp.session eq ConstructionSession.this) && (stamp.module eq owner) &&
+            stamp.serial > 0L && stamp.serial <= constructionAllocationSerial &&
+            stamp.region.isEmpty && stamp.generation.isEmpty && stamp.area.isEmpty &&
+            allocationSerials.add(stamp.serial)
+        ))
+      if !allocated(occurrence, root) then return None
+      val actual = root.domains.head
+      val requirement = child.domains.head
+      val domain = actual.domain
+      val required = requirement.domain
+      def domainIdentity(record: DomainRecord, owner: ModuleRecord): Boolean =
+        bdChecked(record.reference.module == owner.handle && record.reference.index == 0 &&
+          owner.domains.headOption.exists(_ eq record) &&
+          Option(domainIds.get(record.domain)).exists(_ eq record.reference)) &&
+          bdTextEqual(record.name, record.domain.name)
+      if !domainIdentity(actual, root) || !domainIdentity(requirement, child) ||
+        !bdChecked(actual.kind == KernelDomainKind.External &&
+          requirement.kind == KernelDomainKind.Required && (domain ne required)) ||
+        !bdChecked(occurrence.defaultBinding.exists(_ eq domain)) ||
+        !bdChecked(domain.parent.isEmpty && domain.relation.isEmpty &&
+          !domain.executableRelationship && domain.clock.nonEmpty &&
+          domain.edge.exists(edge => edge == ClockEdge.Rising || edge == ClockEdge.Falling)) ||
+        !bdChecked(domain.resetPolicy.contains(ResetPolicy.Sync) &&
+          domain.resetPolarity.exists(value =>
+            value == ResetPolarity.ActiveHigh ||
+              value == ResetPolarity.ActiveLow
+          ) && domain.frequency.nonEmpty) ||
+        !bdEvery(domain.frequency)(value =>
+          java.lang.Double.isFinite(value.hertz) && value.hertz > 0.0
+        ) ||
+        !bdChecked(required.parent.isEmpty && required.relation.isEmpty &&
+          !required.executableRelationship && required.edge.isEmpty &&
+          required.resetPolicy.isEmpty && required.resetPolarity.isEmpty &&
+          required.frequency.isEmpty && required.clock.nonEmpty)
+      then return None
+
+      var externalMetadata = 0
+      var frequencyMetadata = 0
+      if !bdEvery(operations) { operation =>
+          charge(1L + operation.values.size.toLong + operation.kind.length.toLong)
+          operation.owner == rootHandle && operation.kind == "metadata" &&
+          operation.generatedScope.isEmpty && operation.digitalRegion.isEmpty &&
+          operation.eventProcess.isEmpty && operation.source.isEmpty &&
+          operation.sourceOrdinal == 0 && (operation.values match
+            case Vector(
+                  edge: ClockEdge,
+                  policy: ResetPolicy,
+                  polarity: ResetPolarity,
+                  frequency: Frequency
+                ) =>
+              val valid = domain.edge.contains(edge) && domain.resetPolicy.contains(policy) &&
+                domain.resetPolarity.contains(polarity) &&
+                domain.frequency.exists(_ eq frequency)
+              if valid then externalMetadata += 1
+              valid
+            case Vector(hertz: Double, unit: String) =>
+              val valid = bdTextEqual(unit, "Hz") && java.lang.Double.isFinite(hertz) &&
+                hertz > 0.0 && domain.frequency.exists(_.hertz == hertz)
+              if valid then frequencyMetadata += 1
+              valid
+            case _ => false)
+        } || !bdChecked(externalMetadata == 1 && frequencyMetadata <= 1)
+      then return None
+      // ClockDomain.required emits expressions, NOT a metadata operation. Any extra
+      // child or unknown operation is rejected above instead of ignored by a whitelist.
+
+      def directControl(value: Expr[?], kind: String): Option[DeclarationRef] =
+        charge(1L)
+        Option(declarationIds.get(value)).filter { reference =>
+          bdChecked(reference.module == rootHandle) &&
+          root.declarations.lift(reference.index).exists { declaration =>
+            bdChecked((declaration.reference eq reference) && (declaration.value eq value) &&
+              declaration.kind == KernelSignalKind.Input &&
+              declaration.domainCandidate.exists(_ eq domain)) &&
+            declaration.dataType.exists { dataType =>
+              val descriptor = CandidateRuntime.typeDescriptor(dataType)
+              charge(1L + descriptor.kind.length.toLong + descriptor.arguments.size.toLong)
+              descriptor.kind == kind && descriptor.arguments.isEmpty &&
+              !dataType.isInstanceOf[KernelInstanceDataType[?]]
+            }
+          }
+        }
+      val clock = directControl(domain.clock.get, "Clock")
+      val reset = directControl(domain.reset, "Reset")
+      if !bdChecked(clock.nonEmpty && reset.nonEmpty && (clock.get ne reset.get)) then return None
+      val boundary = Option(effectiveResets.get(domain))
+      if !bdChecked(effectiveResets.size == 1 && resetRecords.size == 1 &&
+          resetBoundaries.size == 1 && physicalResetBoundaries.size == 1 && boundary.nonEmpty) ||
+        !bdChecked(Option(resetBoundaries.get(domain.reset)).exists(_ eq boundary.get) &&
+          physicalResetBoundaries.get(reset.get -> 0L).exists(_ eq boundary.get))
+      then return None
+      val resetFact = Option(resetRecords.get(boundary.get))
+      if !bdChecked(resetFact.nonEmpty) then return None
+      val fact = resetFact.get
+      charge(1L + fact.inputs.size.toLong + fact.kind.length.toLong + fact.release.length.toLong)
+      if fact.kind != "boundary" || fact.inputs.size != 1 ||
+        !(fact.inputs.head eq domain.reset) || fact.stages != 0 ||
+        fact.polarity != domain.resetPolarity.get || fact.release != "sync" ||
+        !fact.destination.exists(_ eq domain)
+      then return None
+
+      val allowed = mutable.HashSet.empty[ExpressionRef]
+      def expressionIdentity(value: KernelExpr[?], owner: ModuleRecord): Option[ExpressionRef] =
+        charge(1L)
+        val reference = Option(expressionIds.get(value))
+        reference.filter { ref =>
+          bdChecked(ref.module == owner.handle && ref.index >= 0 &&
+            ref.index < owner.expressionCount && expressionValues.get(ref).exists(_ eq value)) &&
+          allocated(ref, owner) && bdChecked(allowed.add(ref))
+        }
+      def ordinaryControl(
+          value: Expr[?],
+          owner: ModuleRecord,
+          operation: String,
+          descriptor: KernelTypeDescriptor,
+          operand: Any
+      ): Option[KernelExpr[?]] = value match
+        case expression: KernelExpr[?] =>
+          if expressionIdentity(expression, owner).isEmpty ||
+            !bdChecked(expression.constructionFinalized && expression.typeFinalized &&
+              expression.constructionKind.isEmpty && expression.constructionCallback.isEmpty &&
+              expression.constructionDependencies.isEmpty && expression.constructionRequest.isEmpty)
+          then None
+          else
+            charge(1L + expression.operands.size.toLong)
+            if !bdChecked(expression.interfaceMember.isEmpty &&
+                expression.materializationIntent.isEmpty && expression.typeIntent.isEmpty &&
+                expression.literal.isEmpty && expression.operation.contains(operation) &&
+                expression.resultDescriptor.contains(descriptor)) ||
+              !bdChecked(expression.operands.size == 1)
+            then None
+            else
+              val same = (expression.operands.head, operand) match
+                case (left: String, right: String) => bdTextEqual(left, right)
+                case (left: AnyRef, right: AnyRef) => bdChecked(left eq right)
+                case _ => false
+              Option.when(same)(expression)
+        case _ => None
+      val resetExpression = ordinaryControl(
+        boundary.get,
+        root,
+        "reset_boundary",
+        KernelTypeDescriptor("Reset"),
+        domain.reset
+      )
+      if resetExpression.isEmpty ||
+        ordinaryControl(
+          required.clock.get,
+          child,
+          "required_clock",
+          KernelTypeDescriptor("Clock"),
+          required.name
+        ).isEmpty ||
+        ordinaryControl(
+          required.reset,
+          child,
+          "required_reset",
+          KernelTypeDescriptor("Reset"),
+          required.name
+        ).isEmpty
+      then return None
+
+      var proxyCount = 0
+      def declarationIdentity(declaration: DeclarationRecord, owner: ModuleRecord): Boolean =
+        bdChecked(declaration.reference.module == owner.handle &&
+          owner.declarations.lift(declaration.reference.index).exists(_ eq declaration) &&
+          Option(declarationIds.get(declaration.value)).exists(_ eq declaration.reference)) &&
+          allocated(declaration.reference, owner) &&
+          bdChecked(declaration.attributes.isEmpty && declaration.conservativeDimensions.isEmpty) &&
+          bdChecked(declaration.value match
+            case signal: Signal[?] => declaration.dataType.exists(_ eq signal.dataType)
+            case _ => false)
+      def declaredData(declaration: DeclarationRecord, owner: ModuleRecord): Boolean =
+        if !declarationIdentity(declaration, owner) then false
+        else if declaration.reference eq clock.get then true
+        else if declaration.reference eq reset.get then true
+        else
+          declaration.kind match
+            case KernelSignalKind.InstanceInput | KernelSignalKind.InstanceOutput =>
+              proxyCount += 1
+              bdChecked(owner eq root) && bdChecked(declaration.domainCandidate.isEmpty) &&
+              instanceDigitalPorts.get(declaration.reference).exists { binding =>
+                bdChecked((binding.instance eq occurrence) && binding.port.module == child.handle &&
+                  binding.generated.isEmpty && binding.scope.isEmpty) &&
+                child.declarations.lift(binding.port.index).exists { port =>
+                  bdChecked((port.reference eq binding.port) &&
+                    Option(declarationIds.get(port.value)).exists(_ eq binding.port) &&
+                    ((port.kind == KernelSignalKind.Input &&
+                      declaration.kind == KernelSignalKind.InstanceInput) ||
+                      (port.kind == KernelSignalKind.Output &&
+                        declaration.kind == KernelSignalKind.InstanceOutput))) &&
+                  port.dataType.exists(bdLiteralData)
+                } &&
+                // Do not read formal, kernelDescriptor or resultDescriptor here.
+                declaration.dataType.exists(_.isInstanceOf[KernelInstanceDataType[?]])
+              }
+            case KernelSignalKind.Input | KernelSignalKind.Output =>
+              bdChecked(!instanceDigitalPorts.contains(declaration.reference)) &&
+              bdChecked(declaration.domainCandidate.forall(candidate =>
+                if owner eq root then candidate eq domain else candidate eq required
+              )) &&
+              declaration.dataType.exists(bdLiteralData)
+            case _ => false
+      if !bdEvery(root.declarations)(declaredData(_, root)) ||
+        !bdEvery(child.declarations)(declaredData(_, child)) ||
+        !bdChecked(proxyCount == instanceDigitalPorts.size)
+      then return None
+      // No separate entry scan is needed: each proxy's canonical key/record was checked;
+      // equality of counts excludes extra keys and the declarations have unique references.
+
+      var singleton = Option.empty[(ExpressionRef, KernelExpr[?])]
+      if !bdEvery(expressionValues) { (reference, value) =>
+          if allowed.contains(reference) then
+            bdChecked(Option(expressionIds.get(value)).exists(_ eq reference))
+          else if singleton.nonEmpty || expressionIdentity(value, root).isEmpty then false
+          else
+            singleton = Some(reference -> value)
+            bdChecked(Option(expressionIds.get(value)).exists(_ eq reference)) &&
+            bdChecked(value.registeredConstructionOwnedBy(ConstructionSession.this) &&
+              value.constructionKind.exists(DigitalReductionContract.Kinds) &&
+              value.constructionCallback.nonEmpty && value.constructionDependencies.size == 1) && {
+              val input = value.constructionDependencies.head
+              val inputRef = input match
+                case expression: Expr[?] => Option(declarationIds.get(expression))
+                case _ => None
+              bdChecked(inputRef.nonEmpty && inputRef.get.module == rootHandle &&
+                !instanceDigitalPorts.contains(inputRef.get)) && {
+                val declaration = root.declarations.lift(inputRef.get.index)
+                bdChecked(declaration.nonEmpty &&
+                  (declaration.get.reference eq inputRef.get) &&
+                  (declaration.get.value eq input.asInstanceOf[AnyRef]) &&
+                  declaration.get.kind == KernelSignalKind.Input) &&
+                declaration.get.dataType.exists { dataType =>
+                  val descriptor = CandidateRuntime.typeDescriptor(dataType)
+                  charge(1L + descriptor.arguments.size.toLong + descriptor.kind.length.toLong)
+                  descriptor.kind == "Vec" && (descriptor.arguments match
+                    case Vector(element: DataType[?], dimensions: Seq[?]) =>
+                      bdScalar(CandidateRuntime.typeDescriptor(element)) && {
+                        charge(1L)
+                        val iterator = dimensions.iterator
+                        val one = iterator.hasNext && { charge(1L); iterator.next() == 1 }
+                        one && !iterator.hasNext
+                      } && value.constructionRequest.exists { request =>
+                        bdChecked((request.session eq ConstructionSession.this) &&
+                          (request.module eq root) &&
+                          (request.input eq input.asInstanceOf[Expr[?]]) &&
+                          (request.inputReference eq inputRef.get) &&
+                          (request.resultReference eq reference) &&
+                          request.sourceSlot == value.constructionSourceSlot &&
+                          request.frontier >= inputRef.get.constructionAllocation.get.serial &&
+                          request.frontier < reference.constructionAllocation.get.serial) &&
+                        bdChecked(request.roots.size == 1 &&
+                          (request.roots.head.value eq declaration.get.value) &&
+                          (request.roots.head.reference eq inputRef.get)) && {
+                          if !value.constructionFinalized then
+                            bdChecked(value.pendingConstructionOwnedBy(ConstructionSession.this) &&
+                              !shapeIndices.contains(reference)) &&
+                            bdChecked(semanticOrigin.retainedExpressionSlot(
+                              value.constructionSourceSlot,
+                              rootHandle,
+                              reference.index,
+                              value,
+                              value.constructionDependencies
+                            ))
+                          else
+                            charge(1L + value.operands.size.toLong)
+                            bdChecked(value.typeFinalized && value.interfaceMember.isEmpty &&
+                              value.materializationIntent.isEmpty && value.typeIntent.isEmpty &&
+                              value.literal.isEmpty && value.operation.contains("shape_index") &&
+                              value.operands.size == 2 &&
+                              (value.operands.head.asInstanceOf[AnyRef] eq declaration.get.value) &&
+                              value.operands(1) == 0) &&
+                            bdChecked(value.resultDescriptor.contains(
+                              CandidateRuntime.typeDescriptor(element)
+                            )) &&
+                            shapeIndices.get(reference).exists { index =>
+                              charge(1L + index.indices.size.toLong +
+                                index.resultDimensions.size.toLong + index.sourceUses.size.toLong)
+                              (index.reference eq reference) && (index.input eq inputRef.get) &&
+                              index.indices == Vector(0) && index.resultDimensions.isEmpty &&
+                              index.sourceUses.isEmpty && index.conservative.isEmpty &&
+                              index.generatedScope.isEmpty
+                            } && bdChecked(semanticOrigin.retainedExpressionSlot(
+                              value.constructionSourceSlot,
+                              rootHandle,
+                              reference.index,
+                              value,
+                              value.operands
+                            ))
+                        }
+                      }
+                    case _ => false)
+                }
+              }
+            }
+        } || !bdChecked(singleton.nonEmpty && allowed.size == expressionValues.size &&
+          root.expressionCount == 2 && child.expressionCount == 2 &&
+          shapeIndices.size == (if singleton.get._2.constructionFinalized then 1 else 0))
+      then return None
+      Some(BoundDomainAccountingProof(
+        rootObject.get,
+        childObject.get,
+        root,
+        child,
+        occurrence,
+        actual,
+        requirement,
+        clock.get,
+        reset.get,
+        resetExpression.get,
+        singleton.get._1,
+        singleton.get._2
+      ))
+
+    /** Once raw exact work started, mismatches poison instead of selecting coarse fallback. Call
+      * immediately after resolveDomains and again before snapshot/export. Derivation is still owned
+      * by the unchanged resolver, which clears/rebuilds both maps every time.
+      */
+    private def requireBoundDomainResolved(proof: BoundDomainAccountingProof): Unit =
+      def requireFact(test: => Boolean, message: String): Unit =
+        if !bdChecked(test) then reject("bound-domain accounting: " + message)
+      requireFact(
+        records.get(rootHandle).exists(_ eq proof.root) &&
+          records.get(proof.child.handle).exists(_ eq proof.child) &&
+          Option(moduleIds.get(proof.rootObject)).exists(_.longValue == rootHandle) &&
+          Option(moduleIds.get(proof.childObject)).exists(_.longValue == proof.child.handle),
+        "module identity changed during preparation"
+      )
+      requireFact(
+        proof.root.instances.size == 1 &&
+          (proof.root.instances.head eq proof.occurrence) &&
+          proof.occurrence.defaultBinding.exists(_ eq proof.actual.domain) &&
+          proof.occurrence.namedBindings.isEmpty && proof.occurrence.lexicalDomain.isEmpty &&
+          proof.occurrence.generatedScope.isEmpty,
+        "actual occurrence binding changed during preparation"
+      )
+      requireFact(
+        proof.root.domains.size == 1 && proof.child.domains.size == 1 &&
+          (proof.root.domains.head eq proof.actual) &&
+          (proof.child.domains.head eq proof.requirement) &&
+          Option(domainIds.get(proof.actual.domain)).exists(_ eq proof.actual.reference) &&
+          Option(domainIds.get(proof.requirement.domain)).exists(_ eq proof.requirement.reference),
+        "domain identity changed during preparation"
+      )
+      requireFact(
+        selectedRequirementBindings.size == 1 &&
+          selectedRequirementBindings.headOption.exists(entry =>
+            entry._1 eq proof.requirement.reference
+          ),
+        "derived binding inventory differs from the sole authored requirement"
+      )
+      requireFact(
+        selectedRequirementBindings.get(proof.requirement.reference).exists {
+          (actual, origin, owner, ordinal) =>
+            (actual eq proof.actual.reference) && bdTextEqual(origin, "default") &&
+            owner == rootHandle && ordinal == proof.occurrence.ordinal
+        },
+        "derived binding does not name the exact actual/occurrence/default edge"
+      )
+      requireFact(
+        resolved.size == 2 && occurrenceDomains.size == 2,
+        "derived domain inventory differs from the authored pair"
+      )
+      bdEvery(resolved.keysIterator) { reference =>
+        requireFact(
+          (reference eq proof.actual.reference) ||
+            (reference eq proof.requirement.reference),
+          "resolved map lost canonical key identity"
+        )
+        true
+      }
+      bdEvery(occurrenceDomains.keysIterator) { reference =>
+        requireFact(
+          (reference eq proof.actual.reference) ||
+            (reference eq proof.requirement.reference),
+          "occurrence map lost canonical key identity"
+        )
+        true
+      }
+      // Semantic naming is legal only now; charge its actual shared helper separately through
+      // the new preparation/export meter, not merely this string-comparison debit.
+      val physical = domainPath(proof.actual.reference)
+      bdEvery(Vector(proof.actual.reference, proof.requirement.reference)) { reference =>
+        requireFact(
+          resolved.get(reference).exists(bdTextEqual(_, physical)) &&
+            occurrenceDomains.get(reference).exists(bdTextEqual(_, physical)),
+          "derived domain resolves to a stale or foreign physical path"
+        )
+        true
+      }
+      requireFact(
+        Option(effectiveResets.get(proof.actual.domain)).exists(_ eq proof.boundary) &&
+          Option(resetBoundaries.get(proof.actual.domain.reset)).exists(_ eq proof.boundary) &&
+          physicalResetBoundaries.get(proof.reset -> 0L).exists(_ eq proof.boundary) &&
+          !effectiveResets.containsKey(proof.requirement.domain),
+        "derived physical reset identity changed"
+      )
+      requireFact(
+        clockRecords.isEmpty && provedClockIdentities.isEmpty && rawClockResets.isEmpty,
+        "resolution introduced an unsupported clock proof/alias"
+      )
+      // Raw proof is rerun once at the NEXT phase boundary; do not rerun here and then fall
+      // back on None. The resolver has no user callbacks in this audited profile. Its ordinary
+      // safety validation must still run and remains charged by the preparation owner.
+
+    /** Export-only bounded formal check. Not called by initial raw eligibility/preparation. A
+      * pending wrapper remains pending: never call kernelDescriptor/typeDescriptor on it. Reading
+      * its immutable formal is required because current snapshots render that formal; do not
+      * replace this proof with merely trusting the child's unrelated literal type.
+      */
+    private def requireBoundDomainExport(
+        proof: BoundDomainAccountingProof,
+        publication: Boolean
+    ): Unit =
+      requireBoundDomainResolved(proof)
+      def requireFact(test: => Boolean, message: String): Unit =
+        if !bdChecked(test) then reject("bound-domain accounting: " + message)
+      val semantic = semanticResult.getOrElse(reject("bound-domain export has no semantic names"))
+      bdEvery(Vector(proof.root, proof.child)) { module =>
+        requireFact(semantic.modulePaths.contains(module.handle), "module name is unresolved")
+        bdEvery(module.domains) { domain =>
+          requireFact(
+            semantic.domainPaths.contains(module.handle -> domain.reference.index) &&
+              semantic.domainNames.contains(module.handle -> domain.reference.index),
+            "domain name is unresolved"
+          )
+          true
+        } && bdEvery(module.declarations) { declaration =>
+          requireFact(
+            semantic.declarationNames.contains(module.handle -> declaration.reference.index) &&
+              semantic.declarationPaths.contains(module.handle -> declaration.reference.index),
+            "declaration name is unresolved"
+          )
+          true
+        }
+      }
+      requireFact(
+        semantic.instancePaths.contains(rootHandle -> proof.occurrence.ordinal),
+        "instance name is unresolved"
+      )
+      bdEvery(expressionValues) { (reference, _) =>
+        requireFact(
+          semantic.expressionPaths.contains(reference.module -> reference.index),
+          "expression name is unresolved"
+        )
+        true
+      }
+      bdEvery(instanceDigitalPorts) { (reference, binding) =>
+        val declaration = proof.root.declarations(reference.index)
+        val original = proof.child.declarations(binding.port.index)
+        val dataType = declaration.dataType.get.asInstanceOf[KernelInstanceDataType[?]]
+        val authored = CandidateRuntime.typeDescriptor(original.dataType.get)
+        // Charge/validate BOTH operand trees before structural descriptor comparison. The
+        // grammar is one Vec layer of scalar + literal dimensions, never arbitrary metadata.
+        requireFact(
+          bdLiteralDescriptor(dataType.formal) && bdLiteralDescriptor(authored),
+          "proxy formal is not bounded literal ordinary digital metadata"
+        )
+        requireFact(
+          bdSameLiteralDescriptor(dataType.formal, authored),
+          "proxy formal does not preserve its exact original child type"
+        )
+        if dataType.finalized then
+          requireFact(
+            bdLiteralDescriptor(dataType.kernelDescriptor) &&
+              bdSameLiteralDescriptor(dataType.kernelDescriptor, authored),
+            "final proxy type differs from its parameter-free child type"
+          )
+          requireFact(
+            verified.get("digital" -> reference).exists(_ eq binding),
+            "final proxy lacks its canonical boundary verification"
+          )
+        else if publication then reject("bound-domain publication contains a pending proxy")
+        true
+      }
+      if publication then
+        requireFact(
+          proof.singleton.constructionFinalized && proof.singleton.typeFinalized,
+          "publication contains pending registered construction"
+        )
+      ()
+
+    // Both descriptors must have passed bdLiteralDescriptor. Avoid uncharged generic
+    // recursive equals on DataType objects; compare this finite literal grammar directly.
+    private def bdSameLiteralDescriptor(
+        left: KernelTypeDescriptor,
+        right: KernelTypeDescriptor
+    ): Boolean =
+      if !bdTextEqual(left.kind, right.kind) then false
+      else if left.kind == "Vec" then
+        (left.arguments, right.arguments) match
+          case (Vector(le: DataType[?], ld: Seq[?]), Vector(re: DataType[?], rd: Seq[?])) =>
+            bdSameLiteralDescriptor(
+              CandidateRuntime.typeDescriptor(le),
+              CandidateRuntime.typeDescriptor(re)
+            ) && {
+              charge(1L)
+              val li = ld.iterator
+              val ri = rd.iterator
+              var same = true
+              while same && li.hasNext && ri.hasNext do
+                charge(1L)
+                same = li.next() == ri.next()
+              same && !li.hasNext && !ri.hasNext
+            }
+          case _ => false
+      else
+        charge(1L + left.arguments.size.toLong + right.arguments.size.toLong)
+        left.arguments == right.arguments
+
     private def exactSnapshotEligible(): Boolean =
       def checked(test: => Boolean): Boolean =
         charge(1L)
@@ -15739,55 +16538,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           domainIds.size == 1 && declarationIds.size == module.declarations.size && expressionIds.size == expressionValues.size
         )
       then return false
-      val absent =
-        checked(expressionRegions.isEmpty) && checked(collectionRegions.isEmpty) &&
-          checked(collectionArguments.isEmpty) && checked(loopRegions.isEmpty) &&
-          checked(structuralArms.isEmpty) && checked(behavioralArms.isEmpty) &&
-          checked(fsmActionRegions.isEmpty) && checked(enumSwitchArms.isEmpty) &&
-          checked(iterationIndices.isEmpty) && checked(staticPredicates.isEmpty) &&
-          checked(structuralIfs.isEmpty) && checked(behavioralIfs.isEmpty) &&
-          checked(flatFsms.isEmpty) && checked(fsmResults.isEmpty) && checked(
-            enumSwitches.isEmpty
-          ) &&
-          checked(privateFsmStorage.isEmpty) && checked(fsmObservations.isEmpty) &&
-          checked(openFsms.isEmpty) && checked(behavioralChains.isEmpty) &&
-          checked(collectionStack.isEmpty) && checked(generationStack.isEmpty) &&
-          checked(compositionObservationRoot.isEmpty) && checked(areas.isEmpty) &&
-          checked(generatedOwnershipRecords.isEmpty) && checked(analogRegions.isEmpty) &&
-          checked(continuousOperators.isEmpty) && checked(waveformOperators.isEmpty) &&
-          checked(transferOperators.isEmpty) && checked(noiseOperators.isEmpty) &&
-          checked(eventProcesses.isEmpty) && checked(eventStorage.isEmpty) &&
-          checked(activeEventProcess.isEmpty) && checked(clockRecords.isEmpty) &&
-          checked(selectedRequirementBindings.isEmpty) && checked(instanceInterfacePorts.isEmpty) &&
-          checked(instanceDigitalInouts.isEmpty) && checked(instanceInterfaceDimensions.isEmpty) &&
-          checked(instanceInterfaceTypes.isEmpty) && checked(resolvedInterfaceViews.isEmpty) &&
-          checked(conservativeInterfaceViews.isEmpty) && checked(
-            globalInterfaceInitializers.isEmpty
-          ) &&
-          checked(interfaceFormalTypes.isEmpty) && checked(shapeViews.isEmpty)
-      if !absent ||
-        !checked(
-          eventStateBits.isEmpty && executableCrossings.isEmpty && crossingStateBits == 0 && pulseValues.isEmpty
-        ) ||
-        !checked(
-          executableWaivers.isEmpty && waiverIds.isEmpty && provedClockIdentities.isEmpty && rawClockResets.isEmpty
-        ) ||
-        !checked(clockState == 0L && resetState == 0L && auxiliaryFsmStateBits == 0) ||
-        !checked(
-          nodeSelectionLookup.isEmpty && instanceSelectionStack.isEmpty && areaStack.isEmpty && areaRecords.isEmpty
-        ) ||
-        !checked(
-          domainStack.isEmpty && generationStack.isEmpty && analogStack.isEmpty && analogSemanticContext.isEmpty
-        ) ||
-        !checked(nextDigitalEffectOrdinal.isEmpty && instanceDigitalPorts.isEmpty) ||
-        !checked(
-          reductionExact.isEmpty && reductionDomains.isEmpty && !reductionChecking && !reductionProofBuilding
+      if !exactConstructionHiddenOwnersEmpty(
+          root,
+          selectedRequirementBindings.isEmpty,
+          instanceDigitalPorts.isEmpty
         )
-      then return false
-      // These pure owner observers inspect 1 + 7 + 32 fixed fields, no lazy owner creation.
-      charge(40L)
-      if !userFunctions.publicationEmpty || !analogSemanticRecorder.publicationEmpty ||
-        !AnalogProceduralConstruction.publicationEmpty(root)
       then return false
       val domainRecord = module.domains.head
       val domain = domainRecord.domain
@@ -15977,17 +16732,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         finalNames(semantic)
         body
       else
-        val exact = guard(exactPublicationEligible(root))
+        val bound = if boundDomainAccountingCandidate then guard(exactBoundDomainRaw()) else None
+        val exact = bound.nonEmpty || guard(exactPublicationEligible(root))
         if !exact then
           finalNames(semantic)
           body
         else
           guard:
-            finalNames(semantic, exactPublication = true)
-            val previous = publicationAccountingActive
-            publicationAccountingActive = true
-            try body
-            finally publicationAccountingActive = previous
+            withBoundDomainAccounting(bound.nonEmpty):
+              bound.foreach(requireBoundDomainExport(_, publication = true))
+              finalNames(semantic, exactPublication = true)
+              val previous = publicationAccountingActive
+              publicationAccountingActive = true
+              try body
+              finally publicationAccountingActive = previous
 
     def preparedAutomaticInputs(expectedRoot: Long)
         : (Map[DomainRef, String], Vector[DataType[?]]) = guard:
@@ -16154,15 +16912,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private var snapshotAccountingActive = false
   private var publicationAccountingActive = false
   private def exportAccountingActive: Boolean =
-    snapshotAccountingActive || publicationAccountingActive
+    snapshotAccountingActive || publicationWorkActive
 
-  def publicationAccountingEnabled: Boolean = publicationAccountingActive
+  def publicationAccountingEnabled: Boolean = publicationWorkActive
   def chargePublicationWork(units: Long): Unit = publicationCharge(units)
   private def publicationCharge(units: Long): Unit =
-    if publicationAccountingActive then closureCharge(units)
+    if publicationWorkActive then closureCharge(units)
   private def publicationElements[A](values: IterableOnce[A]): Iterator[A] =
     val underlying = values.iterator
-    if !publicationAccountingActive then underlying
+    if !publicationWorkActive then underlying
     else
       new Iterator[A]:
         def hasNext: Boolean = underlying.hasNext
@@ -16180,7 +16938,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     publicationCharge(1L)
     body
   private def publicationStringOrdering: Ordering[String] =
-    if !publicationAccountingActive then Ordering.String
+    if !publicationWorkActive then Ordering.String
     else
       new Ordering[String]:
         def compare(left: String, right: String): Int =
@@ -16359,8 +17117,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 "external signature requires fixed scalar digital inout pins or exact resolved InterfaceArray",
                 Some(declarationPath(declaration.reference))
               )
+    val boundDomainInputs = if automaticConstructionClosure.isEmpty then
+      boundaryClosureOwner.flatMap(_.tryFinalBoundDomainInputs())
+    else None
     val (resolved, interfaceFormalTypes) = automaticConstructionClosure match
       case Some(prepared) => prepared.preparedAutomaticInputs(rootHandle)
+      case None if boundDomainInputs.nonEmpty => boundDomainInputs.get
       case None =>
         boundaryClosureOwner.filter(_.incremental) match
           case Some(closure) => closure.chargeFinalPreparation()
@@ -16382,16 +17144,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       def exportMap[A, B](values: Vector[A])(f: A => B): Vector[B] =
         publicationVector(values).map(value => publicationProbe(f(value)))
       def exportFlatMap[A, B](values: Vector[A])(f: A => IterableOnce[B]): Vector[B] =
-        if !publicationAccountingActive then values.flatMap(f)
+        if !publicationWorkActive then values.flatMap(f)
         else publicationElements(publicationElements(values).flatMap(f)).toVector
       def exportBufferFlatMap[A, B](values: mutable.ArrayBuffer[A])(
           f: A => IterableOnce[B]
       ): mutable.ArrayBuffer[B] =
-        if !publicationAccountingActive then values.flatMap(f)
+        if !publicationWorkActive then values.flatMap(f)
         else publicationElements(publicationElements(values).flatMap(f)).to(mutable.ArrayBuffer)
       extension [A](left: Vector[A])
         def exportConcat(right: IterableOnce[A]): Vector[A] =
-          if !publicationAccountingActive then left ++ right
+          if !publicationWorkActive then left ++ right
           else publicationVector(left) ++ publicationElements(right)
 
       val sourceByPath = publicationSourceIndex(semantic.sourceMap)
@@ -16620,7 +17382,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             else if origin == "default" then instance.defaultBindingSource
             else sourceByPath.get(instancePath(owner, ordinal))
             source.map(span =>
-              SourceMapEntry(instancePath(owner, ordinal) + "." + requirementRecord.name, span)
+              SourceMapEntry(
+                boundDomainBindingPath(instancePath(owner, ordinal), requirementRecord.name),
+                span
+              )
             )).toVector
       publicationCharge(1L)
       val snapshot = ConstructionSnapshot(
@@ -16997,3 +17762,404 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def chargeConstructionActivation(owner: BoundaryClosureOwner, inventory: Long): Unit =
     owner.charge(constructionRequestWork)
     owner.charge(inventory)
+
+  // Authority is scoped to this canonical selection, never returned to user code.
+  private final class DirectPortTarget(
+      val request: Option[ConstructionRequestContext],
+      val selected: InstanceSelectionRecord,
+      val instance: InstanceRecord,
+      val parent: ModuleRecord,
+      val port: DeclarationRef,
+      val value: Signal[?],
+      val dataType: DataType[?],
+      val roots: Vector[ConstructionRootIdentity]
+  ):
+    val session: ConstructionSession = ConstructionSession.this
+  private final class DirectPortPermit(
+      val target: DirectPortTarget,
+      val dataType: KernelInstanceDataType[?],
+      val kind: KernelSignalKind,
+      val name: String
+  ):
+    var consumed = false
+    var value: Option[AnyRef] = None
+    var reference: Option[DeclarationRef] = None
+
+  private var directPortRequest: Option[DirectPortTarget] = None
+  private var directPortPermit: Option[DirectPortPermit] = None
+
+  private def directPortRootContext(selected: InstanceSelectionRecord): Boolean =
+    moduleStack.size == 1 && activeValueRegion.isEmpty && domainStack.isEmpty &&
+      areaStack.isEmpty && generationStack.isEmpty && analogStack.isEmpty &&
+      analogSemanticContext.isEmpty && activeEventProcess.isEmpty &&
+      instanceSelectionStack.size == 1 && (instanceSelectionStack.head eq selected) &&
+      selected.generated.isEmpty && !reductionChecking && !reductionProofBuilding &&
+      reductionExact.isEmpty && reductionDomains.isEmpty
+
+  private def directPortFailure(message: String): Nothing =
+    boundaryClosureOwner.filter(_.incremental) match
+      case Some(owner) =>
+        owner.guard(collectionFailure("direct Instance request authority: " + message))
+      case None => collectionFailure("direct Instance request authority: " + message)
+
+  private def validatePortAllocation(
+      value: AnyRef,
+      reference: DeclarationRef | ExpressionRef,
+      module: ModuleRecord,
+      frontier: Long
+  ): Unit =
+    requestCharge()
+    val stamp = reference.constructionAllocation.getOrElse(
+      directPortFailure("missing original allocation")
+    )
+    if (stamp.session ne this) || (stamp.module ne module) || stamp.serial > frontier ||
+      stamp.region.nonEmpty || stamp.generation.nonEmpty || stamp.area.nonEmpty ||
+      !records.get(module.handle).exists(_ eq module)
+    then directPortFailure("later or non-root original allocation")
+    val valid = reference match
+      case ref: DeclarationRef =>
+        Option(declarationIds.get(value)).exists(_ eq ref) && ref.module == module.handle &&
+        module.declarations.lift(ref.index).exists(record =>
+          (record.reference eq ref) && (record.value eq value)
+        )
+      case ref: ExpressionRef =>
+        Option(expressionIds.get(value)).exists(_ eq ref) && ref.module == module.handle &&
+        expressionValues.get(ref).exists(_ eq value)
+    if !valid then directPortFailure("original canonical identity changed")
+
+  /** Strict authored type roots only; substituted dimensions remain the boundary owner's proof. */
+  private def directPortTypeRoots(
+      dataType: DataType[?],
+      child: ModuleRecord,
+      frontier: Long
+  ): Vector[ConstructionRootIdentity] =
+    val active = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+    val done = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+    val pending = mutable.ArrayBuffer.empty[(Any, Boolean)]
+    val roots = Vector.newBuilder[ConstructionRootIdentity]
+    var count = 0L
+    pending += dataType -> false
+    def enter(value: AnyRef, leaving: Boolean)(children: => Iterator[?]): Unit =
+      if leaving then
+        active.remove(value)
+        done.put(value, java.lang.Boolean.TRUE)
+      else
+        if active.containsKey(value) then directPortFailure("authored type-root cycle")
+        if !done.containsKey(value) then
+          active.put(value, java.lang.Boolean.TRUE)
+          pending += value -> true
+          pending += ConstructionRequestChildren(children) -> false
+    while pending.nonEmpty do
+      requestCharge()
+      val (value, leaving) = pending.remove(pending.size - 1)
+      value match
+        case frame: ConstructionRequestChildren =>
+          if frame.values.hasNext then
+            requestCharge()
+            pending += frame -> false
+            pending += frame.values.next() -> false
+        case _: KernelInstanceDataType[?] =>
+          directPortFailure("nested substituted type is not an authored root")
+        case data: DataType[?] =>
+          enter(data, leaving):
+            val descriptor = CandidateRuntime.typeDescriptor(data)
+            requestCharge()
+            descriptor.kind match
+              case "Bool" if descriptor.arguments.isEmpty => Iterator.empty
+              case "Bits" | "UInt" | "SInt" if descriptor.arguments.size == 1 =>
+                descriptor.arguments.iterator
+              case "Vec" if descriptor.arguments.size == 2 =>
+                descriptor.arguments match
+                  case Vector(_: DataType[?], _: Seq[?]) => descriptor.arguments.iterator
+                  case _ => directPortFailure("malformed authored Vec")
+              case "Struct" if descriptor.arguments.size == 2 =>
+                descriptor.arguments match
+                  case Vector(_: String, fields: Seq[?]) => fields.iterator
+                  case _ => directPortFailure("malformed authored Struct")
+              case _ => directPortFailure("unsupported authored direct-port type")
+        case field: StructField[?] => enter(field, leaving)(Iterator.single(field.dataType))
+        case expression: KernelExpr[?] =>
+          if !leaving && !done.containsKey(expression) && !active.containsKey(expression) then
+            val ref = Option(expressionIds.get(expression)).getOrElse(
+              directPortFailure("authored dimension is not canonical")
+            )
+            validatePortAllocation(expression, ref, child, frontier)
+            if !expression.constructionFinalized || !expression.typeFinalized ||
+              !expression.resultDescriptor.exists(_.kind == "Integer")
+            then directPortFailure("authored dimension is not a complete static Integer")
+            roots += ConstructionRootIdentity(expression, ref)
+            count += 1L
+          enter(expression, leaving)(expression.operands.iterator)
+        case _: Expr[?] => directPortFailure("parameter or alias type roots require a later proof")
+        case sequence: Seq[?] => enter(sequence, leaving)(sequence.iterator)
+        case _: Int | _: Long | _: Boolean | _: String => ()
+        case _ => directPortFailure("unsupported authored type-root metadata")
+    requestCharge(count)
+    roots.result()
+
+  private def validateDirectPortTarget(target: DirectPortTarget): Unit =
+    requestCharge()
+    val selected = instanceSelectionStack.lastOption.getOrElse(
+      directPortFailure("missing actual selector")
+    )
+    if (target.session ne this) || (selected ne target.selected) ||
+      (target.request.nonEmpty && !directPortRootContext(selected)) ||
+      (currentModule ne target.parent) ||
+      !Option(instanceIds.get(selected.instance)).exists(_ eq target.instance) ||
+      target.instance.generatedScope.nonEmpty
+    then directPortFailure("selector or parent occurrence changed")
+    if !target.parent.instances.exists(instance =>
+        requestCharge()
+        instance eq target.instance
+      )
+    then directPortFailure("unattached or synthetic occurrence")
+    val child = records.getOrElse(target.instance.child, directPortFailure("missing child"))
+    val record = child.declarations.lift(target.port.index).getOrElse(
+      directPortFailure("missing original child port")
+    )
+    if target.port.module != child.handle || (record.reference ne target.port) ||
+      (record.value ne target.value) ||
+      !Option(declarationIds.get(target.value)).exists(_ eq target.port) ||
+      !record.dataType.exists(_ eq target.dataType) || (target.value.dataType ne target.dataType) ||
+      !Set(KernelSignalKind.Input, KernelSignalKind.Output)(record.kind)
+    then directPortFailure("original direct port identity changed")
+    target.request.foreach: request =>
+      val stamp = target.instance.constructionAllocation.getOrElse(
+        directPortFailure("occurrence has no authored allocation")
+      )
+      if (request.session ne this) || (request.module ne target.parent) ||
+        (stamp.session ne this) || (stamp.module ne target.parent) ||
+        stamp.serial > request.frontier || stamp.region.nonEmpty ||
+        stamp.generation.nonEmpty || stamp.area.nonEmpty
+      then directPortFailure("occurrence is later or outside original authority")
+      validatePortAllocation(target.value, target.port, child, request.frontier)
+      val actual = directPortTypeRoots(target.dataType, child, request.frontier)
+      if actual.size != target.roots.size then directPortFailure("authored type roots changed")
+      var index = 0
+      while index < actual.size do
+        requestCharge()
+        if (actual(index).value ne target.roots(index).value) ||
+          (actual(index).reference ne target.roots(index).reference)
+        then directPortFailure("authored type root identity changed")
+        index += 1
+
+  private def preparedDirectPortType[A <: Data](dataType: DataType[A]): KernelInstanceDataType[A] =
+    directPortPermit match
+      case Some(permit) =>
+        if permit.consumed || (permit.target.dataType ne dataType) then
+          directPortFailure("stale or mismatched prepared type")
+        permit.dataType.asInstanceOf[KernelInstanceDataType[A]]
+      case None => new KernelInstanceDataType[A](CandidateRuntime.typeDescriptor(dataType))
+
+  private def admitPort(
+      value: AnyRef,
+      kind: KernelSignalKind,
+      dataType: Option[DataType[? <: Data]],
+      name: Option[String],
+      domain: Option[ClockDomain],
+      attributes: Vector[(String, Any)]
+  ): Boolean =
+    val direct = Set(KernelSignalKind.InstanceInput, KernelSignalKind.InstanceOutput)(kind)
+    if directPortRequest.nonEmpty && !direct then
+      directPortFailure("request scope does not authorize another declaration route")
+    if !direct then false
+    else if directPortRequest.isEmpty && (activeGeneratedRegion.nonEmpty ||
+        instanceSelectionStack.lastOption.exists(_.generated.nonEmpty))
+    then true // Existing non-request generated/Area paths are not migrated by this slice.
+    else
+      val permit = directPortPermit.getOrElse(directPortFailure("missing registration permit"))
+      validateDirectPortTarget(permit.target)
+      if permit.consumed || permit.value.nonEmpty || permit.reference.nonEmpty ||
+        kind != permit.kind || !dataType.exists(_ eq permit.dataType) ||
+        name != Some(permit.name) || domain.nonEmpty || attributes.nonEmpty
+      then directPortFailure("consumed or mismatched registration permit")
+      requestCharge()
+      permit.consumed = true
+      permit.value = Some(value)
+      true
+
+  private def completeDirectPortRegistration(value: Signal[?]): DeclarationRef =
+    val reference = declarationIds.get(value)
+    directPortPermit.foreach: permit =>
+      if !permit.consumed || !permit.value.exists(_ eq value) || reference == null ||
+        permit.reference.nonEmpty || reference.module != permit.target.parent.handle
+      then directPortFailure("registration did not consume its exact permit")
+      permit.reference = Some(reference)
+      // Failure here retains the stamped canonical declaration, before boundary publication.
+      requestCharge()
+    reference
+
+  private def guardedDirectPort[A <: Data](value: Signal[A]): Signal[A] =
+    val closure = boundaryClosureOwner.getOrElse(directPortFailure("missing closure owner"))
+    closure.guard:
+      val selected = instanceSelectionStack.lastOption.getOrElse(
+        directPortFailure("missing exact selector")
+      )
+      if directPortPermit.nonEmpty then directPortFailure("reentrant registration")
+      val instance = instanceRecord(selected)
+      val port =
+        Option(declarationIds.get(value)).getOrElse(directPortFailure("unknown child port"))
+      val target = directPortRequest.getOrElse(new DirectPortTarget(
+        None,
+        selected,
+        instance,
+        currentModule,
+        port,
+        value,
+        value.dataType,
+        Vector.empty
+      ))
+      if (target.value ne value) then directPortFailure("request target substituted")
+      validateDirectPortTarget(target)
+      val existing = instanceDigitalPorts.iterator.collectFirst:
+        case (reference, binding) if {
+              requestCharge();
+              (binding.instance eq instance) &&
+              (binding.port eq port) && binding.generated.isEmpty && binding.scope.isEmpty
+            } =>
+          reference -> binding
+      existing.foreach: (reference, binding) =>
+        val declaration = records(reference.module).declarations(reference.index)
+        val proxy = declaration.value.asInstanceOf[Signal[?]]
+        val childKind = records(port.module).declarations(port.index).kind
+        val expectedKind = if childKind == KernelSignalKind.Input then
+          KernelSignalKind.InstanceInput
+        else KernelSignalKind.InstanceOutput
+        if declaration.kind != expectedKind || (declaration.reference ne reference) ||
+          !Option(declarationIds.get(proxy)).exists(_ eq reference) ||
+          reference.module != target.parent.handle
+        then directPortFailure("cached proxy lost its canonical mapping")
+        val deferred = declaration.dataType.collect { case data: KernelInstanceDataType[?] => data }
+          .getOrElse(directPortFailure("cached proxy lost its type owner"))
+        if (proxy.dataType ne deferred) || !DigitalEnumContract.sameType(
+            deferred.formal,
+            CandidateRuntime.typeDescriptor(target.dataType)
+          )
+        then directPortFailure("cached proxy changed its original type")
+        if target.request.nonEmpty then
+          closure.verifyPublication()
+          closure.requireVerifiedDigital(reference, binding)
+          if !deferred.finalized then directPortFailure("cached request proxy is not finalized")
+      val previous = directPortPermit
+      try
+        if existing.isEmpty then
+          val child = records(port.module).declarations(port.index)
+          val kind = if child.kind == KernelSignalKind.Input then KernelSignalKind.InstanceInput
+          else KernelSignalKind.InstanceOutput
+          directPortPermit = Some(new DirectPortPermit(
+            target,
+            new KernelInstanceDataType[A](CandidateRuntime.typeDescriptor(value.dataType)),
+            kind,
+            s"instance_${instance.ordinal}_port_${port.index}"
+          ))
+        val result = instanceDigitalPortBody(value)
+        val reference = declarationIds.get(result)
+        val binding = instanceDigitalPorts.getOrElse(
+          reference,
+          directPortFailure("construction did not publish its exact boundary")
+        )
+        if (binding.instance ne instance) || (binding.port ne port) ||
+          binding.generated.nonEmpty || binding.scope.nonEmpty
+        then directPortFailure("constructed boundary target changed")
+        directPortPermit.foreach: permit =>
+          if !permit.consumed || !permit.value.exists(_ eq result) ||
+            !permit.reference.exists(_ eq reference)
+          then directPortFailure("construction returned another registered object")
+        result
+      finally directPortPermit = previous
+
+  // The public/legacy entrypoint stays unchanged; only incremental ordinary direct ports migrate.
+  def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
+    if directPortRequest.nonEmpty then guardedDirectPort(value)
+    else if boundaryClosureOwner.exists(_.incremental) && activeGeneratedRegion.isEmpty &&
+      instanceSelectionStack.lastOption.exists(_.generated.isEmpty)
+    then guardedDirectPort(value)
+    else instanceDigitalPortBody(value)
+
+  /** Fixed private selection operation, not an arbitrary authorized body or callback. */
+  private[nodal] def selectConstructionRequestPort[A <: Data](
+      result: KernelExpr[?],
+      instance: Instance[?],
+      port: Signal[A]
+  ): Signal[A] =
+    val closure = boundaryClosureOwner.filter(_.incremental).getOrElse(
+      directPortFailure("request selection needs an incremental owner")
+    )
+    closure.guard:
+      if directPortRequest.nonEmpty || directPortPermit.nonEmpty then
+        directPortFailure("request selection is not reentrant")
+      if !result.registeredConstructionOwnedBy(this) || !result.constructionFinalized ||
+        !result.constructionKind.exists(DigitalReductionContract.Kinds) ||
+        result.constructionCallback.isEmpty
+      then directPortFailure("selection requires this Session's completed registered request")
+      validateConstructionRequest(
+        result,
+        result.constructionRequest.getOrElse(
+          directPortFailure("missing original request")
+        ).input
+      )
+      closure.verifyPublication()
+      val request = result.constructionRequest.get
+      val occurrence = instanceRecord(instance)
+      val reference = Option(declarationIds.get(port)).getOrElse(
+        directPortFailure("target is not an actual child port")
+      )
+      val child = records.getOrElse(occurrence.child, directPortFailure("missing actual child"))
+      val roots = directPortTypeRoots(port.dataType, child, request.frontier)
+      val selected = InstanceSelectionRecord(instance)
+      val target = new DirectPortTarget(
+        Some(request),
+        selected,
+        occurrence,
+        request.module,
+        reference,
+        port,
+        port.dataType,
+        roots
+      )
+      val previous = directPortRequest
+      try
+        directPortRequest = Some(target)
+        instanceSelectionStack += selected
+        validateDirectPortTarget(target)
+        instanceDigitalPort(port)
+      finally
+        if instanceSelectionStack.lastOption.exists(_ eq selected) then
+          instanceSelectionStack.remove(instanceSelectionStack.size - 1)
+        directPortRequest = previous
+
+  private def registrationOwner(
+      dimensions: Vector[Dimension],
+      boundary: Option[InterfaceBoundaryRecord]
+  ): Option[BoundaryClosureOwner] =
+    boundaryClosureOwner.filter(_.incremental).map: closure =>
+      if directPortPermit.nonEmpty then
+        requestCharge()
+        if dimensions.nonEmpty || boundary.nonEmpty then
+          directPortFailure("registration permit does not authorize boundary metadata")
+      closure
+
+  // Additional accounting only for the independently proved bound-domain profile.
+  private var boundDomainAccountingActive = false
+  private def publicationWorkActive: Boolean =
+    publicationAccountingActive || boundDomainAccountingActive
+
+  private def boundDomainCharge(units: Long = 1L): Unit =
+    if boundDomainAccountingActive then closureCharge(units)
+
+  private def withBoundDomainAccounting[A](enabled: Boolean)(body: => A): A =
+    val previous = boundDomainAccountingActive
+    boundDomainAccountingActive = previous || enabled
+    try body
+    finally boundDomainAccountingActive = previous
+
+  private def boundDomainBindingPath(instance: String, requirement: String): String =
+    if !boundDomainAccountingActive then instance + "." + requirement
+    else
+      boundDomainCharge(2L + instance.length.toLong + requirement.length.toLong)
+      instance + "." + requirement
+
+  // Capture optimization authority is exact builder ownership, never an effectful active lookup.
+  def constructionCapturePrefixAllowed(builder: SemanticOriginBuilder): Boolean =
+    (semanticOrigin eq builder) && registeredConstructionAdmission &&
+      boundaryClosureOwner.exists(owner => owner.incremental && owner.hasConstructionWork)

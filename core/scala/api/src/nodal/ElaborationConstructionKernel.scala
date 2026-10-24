@@ -891,3 +891,7 @@ private[nodal] object ConstructionKernel:
     Current.isBound && Current.get.publicationAccountingEnabled
   def chargePublicationWork(units: Long): Unit =
     if Current.isBound then Current.get.chargePublicationWork(units)
+
+  // Read-only same-owner predicate; foreign builders and no-owner/C1 calls retain legacy capture.
+  def constructionCapturePrefixAllowed(builder: SemanticOriginBuilder): Boolean =
+    Current.isBound && Current.get.constructionCapturePrefixAllowed(builder)

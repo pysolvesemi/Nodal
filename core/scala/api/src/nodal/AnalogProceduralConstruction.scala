@@ -1417,3 +1417,41 @@ private[nodal] object AnalogProceduralConstruction:
       module.controlBuilder.isEmpty && module.controlSnapshot.isEmpty &&
       module.controlScope.isEmpty &&
       module.recorder.publicationEmpty
+
+  /** Exact-pair absence observer for the separately admitted bound-domain accounting profile. Reads
+    * only the current owner. No lazy creation, finalization, cache or state mutation. Fixed field
+    * checks are prepaid; every retained ModuleState visit is separately charged. The legacy
+    * single-module observer above deliberately remains unchanged.
+    */
+  def boundPairPublicationEmpty(root: Module, child: Module, debit: Long => Unit): Boolean =
+    debit(6L)
+    val value = current.get()
+    if value == null || (root eq child) || value.modules.size != 2 ||
+      value.stack.size != 1 || !value.eventResources.isEmpty
+    then false
+    else
+      var rootState = Option.empty[ModuleState]
+      var childState = Option.empty[ModuleState]
+      debit(1L)
+      val iterator = value.modules.iterator
+      var valid = true
+      while valid && iterator.hasNext do
+        // One visit, two identity checks, seventeen ModuleState and nine Recorder fields.
+        debit(29L)
+        val module = iterator.next()
+        if (module.module eq root) && rootState.isEmpty then rootState = Some(module)
+        else if (module.module eq child) && childState.isEmpty then childState = Some(module)
+        else valid = false
+        if valid then
+          valid = module.identityPrefix.isEmpty && module.pending.isEmpty &&
+            module.variables.isEmpty && module.variableRecords.isEmpty &&
+            module.controlExpressions.isEmpty && module.statementSerial == 0 &&
+            module.scopeSerial == 0 && module.procedureDepth == 0 &&
+            !module.procedureComplete && !module.procedureStarted &&
+            module.generatedContext.isEmpty && module.eventBindings.isEmpty &&
+            module.eventDepth == 0 && module.controlBuilder.isEmpty &&
+            module.controlSnapshot.isEmpty && module.controlScope.isEmpty &&
+            module.recorder.publicationEmpty
+      debit(3L)
+      valid && rootState.nonEmpty && childState.nonEmpty &&
+      (value.stack.head eq rootState.get)

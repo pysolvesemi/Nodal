@@ -2091,3 +2091,56 @@ Generalized lexical context, selected-proxy authority, late-source/final-name
 ordering, callbacks and nonsingleton construction remain open. Public pending
 outer geometry is not enabled, and Foundation 58 remains incomplete. No CI,
 broad qualification or held publication/target-consumer action was retried.
+
+## Checkpoint 61: private bound-domain construction safeguards
+
+This checkpoint preserves independently accepted groundwork, not complete direct
+Instance-port construction. Canonical request provenance and a one-use registration
+permit protect the fixed private selector. A narrow root External Sync domain and
+one Required child occurrence use actual preparation, snapshot and publication
+accounting. Existing domain/control reconstruction and validation still execute;
+raw eligibility is separate from post-resolution identity checks. Unsupported
+profiles retain their coarse path, and failed derived invariants poison the owner.
+The procedural owner proves the exact retained module pair is empty without changing
+its existing singleton observer. No second hierarchy or connectivity engine is added.
+
+Source capture may avoid an unused stack suffix only for a newly borrowed meter
+owned by this exact registered-construction Session and builder. Existing cached
+source identities must prove the first located constructor; an earlier unknown key
+retains the original walk. Every visited frame and decision remains charged, and
+normal source resolution, byte rereads, lexical selection and API provenance remain
+unchanged. This is removal of actual unused work, not a fee discount or new cache.
+
+The maintained runner freshly compiles its two fixture groups and passes four
+mains: sixteen synthetic selector cases, actual owner/callback/nesting/failure
+gates, source freshness checks, and three actual bound-phase exhaustion controls
+with fresh recovery. Scope restoration, poison, stale-ticket refusal and retained
+registrations are asserted. Preparation exhaustion occurs at the first real debit
+before map mutation. Source freshness uses a private source-reader seam, and live
+gate tests deliberately exhaust the first frame; they are not full hardware
+completion. Sixteen separate retained-class predecessor groups pass, with all
+fourteen output files raw-byte-identical. Consumers were not recompiled.
+
+An identical-class diagnostic preserves seventeen raw lines across the previous
+and optimized APIs: sixteen capture sites and the complete semantic-origin result.
+Both full Session executions still fail. Separate retained-child procedural-state
+rejection and complete module-vector parity assertions pass before their later
+finish refusal; module-vector equality is not whole-emission equality. See the
+[maintained groundwork guide](../../tests/scala/domain-hierarchy/reduction-groundwork-c2b2a/REDUCTION_GROUNDWORK_C2B2A.md)
+for exact scopes, inputs and readable pending fixtures.
+
+The complete seventeen-case direct-port witness remains an expected-positive
+capacity failure at the unchanged 65,536-unit ceiling during final canonical
+naming. It is excluded from the green runner, not reclassified as supported
+refusal. Public callbacks, generalized context installation, late naming,
+parameter/alias type authority and full C2b/C2c remain open. Proposed removal of
+unused metadata suffix computation is separate from this source snapshot.
+
+All 97 effective source inputs are pinned. The matched prefix build measured
+55,848,960 owned bytes at verified raw-plus-archive coexistence, within the 62 MiB
+cap and 246,808,576-byte free-space reserve. Sampling does not prove an unobserved
+continuous peak. Three completed predecessor archives were compacted only after
+source, recipe, manifest and dependency verification; their historical recipes
+require restoration. Compile warnings, fixture/recipe mistakes and each genuine
+capacity refusal remain recorded honestly. Foundation 58 is incomplete. No CI,
+broad qualification, publication retry or held target-consumer action was run.

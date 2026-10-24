@@ -834,7 +834,7 @@ private final class InstanceRecord(
     val lexicalDomain: Option[ClockDomain],
     val captured: Boolean,
     val generatedScope: Option[GeneratedRegionRecord] = None
-):
+) extends AllocationIdentity:
   var defaultBinding: Option[ClockDomain] = None
   var defaultBindingSource: Option[SourceSpan] = None
   val namedBindingSources: mutable.Map[ClockDomain, SourceSpan] = mutable.Map.empty

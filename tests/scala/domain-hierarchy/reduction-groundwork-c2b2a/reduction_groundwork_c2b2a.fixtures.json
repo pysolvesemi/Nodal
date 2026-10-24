@@ -1,0 +1,185 @@
+{
+  "schema": 1,
+  "api_sha256": "ac76f8cecd0482b42358071fbfbd3d597e211b606eeab86d2868b5773ad9a44c",
+  "groups": {
+    "prefix": {
+      "fixtures": [
+        {
+          "maintained_path": "prefix-CapturePrefixDiagnostics.scala",
+          "original": {
+            "path": ".work/f58-deferred-proxy-c2b2a/prefix-controls-v2/CapturePrefixDiagnostics.scala",
+            "sha256": "b97614a1a120b6e625166ded20eadbaf3f5ae7a59418bc4b11d2cbf0762cbb51"
+          },
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-proxy-bound/CapturePrefixDiagnostics.scala",
+          "sha256": "b97614a1a120b6e625166ded20eadbaf3f5ae7a59418bc4b11d2cbf0762cbb51",
+          "compile": true
+        },
+        {
+          "maintained_path": "prefix-CapturePrefixRoots.scala",
+          "original": {
+            "path": ".work/f58-deferred-proxy-c2b2a/prefix-controls-v2/CapturePrefixRoots.scala",
+            "sha256": "b642cda6841a099eea70776f68900f97c7c9dadccd2ee59e9e8ba239b81047af"
+          },
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-proxy-bound/CapturePrefixRoots.scala",
+          "sha256": "b642cda6841a099eea70776f68900f97c7c9dadccd2ee59e9e8ba239b81047af",
+          "compile": true
+        },
+        {
+          "maintained_path": "prefix-CapturePrefixSessionControls.scala",
+          "original": {
+            "path": ".work/f58-deferred-proxy-c2b2a/prefix-controls-v2/CapturePrefixSessionControls.scala",
+            "sha256": "f83ec1394a04e19d30a07767d976f184836085899f1543b408df2c1cdcca9546"
+          },
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-proxy-bound/CapturePrefixSessionControls.scala",
+          "sha256": "f83ec1394a04e19d30a07767d976f184836085899f1543b408df2c1cdcca9546",
+          "compile": true
+        },
+        {
+          "maintained_path": "prefix-CapturePrefixSourceControls.scala",
+          "original": {
+            "path": ".work/f58-deferred-proxy-c2b2a/prefix-controls-v2/CapturePrefixSourceControls.scala",
+            "sha256": "6bad7a8c5861829c3ccce944710e6cd7451009985ee4005d97d9da06fdd81ef8"
+          },
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-proxy-bound/CapturePrefixSourceControls.scala",
+          "sha256": "6bad7a8c5861829c3ccce944710e6cd7451009985ee4005d97d9da06fdd81ef8",
+          "compile": true
+        },
+        {
+          "maintained_path": "prefix-fixture-sources__prefixdiag__a__PrefixFixture.scala",
+          "original": {
+            "path": ".work/f58-deferred-proxy-c2b2a/prefix-controls-v2/fixture-sources/prefixdiag/a/PrefixFixture.scala",
+            "sha256": "d1e43489b75a2ef0878974fd985214e3a56b3011afb924ce56918d59191e84f8"
+          },
+          "virtual_path": "prefixdiag/a/PrefixFixture.scala",
+          "sha256": "d1e43489b75a2ef0878974fd985214e3a56b3011afb924ce56918d59191e84f8",
+          "compile": false
+        },
+        {
+          "maintained_path": "prefix-fixture-sources__prefixdiag__b__PrefixFixture.scala",
+          "original": {
+            "path": ".work/f58-deferred-proxy-c2b2a/prefix-controls-v2/fixture-sources/prefixdiag/b/PrefixFixture.scala",
+            "sha256": "a63ca65f575ce8aa45972a8282274adbb3398b22606211065b293fb947ae5df2"
+          },
+          "virtual_path": "prefixdiag/b/PrefixFixture.scala",
+          "sha256": "a63ca65f575ce8aa45972a8282274adbb3398b22606211065b293fb947ae5df2",
+          "compile": false
+        }
+      ]
+    },
+    "bound": {
+      "fixtures": [
+        {
+          "maintained_path": "bound-C2b2aBoundControls.scala",
+          "original": {
+            "path": ".work/f58-deferred-proxy-c2b2a/bound-controls-draft/C2b2aBoundControls.scala",
+            "sha256": "ac02f33bf3669cb9b46fea39ee60babe12e5a3f1070eb3f52cb7c3e623d8d1c7"
+          },
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-proxy-bound/C2b2aBoundControls.scala",
+          "sha256": "ac02f33bf3669cb9b46fea39ee60babe12e5a3f1070eb3f52cb7c3e623d8d1c7",
+          "compile": true
+        },
+        {
+          "maintained_path": "bound-C2b2aBoundRoot.scala",
+          "original": {
+            "path": ".work/f58-deferred-proxy-c2b2a/bound-controls-draft/C2b2aBoundRoot.scala",
+            "sha256": "68d393826ec0e5950ac43a6b7a43ed1fba5bfb45540a95aae824c7c479423953"
+          },
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-proxy-bound/C2b2aBoundRoot.scala",
+          "sha256": "68d393826ec0e5950ac43a6b7a43ed1fba5bfb45540a95aae824c7c479423953",
+          "compile": true
+        }
+      ]
+    },
+    "pending-typed17": {
+      "fixtures": [
+        {
+          "original": {
+            "path": ".work/f58-deferred-proxy-c2b2a/pair-fixed-fixtures/C2b2aControls.scala",
+            "sha256": "df404db025865a0664c938eb294535bae1811dfca8a3ca3b6ba0eda6841ebda6"
+          },
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-proxy-c2b2a/C2b2aControls.scala",
+          "sha256": "df404db025865a0664c938eb294535bae1811dfca8a3ca3b6ba0eda6841ebda6",
+          "compile": true,
+          "maintained_path": "pending-typed17/C2b2aControls.scala"
+        },
+        {
+          "original": {
+            "path": ".work/f58-deferred-proxy-c2b2a/pair-fixed-fixtures/C2b2aRoot.scala",
+            "sha256": "dd806bc9c17063b6f3f1c9c215637b415c34efe943cf5ab5e988cb6bc2850447"
+          },
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-proxy-c2b2a/C2b2aRoot.scala",
+          "sha256": "dd806bc9c17063b6f3f1c9c215637b415c34efe943cf5ab5e988cb6bc2850447",
+          "compile": true,
+          "maintained_path": "pending-typed17/C2b2aRoot.scala"
+        }
+      ]
+    }
+  },
+  "suites": {
+    "prefix-oracle": {
+      "group": "prefix",
+      "main": "CapturePrefixDiagnostics",
+      "arguments": [
+        "{lookup}"
+      ],
+      "success": [
+        "PASS 16 synthetic selector diagnostics, NOT authored-hardware evidence"
+      ]
+    },
+    "prefix-sessions": {
+      "group": "prefix",
+      "main": "CapturePrefixSessionControls",
+      "arguments": [],
+      "success": [
+        "PASS real-session capture gates; no typed17/final-publication budget claim"
+      ]
+    },
+    "prefix-source": {
+      "group": "prefix",
+      "main": "CapturePrefixSourceControls",
+      "arguments": [
+        "{runtime}"
+      ],
+      "success": [
+        "PASS locateSpan diagnostics: cross-call reread, within-call change/deletion refusal, missing-at-entry fallback and scope restoration"
+      ]
+    },
+    "bound-poison-recovery": {
+      "group": "bound",
+      "main": "C2b2aBoundControls",
+      "arguments": [
+        "poison-recovery"
+      ],
+      "success": [
+        "PASS bound preparation fresh ordinary-session recovery",
+        "PASS bound snapshot fresh ordinary-session recovery",
+        "PASS bound publication fresh ordinary-session recovery"
+      ]
+    }
+  },
+  "default_suites": [
+    "prefix-oracle",
+    "prefix-sessions",
+    "prefix-source",
+    "bound-poison-recovery"
+  ],
+  "pending": {
+    "bound-negative": "seams established; final naming fails, not a green group",
+    "bound-parity": "seams established; final naming fails, not a green group",
+    "typed17": "full typed witness still fails; bundled pending assets only, never selected or compiled by this runner"
+  },
+  "evidence": {
+    "prefix-controls-v5-summary.json": {
+      "path": ".work/f58-deferred-proxy-c2b2a/prefix-controls-v5-summary.json",
+      "sha256": "2c4aa70b2b491f0f5d962b4cfbed7e47f09df283d6b4dc15eacfcf516d4a8c24"
+    },
+    "bound-controls-summary.json": {
+      "path": ".work/f58-deferred-proxy-c2b2a/bound-controls-summary.json",
+      "sha256": "bbd800940782ec4cff8bdc78a33d3b1442703dbb5b018f1b9daf38b1f004368c"
+    },
+    "prefix-typed-summary.json": {
+      "path": ".work/f58-deferred-proxy-c2b2a/prefix-typed-summary.json",
+      "sha256": "86361e0cbe4ec19c1192c4227db42bce3f5ab206f3f3cec5a053926d08c42da9"
+    }
+  }
+}

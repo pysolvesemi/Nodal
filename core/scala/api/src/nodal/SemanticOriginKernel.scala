@@ -447,7 +447,9 @@ private[nodal] final class SemanticOriginBuilder:
     try
       chargeWork() // Before stack-walk/stream/vector allocation.
       val frames = walker.walk[java.util.List[StackWalker.StackFrame]](stream =>
-        if resolutionWork.isEmpty then stream.limit(96).toList
+        if installed && ConstructionKernel.constructionCapturePrefixAllowed(this) then
+          cachedConstructorPrefix(stream)
+        else if resolutionWork.isEmpty then stream.limit(96).toList
         else
           stream.limit(96).peek(frame =>
             // Fixed bounded stack passes plus actual frame strings used by selection.
@@ -2050,3 +2052,39 @@ private[nodal] final class SemanticOriginBuilder:
       generatedSnapshots,
       sourceMap
     )
+
+  /** The old selector only consumes frames through its first located user constructor. Existing
+    * sourceCache entries can certify that prefix without moving any filesystem lookup into the
+    * walk. A missing earlier constructor key permanently disables stopping for this invocation.
+    * Span reads and all downstream selection still run unchanged after the walk.
+    */
+  private def cachedConstructorPrefix(stream: java.util.stream.Stream[StackWalker.StackFrame])
+      : java.util.List[StackWalker.StackFrame] =
+    chargeWork(2L) // Iterator and retained frame buffer.
+    val iterator = stream.limit(96).iterator()
+    val frames = new java.util.ArrayList[StackWalker.StackFrame]()
+    var mayStop = true
+    var complete = false
+    while !complete && iterator.hasNext do
+      val frame = iterator.next()
+      // Same per-visited-frame work as the original metered full walk.
+      chargeWork(16L)
+      val owner = frame.getClassName
+      val file = Option(frame.getFileName)
+      val method = frame.getMethodName
+      chargeWork(4L *
+        (owner.length.toLong + file.fold(0L)(_.length.toLong) +
+          method.length.toLong + 1L))
+      frames.add(frame)
+      if mayStop then
+        // Additional classification/key work is real even when it proves fallback.
+        chargeWork(2L + owner.length.toLong + file.fold(0L)(_.length.toLong) +
+          method.length.toLong)
+        if isUserFrame(frame) && method == "<init>" then
+          file.foreach: name =>
+            chargeWork(1L + name.length.toLong + owner.length.toLong)
+            sourceCache.get(name -> owner) match
+              case Some(Some(_)) => complete = true
+              case Some(None) => ()
+              case None => mayStop = false
+    frames

@@ -3,9 +3,12 @@ import nodal.*
 object EpochControls:
   var mode = "noop"
   def invoke(target: AnyRef, name: String, args: AnyRef*): AnyRef =
-    val method = target.getClass.getDeclaredMethods.find(value =>
-      value.getName == name || value.getName.endsWith("$$" + name)
-    ).get
+    val methods = target.getClass.getDeclaredMethods.filter(value =>
+      (value.getName == name || value.getName.endsWith("$$" + name)) &&
+        value.getParameterCount == args.size
+    )
+    require(methods.length == 1, "ambiguous or missing reflected method: " + name)
+    val method = methods.head
     method.setAccessible(true)
     try method.invoke(target, args*)
     catch case failure: java.lang.reflect.InvocationTargetException => throw failure.getCause

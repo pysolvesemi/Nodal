@@ -895,3 +895,7 @@ private[nodal] object ConstructionKernel:
   // Read-only same-owner predicate; foreign builders and no-owner/C1 calls retain legacy capture.
   def constructionCapturePrefixAllowed(builder: SemanticOriginBuilder): Boolean =
     Current.isBound && Current.get.constructionCapturePrefixAllowed(builder)
+
+  // Read-only identity check for the fixed private diagnostic policy entry.
+  def ownsConstructionSession(session: ConstructionSession): Boolean =
+    Current.isBound && (Current.get eq session)

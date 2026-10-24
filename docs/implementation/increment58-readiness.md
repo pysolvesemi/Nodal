@@ -2179,3 +2179,49 @@ This remains an expected-positive capacity failure, not an accepted refusal.
 No relationship-index reuse or budget change is included. Full direct-port
 publication, generalized contexts, public callbacks and Foundation 58 completion
 remain open. No CI, broad qualification or held action was retried.
+
+## Checkpoint 63: bounded private construction diagnostics
+
+The existing Session and construction kernel now support an explicit, early-bound
+private diagnostic policy with a fixed 131,072-unit allowance. Activation requires
+the actual registered carrier, context, allocation stamp, legal operation kind and
+checked callback from the same Session and root. Authority checks are charged
+before the canonical owner initializes and receives its exact accumulated debt
+once. Binding alone grants no semantic admission. The default cumulative limit,
+legacy entry and pre-owner debt limit remain 65,536; independent local limits are
+unchanged. There is no refill, automatic promotion or revival after poisoning.
+The diagnostic identity remains available for terminal reporting without changing
+public snapshot schemas.
+
+The matched API compiled and packaged successfully. The maintained runner freshly
+compiled three sources and passed three mains: 18 admission labels (one donor,
+16 controls and fresh recovery), actual publication-scan exhaustion, and actual
+129-level descriptor-export depth refusal. They check exact debt transfer,
+no-refill behavior, scope restoration, stale queries, poison, preserved registry
+state and fresh recovery. The depth witness is an additional exporter input, not
+registered deep hardware or evidence for the separate 65,536-node bound. Successful
+activation is demonstrated through the explicit entry; automatic no-request refusal
+is tested, but successful automatic-policy activation remains unverified. See the
+[diagnostic policy guide](../../tests/scala/domain-hierarchy/diagnostic-work-policy/DIAGNOSTIC_POLICY.md).
+
+Fifteen retained predecessor groups pass, and all fourteen raw output comparisons
+match. The sixteenth guard initially failed because its reflection helper selected
+an overload by name alone. A helper-only name, arity and unique-match correction
+passes against both APIs with the original consumer class unchanged; the public
+JVM descriptor also matches. This is repaired-helper compatibility, not an
+unmodified sixteen-group pass. Retained consumers were not freshly compiled.
+
+The original seventeen-case positive remains unaccepted. Its default policy still
+exhausts during publication, with changed failure timing recorded. The diagnostic
+policy reaches a genuine undriven child-input refusal instead. A separately named
+driven witness is uncompiled and excluded. The donor's 32,409-unit debit is not a
+measurement of that witness. No default-capacity or full direct-port publication
+claim follows from these diagnostics. Foundation 58 remains open.
+
+All 97 effective source inputs match this checkpoint. Verified raw-plus-archive
+coexistence used 55,910,400 bytes within the 62 MiB stage cap; 437,063,680 bytes
+remained free above the unchanged reserve. Fixture and compatibility growth later
+reached 4,558,848 bytes, exceeding its 3 MiB suballowance despite staying within
+the whole-stage cap. This overrun is retained honestly; only separately allowed
+compact finalization followed. Measurements are not a continuous-peak guarantee.
+No CI, broad qualification, publication retry or held consumer action occurred.

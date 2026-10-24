@@ -4991,7 +4991,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val result = reserveRegisteredConstruction(input, body)
     result.registerConstructionIntent(this, kind)
     registeredConstructionAdmission = true
-    result
+    bindDiagnosticRequest(result)
 
   /** Stage A/B primitive only: no production reduction branch invokes reservation yet. */
   def reserveReductionConstruction(
@@ -16773,6 +16773,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       chargeConstructionActivation(this, expressionValues.size.toLong)
       expressionValues.foreach((reference, value) => captured(reference, value))
 
+    private[ConstructionSession] def enableDiagnostic(root: Module, carrier: KernelExpr[?]): Unit =
+      guard:
+        if drained || incremental || !boundaryClosureOwner.exists(_ eq this) then
+          reject("invalid diagnostic closure activation")
+        val policy = requireDiagnosticRequest(root, carrier)
+        incremental = true
+        remaining = policy.limit.toLong
+        chargeConstructionActivation(this, expressionValues.size.toLong)
+        expressionValues.foreach((reference, value) => captured(reference, value))
+
     def queryForCurrentEpoch(): StructuralParameterBinding.Query = guard:
       if !incremental || currentSnapshot.isEmpty then reject("no incremental boundary snapshot")
       new StructuralParameterBinding.Query(currentSnapshot.get, meter = currentMeter)
@@ -17004,6 +17014,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     boundaryClosureOwner.map(_.meter).getOrElse(StructuralParameterBinding.WorkMeter.Unmetered)
 
   private def enableIncrementalBoundaryClosure(root: Module, budget: Int): BoundaryClosureOwner =
+    rejectLegacyDiagnosticActivation()
     if boundaryClosureOwner.nonEmpty then
       fail("NODAL-HIERARCHY-058-CLOSURE", "closure already exists")
     val closure = new BoundaryClosureOwner(moduleHandle(root), Map.empty, Vector.empty)
@@ -17030,9 +17041,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Some(site)
       )
     val activateConstructionClosure =
-      registeredConstructionAdmission && boundaryClosureOwner.isEmpty
+      (registeredConstructionAdmission || diagnosticConstructionPolicy.nonEmpty) &&
+        boundaryClosureOwner.isEmpty
     val automaticConstructionClosure =
-      if activateConstructionClosure then Some(enableIncrementalBoundaryClosure(root, 65536))
+      if activateConstructionClosure then
+        Some(if diagnosticConstructionPolicy.nonEmpty then
+          enableDiagnosticConstructionClosure(root, None)
+        else enableIncrementalBoundaryClosure(root, 65536))
       else None
     closureCharge(expressionValues.size.toLong)
     val pendingConstruction = expressionValues.valuesIterator.exists(!_.constructionFinalized)
@@ -18163,3 +18178,149 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   def constructionCapturePrefixAllowed(builder: SemanticOriginBuilder): Boolean =
     (semanticOrigin eq builder) && registeredConstructionAdmission &&
       boundaryClosureOwner.exists(owner => owner.incremental && owner.hasConstructionWork)
+
+  // A fixed private diagnostic allowance, not a public capacity or admission policy.
+  private final class DiagnosticConstructionPolicy(val root: Module, val module: ModuleRecord):
+    val name = "registered-construction-diagnostic-131072"
+    val limit = 131072
+    val requests = new java.util.IdentityHashMap[KernelExpr[?], DiagnosticRequestBinding]()
+    var firstRequest: Option[KernelExpr[?]] = None
+
+  private final class DiagnosticRequestBinding(
+      val result: KernelExpr[?],
+      val context: ConstructionRequestContext,
+      val reference: ExpressionRef,
+      val policy: DiagnosticConstructionPolicy
+  )
+
+  private var diagnosticConstructionPolicy: Option[DiagnosticConstructionPolicy] = None
+
+  private def diagnosticPolicyGuard[A](body: => A): A =
+    try
+      boundaryClosureOwner match
+        case Some(owner) => owner.guard(body)
+        case None => body
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "diagnostic construction work policy")
+        throw failure
+
+  /** Bind before the first request/debt/owner. This does not itself authorize activation. */
+  private[nodal] def bindDiagnosticConstructionWork(root: Module): Unit = diagnosticPolicyGuard:
+    val previousDebt = constructionRequestWork
+    requestCharge(16L) // Fixed context/identity checks and the policy/map allocations.
+    if !ConstructionKernel.ownsConstructionSession(this) || constructorFailure.nonEmpty ||
+      diagnosticConstructionPolicy.nonEmpty || boundaryClosureOwner.nonEmpty ||
+      registeredConstructionAdmission || previousDebt != 0L || !ordinaryRootConstructionContext
+    then collectionFailure("diagnostic work policy requires a fresh ordinary root before requests")
+    val module = currentModule
+    if moduleHandle(root) != module.handle || module.parentAtConstruction.nonEmpty ||
+      !records.get(module.handle).exists(_ eq module)
+    then collectionFailure("diagnostic work policy belongs to another root")
+    diagnosticConstructionPolicy = Some(new DiagnosticConstructionPolicy(root, module))
+
+  private def bindDiagnosticRequest(result: KernelExpr[Data]): KernelExpr[Data] =
+    diagnosticConstructionPolicy match
+      case None => result
+      case Some(policy) => diagnosticPolicyGuard:
+          requestCharge(18L) // Fixed checks, binding insertion and first-carrier retention.
+          val context = result.constructionRequest.getOrElse(
+            collectionFailure("diagnostic carrier has no registered context")
+          )
+          val reference = Option(expressionIds.get(result)).getOrElse(
+            collectionFailure("diagnostic carrier is not canonical")
+          )
+          if boundaryClosureOwner.nonEmpty || !result.registeredConstructionOwnedBy(this) ||
+            (context.session ne this) || (context.module ne policy.module) ||
+            (context.resultReference ne reference) || policy.requests.containsKey(result) ||
+            !expressionValues.get(reference).exists(_ eq result)
+          then collectionFailure("diagnostic carrier does not belong to the bound root policy")
+          policy.requests.put(
+            result,
+            new DiagnosticRequestBinding(result, context, reference, policy)
+          )
+          if policy.firstRequest.isEmpty then policy.firstRequest = Some(result)
+          result
+
+  private def requireDiagnosticRequest(
+      root: Module,
+      result: KernelExpr[?]
+  ): DiagnosticConstructionPolicy =
+    requestCharge(40L) // Fixed policy/carrier/stamp/callback proof; no data-dependent traversal.
+    val policy = diagnosticConstructionPolicy.getOrElse(
+      collectionFailure("diagnostic work policy was not bound")
+    )
+    val binding = Option(policy.requests.get(result)).getOrElse(
+      collectionFailure("diagnostic activation requires its actual registered carrier")
+    )
+    val context = result.constructionRequest.getOrElse(
+      collectionFailure("diagnostic carrier lost its context")
+    )
+    val allocation = binding.reference.constructionAllocation.getOrElse(
+      collectionFailure("diagnostic carrier lost its result allocation")
+    )
+    val callback = result.constructionCallback.getOrElse(
+      collectionFailure("diagnostic carrier lost its checked callback")
+    )
+    DigitalCollectionCallback.requireChecked(callback.checked)
+    if !ConstructionKernel.ownsConstructionSession(this) || constructorFailure.nonEmpty ||
+      (policy.root ne root) || moduleHandle(root) != policy.module.handle ||
+      !records.get(policy.module.handle).exists(_ eq policy.module) ||
+      (binding.policy ne policy) || (binding.result ne result) || (binding.context ne context) ||
+      (context.session ne this) || (context.module ne policy.module) ||
+      (context.resultReference ne binding.reference) ||
+      (allocation.session ne this) || (allocation.module ne policy.module) ||
+      allocation.serial <= context.frontier ||
+      !result.constructionKind.exists(DigitalReductionContract.Kinds) ||
+      !Option(expressionIds.get(result)).exists(_ eq binding.reference) ||
+      !expressionValues.get(binding.reference).exists(_ eq result) ||
+      !result.registeredConstructionOwnedBy(this) ||
+      (!result.pendingConstructionOwnedBy(this) && !result.constructionFinalized) ||
+      context.sourceSlot != result.constructionSourceSlot ||
+      (requestReference(context.input) ne context.inputReference) ||
+      !result.constructionDependencies.headOption.exists:
+        case value: AnyRef => value eq context.input
+        case _ => false
+    then collectionFailure("diagnostic activation lost canonical request/root/policy authority")
+    policy
+
+  private def rejectLegacyDiagnosticActivation(): Unit =
+    if diagnosticConstructionPolicy.nonEmpty then
+      diagnosticPolicyGuard:
+        requestCharge()
+        collectionFailure("legacy closure activation cannot promote a diagnostic work policy")
+
+  private def enableDiagnosticConstructionClosure(
+      root: Module,
+      carrier: Option[KernelExpr[?]]
+  ): BoundaryClosureOwner = diagnosticPolicyGuard:
+    requestCharge(4L)
+    if boundaryClosureOwner.nonEmpty then
+      collectionFailure("diagnostic closure already exists")
+    val policy = diagnosticConstructionPolicy.getOrElse(
+      collectionFailure("diagnostic work policy was not bound")
+    )
+    val result = carrier.getOrElse:
+      requestCharge(2L) // Read and check the deterministic first-bound carrier.
+      policy.firstRequest.getOrElse(
+        collectionFailure("diagnostic activation requires a registered request")
+      )
+    val closure = new BoundaryClosureOwner(moduleHandle(root), Map.empty, Vector.empty)
+    boundaryClosureOwner = Some(closure)
+    closure.enableDiagnostic(root, result)
+    closure
+
+  /** Fixed internal entry: no arbitrary budget or authorized callback body. */
+  private[nodal] def beginDiagnosticConstructionClosure(
+      root: Module,
+      carrier: KernelExpr[?]
+  ): Unit = diagnosticPolicyGuard:
+    requestCharge()
+    if !ordinaryRootConstructionContext then
+      collectionFailure("diagnostic activation requires the ordinary root context")
+    val closure = enableDiagnosticConstructionClosure(root, Some(carrier))
+    closure.prepareIncrementalInputs()
+    closure.drainIncremental()
+
+  private[nodal] def diagnosticConstructionWorkPolicyTag: Option[String] =
+    diagnosticConstructionPolicy.map(_.name)

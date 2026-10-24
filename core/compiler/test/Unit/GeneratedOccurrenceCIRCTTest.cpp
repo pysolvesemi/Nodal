@@ -541,6 +541,157 @@ int main(int argc, char **argv) {
     "nodal.digital_assign"(%second, %output1) <{kind = "continuous", metadata = {}}> : (!nodal.uint<8>, !nodal.uint<8>) -> ()
 )mlir");
   positive("selected-inputs-distinct-rhs-both-output-lanes-no-body-proxy", selectedInputs, 1, 1, true);
+  // An exact structural capture must survive both outlining boundaries. There
+  // are no observed child outputs or parent output sinks to mask an input route.
+  auto guardedInputs = selectedInputs;
+  for (auto prefix : {
+           "    \"nodal.port\"() <{direction = \"output\", domain = @core",
+           "    %second =", "    %v20 =", "    %v21 =", "    %output1 =",
+           "    \"nodal.digital_assign\"(%second", "    \"nodal.digital_assign\"(%v20"}) {
+    for (auto at = guardedInputs.find(prefix); at != std::string::npos;
+         at = guardedInputs.find(prefix))
+      guardedInputs.erase(at, guardedInputs.find('\n', at) - at + 1);
+  }
+  for (auto name : {"rhs0", "rhs1"}) {
+    auto at = guardedInputs.find("    %" + std::string(name) + " =");
+    guardedInputs.replace(
+        at, guardedInputs.find('\n', at) - at + 1,
+        "    \"nodal.port\"() <{direction = \"input\", domain = @core, metadata = {}, "
+        "sym_name = \"" + std::string(name) + "\", type = !nodal.uint<8>}> : () -> ()\n"
+        "    %" + std::string(name) + " = \"nodal.port_value\"() <{metadata = {}, port = @" +
+        std::string(name) + "}> : () -> !nodal.uint<8>\n");
+  }
+  auto guardStart = guardedInputs.find("    %v13 =");
+  auto guardEnd = guardedInputs.find("    \"nodal.local_domain_binding\"");
+  auto guardedBody = guardedInputs.substr(guardStart, guardEnd - guardStart);
+  for (auto name : {"v4", "v5", "v7", "v8", "v10", "two", "rhs0", "rhs1"}) {
+    std::string from = "%" + std::string(name), to = "%captured_" + std::string(name);
+    size_t at = 0;
+    while ((at = guardedBody.find(from, at)) != std::string::npos) {
+      auto end = at + from.size();
+      if (end == guardedBody.size() || guardedBody[end] < '0' || guardedBody[end] > '9') {
+        guardedBody.replace(at, from.size(), to);
+        at += to.size();
+      } else
+        at = end;
+    }
+  }
+  // Moving the family into an arm also moves every authored ownership path.
+  // Rebase exact quoted identities, including the child and its override.
+  const std::pair<StringRef, StringRef> guardedIdentities[] = {
+      {"\"Top.family\"", "\"Top.guard.then.family\""},
+      {"\"Top.i\"", "\"Top.guard.then.family.i\""}};
+  for (auto identity : guardedIdentities)
+    while (guardedBody.find(identity.first.str()) != std::string::npos)
+      guardedBody = replace(guardedBody, identity.first, identity.second);
+  const std::string guardPrefix = R"mlir(
+    %guard = "nodal.static_compare"(%v9, %two) <{comparison = "eq", metadata = {semantic_path = "Top.guard.predicate"}}> : (i64, i64) -> !nodal.static_predicate
+    "nodal.structural_if"(%guard, %v8, %two, %v10, %v4, %v5, %v7, %rhs0, %rhs1) <{contract_version = "structural-if-v1", region_id = "Top.guard", operandSegmentSizes = array<i32: 1, 8, 0>, metadata = {semantic_path = "Top.guard"}}> ({
+    ^bb0(%captured_v8: i64, %captured_two: i64, %captured_v10: i64, %captured_v4: i64, %captured_v5: !nodal.capability<"clock">, %captured_v7: !nodal.capability<"reset">, %captured_rhs0: !nodal.uint<8>, %captured_rhs1: !nodal.uint<8>):
+)mlir";
+  const std::string guardSuffix = R"mlir(
+      "nodal.structural_yield"() <{metadata = {semantic_path = "Top.guard.then.yield"}}> : () -> ()
+    }, {
+      "nodal.structural_yield"() <{metadata = {semantic_path = "Top.guard.else.yield"}}> : () -> ()
+    }) : (!nodal.static_predicate, i64, i64, i64, i64, !nodal.capability<"clock">, !nodal.capability<"reset">, !nodal.uint<8>, !nodal.uint<8>) -> ()
+)mlir";
+  guardedInputs.replace(guardStart, guardEnd - guardStart,
+                        guardPrefix + guardedBody + guardSuffix);
+  auto guardedPositive = [&](StringRef name, const std::string &input, unsigned targetArm) {
+    diagnostics.clear();
+    auto module = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    bool valid = module && succeeded(verify(*module)) && succeeded(lower(*module));
+    circt::hw::HWModuleOp top, arm, family;
+    circt::hw::InstanceOp armInstance, familyInstance, childInstance;
+    Operation *branch = nullptr, *loop = nullptr, *concat = nullptr;
+    unsigned modules = 0, instances = 0, branches = 0, loops = 0, concats = 0;
+    if (valid) {
+      module->walk([&](Operation *op) {
+        valid &= op->getName().getDialectNamespace() != "nodal";
+        if (auto definition = dyn_cast<circt::hw::HWModuleOp>(op)) {
+          ++modules;
+          if (op->getAttrOfType<StringAttr>("sym_name").getValue() == "Top")
+            top = definition;
+          if (op->hasAttr("nodal.generated_guard_scope"))
+            arm = definition;
+          if (op->hasAttr("nodal.generated_template"))
+            family = definition;
+        }
+        if (auto instance = dyn_cast<circt::hw::InstanceOp>(op)) {
+          ++instances;
+          if (instance.getModuleName() == "Child")
+            childInstance = instance;
+          else if (op->getParentOfType<circt::hw::HWModuleOp>()->hasAttr(
+                       "nodal.generated_guard_scope"))
+            familyInstance = instance;
+          else
+            armInstance = instance;
+        }
+        if (op->getName().getStringRef() == "sv.generate.case") {
+          branch = op;
+          ++branches;
+        }
+        if (op->getName().getStringRef() == "sv.generate.for") {
+          loop = op;
+          ++loops;
+        }
+        if (op->getName().getStringRef() == "comb.concat") {
+          concat = op;
+          ++concats;
+        }
+      });
+      valid &= modules == 4 && instances == 3 && branches == 1 && loops == 1 && concats == 1 &&
+               top && arm && family && armInstance && familyInstance && childInstance;
+      if (valid) {
+        auto condition = branch->getAttrOfType<circt::hw::ParamDeclRefAttr>("cond");
+        auto patterns = branch->getAttrOfType<ArrayAttr>("casePatterns");
+        valid &= condition && condition.getName().getValue() == "LANES" && patterns && patterns.size() == 2 &&
+                 isa<IntegerAttr>(patterns[0]) && cast<IntegerAttr>(patterns[0]).getInt() == 2 &&
+                 branch->getParentOfType<circt::hw::HWModuleOp>() == top &&
+                 armInstance->getBlock() == &branch->getRegion(targetArm).front() &&
+                 armInstance.getModuleName() == arm->getAttrOfType<StringAttr>("sym_name").getValue() &&
+                 familyInstance.getModuleName() == family->getAttrOfType<StringAttr>("sym_name").getValue() &&
+                 familyInstance->getParentOfType<circt::hw::HWModuleOp>() == arm &&
+                 childInstance->getParentOp() == family &&
+                 loop->getParentOfType<circt::hw::HWModuleOp>() == arm &&
+                 concat->getParentOfType<circt::hw::HWModuleOp>() == arm &&
+                 concat->getNumOperands() == 2 && concat->getResult(0).getType().isInteger(16) &&
+                 armInstance->getNumResults() == 0 && familyInstance->getNumResults() == 0 &&
+                 familyInstance->getNumOperands() > 0 && childInstance->getNumOperands() > 0;
+        branch->getRegion(1 - targetArm).walk([&](Operation *op) {
+          valid &= !isa<circt::hw::InstanceOp>(op) &&
+                   op->getName().getStringRef() != "sv.generate.for";
+        });
+        if (valid) {
+          for (unsigned lane = 0; lane != 2; ++lane) {
+            auto capture = dyn_cast<BlockArgument>(concat->getOperand(1 - lane));
+            valid &= capture && capture.getOwner() == arm.getBodyBlock() &&
+                     capture.getArgNumber() < armInstance->getNumOperands();
+            if (!valid)
+              break;
+            valid &= top.getBodyBlock()->getNumArguments() == 4 &&
+                     armInstance->getOperand(capture.getArgNumber()) ==
+                         top.getBodyBlock()->getArgument(lane + 2);
+          }
+          auto slice = familyInstance->getOperands().back().getDefiningOp();
+          auto childInput = dyn_cast<BlockArgument>(childInstance->getOperand(0));
+          valid &= slice && slice->getName().getStringRef() == "sv.verbatim.expr" &&
+                   slice->getNumOperands() == 3 && slice->getOperand(0) == concat->getResult(0) &&
+                   slice->getOperand(1) == loop->getRegion(0).front().getArgument(0) &&
+                   childInput && childInput.getOwner() == family.getBodyBlock() &&
+                   childInput.getType().isInteger(8) &&
+                   childInput.getArgNumber() + 1 == family.getBodyBlock()->getNumArguments();
+        }
+        valid &= succeeded(verify(*module));
+      }
+    }
+    report(name, valid);
+  };
+  guardedPositive("guarded-selected-input-exact-captured-rhs-through-two-helpers", guardedInputs, 0);
+  guardedPositive("guarded-selected-input-negated-predicate-keeps-actual-arm",
+                  replace(guardedInputs, "comparison = \"eq\"", "comparison = \"ne\""), 1);
+  negative("guarded-selected-input-raw-parent-rhs-is-not-authenticated-capture",
+           replace(guardedInputs, "(%input0, %captured_rhs0)", "(%input0, %rhs0)"), "capture");
   auto reversedInputs = selectedInputs;
   auto firstWrite = reversedInputs.find("    \"nodal.digital_assign\"(%input0");
   auto secondWrite = reversedInputs.find("    \"nodal.digital_assign\"(%input1");

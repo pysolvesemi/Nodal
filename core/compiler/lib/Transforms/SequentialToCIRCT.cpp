@@ -2277,6 +2277,11 @@ private:
   // it from a leaf storage identity or assume an unbounded search will succeed.
   llvm::DenseMap<Operation *, std::pair<GeneratedFamilyPlan *, unsigned>> generatedSelectionRoots;
   llvm::DenseMap<Attribute, SmallVector<TypedAttr>> generatedExclusions;
+  bool consumedSelectedInputEffect(Operation *operation) const {
+    // Both identities are populated only by the canonical selected-input plan.
+    return isa<DigitalAssignOp>(operation) && staticOperations.contains(operation) &&
+           selectedInstanceInputs.contains(operation->getOperand(0).getDefiningOp());
+  }
   Value capturedValue(Value value) const {
     for (unsigned depth = 0; depth < digitalTypeMaximumDepth; ++depth) {
       auto argument = dyn_cast<BlockArgument>(value);
@@ -3334,13 +3339,18 @@ private:
           const auto &proof = input->second.lanes.front().proof;
           bool direct = !parent && op.getParentOp() == source.getOperation() &&
                         (proof.selections.empty() || proof.selections.size() == 1);
+          Operation *guard = op.getParentOp();
+          bool guarded = !parent && isa<StructuralIfOp>(guard) &&
+                         guard->getParentOp() == source.getOperation() &&
+                         generatedChoices.count(guard) && proof.selections.size() == 1 &&
+                         proof.selections.front().family == &op;
           bool nested = parent && !parent->parent &&
                         parent->operation->getParentOp() == source.getOperation() &&
                         proof.selections.size() == 2 &&
                         proof.selections.front().family == parent->operation &&
                         proof.selections.back().family == &op;
-          if ((!direct && !nested) || input->second.family != &op || !port.input || port.inout ||
-              port.splitRoute || !generatedBusType(input->second.laneType, family.capacity))
+          if ((!direct && !guarded && !nested) || input->second.family != &op || !port.input ||
+              port.inout || port.splitRoute || !generatedBusType(input->second.laneType, family.capacity))
             return reject(instance, "selected input requires its exact ordinary family route");
           family.inputs.push_back({key, input->second.laneType});
         }
@@ -3441,6 +3451,8 @@ private:
           for (Region &region : op.getRegions())
             if (failed(planScope(region.front(), depth + 1)))
               return failure();
+        } else if (consumedSelectedInputEffect(&op)) {
+          // Already routed through the exact family input bus, not a guard output.
         } else if (selectedInstanceReads.count(&op) || selectedInstanceInputs.count(&op)) {
           // Original output reads and destination-only input views were checked before planning.
         } else if (isa<GeneratedMemberOp>(op)) {
@@ -3650,7 +3662,7 @@ private:
               if (!generatedScopeContains(block, family->operation->getBlock()))
                 carriers.insert({family, index});
             }
-            if (isa<DigitalAssignOp>(use)) {
+            if (isa<DigitalAssignOp>(use) && !consumedSelectedInputEffect(use)) {
               auto projection = resolveStaticShapeProjection(use->getOperand(0), use);
               auto pin = succeeded(projection)
                              ? capturedValue(projection->root).getDefiningOp<PortValueOp>()
@@ -3666,8 +3678,9 @@ private:
               if (isa<StructuralIfOp>(use))
                 continue; // Walk actual arm uses, not sink-only capture operands.
                           // Static predicates are transported as parameters.
-              if (isa<DigitalAssignOp>(use) && index == 0 && generatedGuardOperations.contains(use))
-                continue;
+              if (isa<DigitalAssignOp>(use) && index == 0 &&
+                  (generatedGuardOperations.contains(use) || consumedSelectedInputEffect(use)))
+                continue; // Selected sinks are not captures; their actual RHS still is.
               Value value = capturedValue(operand);
               if (!value) {
                 invalid = true;

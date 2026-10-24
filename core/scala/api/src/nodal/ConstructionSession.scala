@@ -15014,6 +15014,23 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               )
               if !closure(reference) || !structural then invalid()
 
+  /** A guarded selected input keeps the original root statement arm as its sole scope. */
+  private def selectedInputGuardedArm(
+      family: GeneratedRegionRecord,
+      scope: Option[DigitalValueRegionRecord],
+      owner: Long
+  ): Option[DigitalValueRegionRecord] =
+    publicationCharge(12L)
+    family.digitalRegion.flatMap(_.parent).filter: arm =>
+      family.owner == owner && family.parentOrdinal.isEmpty && arm.parent.isEmpty &&
+        arm.reference.module == owner && scope.exists(_ eq arm) &&
+        structuralArms.get(arm.reference).exists(_ eq arm) &&
+        arm.structuralArm.exists: header =>
+          structuralIfs.get(header.conditional).exists: conditional =>
+            conditional.reference.module == owner && conditional.parent.isEmpty &&
+              conditional.result.isEmpty &&
+              ((if header.whenTrue then conditional.trueArm else conditional.falseArm) eq arm)
+
   /** Admission only: writer coverage remains owned by the existing assignment proof. */
   private def requireSelectedInputTarget(
       root: DeclarationRef,
@@ -15044,9 +15061,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         conservativeIntegerLiteral(value.step).exists(_ > 0L) && value.maximumTripCount > 0
     val direct = reference.family.selectionPrefix.isEmpty &&
       family.familyHandle.exists(_ eq reference.family) && family.parentOrdinal.isEmpty &&
-      family.digitalRegion.exists(_.parent.isEmpty)
+      family.digitalRegion.exists(_.parent.isEmpty) && binding.scope.isEmpty
+    val guarded = binding.scope.nonEmpty && reference.family.selectionPrefix.isEmpty && fixedAxis(family) &&
+      family.familyHandle.exists(_ eq reference.family) &&
+      selectedInputGuardedArm(family, binding.scope, owner).nonEmpty
     val nested = reference.family.selectionPrefix match
-      case Vector(prefix) if fixedAxis(family) && fixedAxis(prefix.family) =>
+      case Vector(prefix) if binding.scope.isEmpty && fixedAxis(family) && fixedAxis(prefix.family) =>
         val outer = prefix.family
         publicationCharge(records(owner).generatedRegions.size.toLong + prefix.members.size.toLong + 5L)
         outer.parentOrdinal.isEmpty && outer.digitalRegion.exists(_.parent.isEmpty) &&
@@ -15060,8 +15080,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       case _ => false
     boundDomainCharge(records(owner).generatedRegions.size.toLong + records(owner).instances.size.toLong)
     if root.module != owner || family.owner != owner || !family.areaFamily ||
-      !records(owner).generatedRegions.exists(_ eq family) || (!direct && !nested) ||
-      reference.members.nonEmpty || binding.scope.nonEmpty ||
+      !records(owner).generatedRegions.exists(_ eq family) || (!direct && !nested && !guarded) ||
+      reference.members.nonEmpty ||
       !Vector(family.lower, family.upperExclusive, family.step).forall(value =>
         conservativeIntegerLiteral(value).nonEmpty
       ) || family.maximumTripCount <= 0 ||
@@ -15271,6 +15291,48 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       resolved: Map[DomainRef, String]
   ): Vector[(KernelDigitalAssignmentSnapshot, Operation)] =
     val ordinals = mutable.HashMap.empty[Long, Int]
+    // Publication sees both completed callbacks. Do not decide opposite-arm emptiness while
+    // constructing the first arm, and do not rescan the registries for every lane writer.
+    lazy val checkedGuardedArms =
+      publicationCharge(1L)
+      mutable.HashSet.empty[DigitalValueRegionRecord]
+    def verifyGuardedArm(family: GeneratedRegionRecord, arm: DigitalValueRegionRecord): Unit =
+      publicationCharge(2L)
+      if checkedGuardedArms.add(arm) then
+        def invalid(): Nothing = fail(
+          "NODAL-HIERARCHY-058-001",
+          "guarded selected inputs require one direct family and an empty opposite statement arm"
+        )
+        val header = arm.structuralArm.getOrElse(invalid())
+        val conditional = structuralIfs.getOrElse(header.conditional, invalid())
+        val opposite = if header.whenTrue then conditional.falseArm else conditional.trueArm
+        publicationCharge(8L)
+        if opposite.parent.nonEmpty || opposite.yielded.nonEmpty ||
+          opposite.arguments.nonEmpty || opposite.captures.nonEmpty ||
+          !structuralArms.get(opposite.reference).exists(_ eq opposite) ||
+          !opposite.structuralArm.contains(StructuralArmHeader(header.conditional, !header.whenTrue))
+        then invalid()
+        publicationElements(allValueRegions).foreach: region =>
+          publicationCharge(3L)
+          if region.parent.exists(_ eq opposite) ||
+            (region.parent.exists(_ eq arm) && !family.digitalRegion.exists(_ eq region))
+          then invalid()
+        publicationElements(expressionRegions.iterator).foreach: (_, region) =>
+          publicationCharge(1L)
+          if region eq opposite then invalid()
+        publicationElements(operations.iterator).foreach: operation =>
+          publicationCharge(1L)
+          if operation.digitalRegion.exists(_ eq opposite) then invalid()
+        publicationElements(instanceDigitalPorts.valuesIterator).foreach: binding =>
+          publicationCharge(1L)
+          if binding.scope.exists(_ eq opposite) then invalid()
+        publicationElements(instanceInterfacePorts.valuesIterator).foreach: binding =>
+          publicationCharge(1L)
+          if binding.scope.exists(_ eq opposite) then invalid()
+        publicationElements(records(family.owner).generatedRegions).foreach: other =>
+          publicationCharge(3L)
+          if other.digitalRegion.flatMap(_.parent).exists(_ eq arm) && (other ne family) then
+            invalid()
     publicationOperationVector.filter(operation =>
       Set("assignment", "value-connect").contains(operation.kind)
     ).map: operation =>
@@ -15282,9 +15344,42 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         allowRootRegister = true,
         generatedScope = assignmentGeneratedScope(operation)
       )
-      if instanceDigitalPorts.get(target).exists(_.generated.nonEmpty) &&
-        (operation.digitalRegion.nonEmpty || operation.eventProcess.nonEmpty)
-      then fail("NODAL-HIERARCHY-058-001", "selected input requires a continuous Module-local writer")
+      instanceDigitalPorts.get(target).filter(_.generated.nonEmpty).foreach: binding =>
+        def invalid(): Nothing = fail(
+          "NODAL-HIERARCHY-058-001",
+          "selected input requires a whole continuous writer in its exact admitted scope"
+        )
+        if operation.eventProcess.nonEmpty then invalid()
+        if binding.scope.nonEmpty || operation.digitalRegion.nonEmpty then
+          val family = binding.generated.get.reference.family.generatedRegion
+          val arm = selectedInputGuardedArm(family, binding.scope, operation.owner)
+            .getOrElse(invalid())
+          if !operation.digitalRegion.exists(_ eq arm) then invalid()
+          verifyGuardedArm(family, arm)
+          // Only a genuine Module-owned source entering through the existing capture owner
+          // is admitted. An arm-local expression, sibling value or forged alias is not one.
+          val source = operation.values(1) match
+            case value: Expr[?] => value
+            case _ => invalid()
+          val reference = valueReference(source)
+          publicationCharge(4L)
+          val sourceOwner = reference match
+            case value: DeclarationRef => value.module
+            case value: ExpressionRef => value.module
+          if sourceOwner != operation.owner || valueRegion(reference).nonEmpty then invalid()
+          val bound = bindCollectionValue(source, Some(arm), operation.owner, create = false)
+          val boundReference = valueReference(bound) match
+            case value: ExpressionRef => value
+            case _ => invalid()
+          publicationCharge(5L)
+          val captured = arm.captures.get(reference).exists:
+            case (original: Expr[?], argument: KernelExpr[?]) =>
+              (original eq source) && (argument eq bound) &&
+                collectionArguments.get(boundReference).exists: (actual, index) =>
+                  (actual eq arm) && arm.arguments.lift(index).exists: (value, role) =>
+                    (value eq argument) && role == "capture"
+            case _ => false
+          if !captured then invalid()
       boundDomainCharge(2L) // ordinal map read and write
       val ordinal = ordinals.getOrElse(operation.owner, 0)
       ordinals.update(operation.owner, ordinal + 1)

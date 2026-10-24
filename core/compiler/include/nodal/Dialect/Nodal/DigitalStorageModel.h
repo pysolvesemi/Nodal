@@ -215,8 +215,12 @@ struct DigitalSelectedInputAssignment {
 /// by their full outer-to-inner ordinal tuples. Admits one fixed nonempty family
 /// or exactly two independent literal positive-step axes, with structural-only
 /// outer grouping, and whole ordinary scalar writes from the parent Module.
-/// Guards, symbolic/dependent or higher-rank axes, partial writes and
-/// template/selected mixtures refuse. The actual sources and
+/// Also admits one direct fixed rank-one family in one exact root result-free
+/// structural arm with an empty opposite arm. Family, selections and writers
+/// retain identical original lexical ancestry, including folded guards. RHS
+/// captures must canonically resolve to parent Module scalars; the actual SSA
+/// capture remains the lane source. Other guards, symbolic/dependent or
+/// higher-rank axes, partial writes and template/selected mixtures refuse. Sources and
 /// selection proofs remain borrowed IR facts, not hierarchy dependency cuts;
 /// callers must preserve normal closed-hierarchy dependency verification.
 mlir::FailureOr<llvm::SmallVector<DigitalSelectedInputAssignment, 4>>

@@ -86,14 +86,37 @@ public:
   FailureOr<SmallVector<DigitalSelectedInputAssignment, 4>>
   selectedInputAssignments(ArrayRef<std::pair<Operation *, Operation *>> seeds,
                            unsigned *chargedWork = nullptr);
-  FailureOr<DigitalDependencyGraph> graph(ArrayRef<std::pair<Value, Operation *>> seeds,
-                                          SmallVectorImpl<DependencyGuard> *guardOutput = nullptr,
-                                          SmallVectorImpl<std::pair<Operation *, Operation *>>
-                                              *selectedInputOutput = nullptr,
-                                          unsigned *selectedInventoryWork = nullptr,
-                                          SmallVectorImpl<DigitalSelectedInterfaceInput>
-                                              *selectedInterfaceOutput = nullptr) {
+  FailureOr<DigitalDependencyGraph>
+  graph(ArrayRef<std::pair<Value, Operation *>> seeds,
+        SmallVectorImpl<DependencyGuard> *guardOutput = nullptr,
+        SmallVectorImpl<DigitalSelectedInterfaceInput> *selectedInterfaceOutput = nullptr,
+        ArrayRef<DigitalSelectedInputAssignment> selectedInputs = {},
+        unsigned *selectedInputWork = nullptr) {
     DigitalDependencyGraph result;
+    // Borrow only canonical successful writer facts. This index is a derived
+    // view, not an alternate writer registry or a hierarchy dependency cut.
+    for (const auto &fact : selectedInputs) {
+      if (!isa<StructuralIfOp>(fact.family->getParentOp()))
+        continue;
+      for (const auto &lane : fact.lanes) {
+        if (failed(guardWork(lane.assignment)))
+          return failure();
+        if (selectedInputWork) {
+          if (*selectedInputWork >= limits.maximumGuardWork) {
+            (void)reject(lane.assignment,
+                         "selected input transport exceeds finite proof-work budget");
+            return failure();
+          }
+          ++*selectedInputWork;
+        }
+        if (guardedInputLanes.size() >= limits.maximumNodes ||
+            !guardedInputLanes.try_emplace(lane.assignment->getOperand(0), &lane).second) {
+          (void)reject(lane.assignment,
+                       "selected input transport lost bounded unique root identity");
+          return failure();
+        }
+      }
+    }
     for (auto [value, use] : seeds) {
       Operation *localRoot = value ? value.getDefiningOp() : nullptr;
       const bool localFamily = resolveGeneratedLocalRootFamily(localRoot) != nullptr;
@@ -108,37 +131,8 @@ public:
     if (failed(verify()))
       return failure();
     if (selectedInterfaceOutput)
-      selectedInterfaceOutput->append(selectedInterfaceInputs.begin(), selectedInterfaceInputs.end());
-    if (selectedInputOutput) {
-      DenseSet<std::pair<Operation *, Operation *>> seen;
-      unsigned selected = 0;
-      // Reuse the complete canonical inventory, including inactive writers.
-      // No raw-target Shape traversal or parallel driver inventory is needed.
-      for (const Write &write : writes) {
-        Operation *root = write.target.root.getDefiningOp();
-        if (!isa_and_nonnull<InstancePortOp>(root) || !root->getNumOperands() ||
-            text(root, "direction") != "input")
-          continue;
-        if (failed(guardWork(root)))
-          return failure();
-        ++selected;
-        auto boundary = inspectInstancePort(root);
-        if (failed(boundary))
-          return failure();
-        auto key = std::make_pair(boundary->instance, boundary->port);
-        if (seen.insert(key).second)
-          selectedInputOutput->push_back(key);
-      }
-      if (selected) {
-        if (writes.size() > limits.maximumGuardWork - guardWorkCount) {
-          (void)reject(module, "selected input inventory exceeds finite proof-work budget");
-          return failure();
-        }
-        guardWorkCount += writes.size();
-        if (selectedInventoryWork)
-          *selectedInventoryWork = writes.size() + selected;
-      }
-    }
+      selectedInterfaceOutput->append(selectedInterfaceInputs.begin(),
+                                      selectedInterfaceInputs.end());
     for (Node &node : nodes) {
       if (guardOutput) {
         DependencyGuard actual;
@@ -271,6 +265,7 @@ private:
   llvm::DenseMap<Operation *, unsigned> choiceIds, ancestryIds;
   bool retainLexicalGuards = false;
   llvm::DenseMap<Operation *, DependencyGuard> lexicalGuards;
+  llvm::DenseMap<Value, const DigitalSelectedInputLane *> guardedInputLanes;
   llvm::DenseMap<Operation *, GeneratedDomain> domains;
   llvm::DenseMap<std::pair<Operation *, unsigned>, unsigned> assignmentNodes;
   std::vector<Node> nodes;
@@ -785,6 +780,12 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     return nodes[node].assignment
                ? depend(node, nodes[node].assignment->getOperand(1), nodes[node].assignment)
                : success();
+  }
+  if (auto lane = guardedInputLanes.find(value); lane != guardedInputLanes.end()) {
+    // Destination-only use was independently proved for every actual OpOperand.
+    // Keep the authored RHS edge even in a folded-inactive arm: descendant
+    // samples and cycles remain conservative obligations of that occurrence.
+    return depend(node, lane->second->source, lane->second->assignment);
   }
   if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
     // A captured storage reference is still read at this actual body use, not
@@ -1357,6 +1358,7 @@ AssignmentQuery::selectedInputAssignments(ArrayRef<std::pair<Operation *, Operat
     (void)reject(use ? use : module, reason);
     return failure();
   };
+  retainLexicalGuards = true;
   if (seeds.size() > limits.maximumNodes)
     return refuse(module, "selected input batch exceeds its finite seed budget");
   // This is the same inventory and graph as the ordinary assignment verifier,
@@ -1387,16 +1389,46 @@ AssignmentQuery::selectedInputAssignments(ArrayRef<std::pair<Operation *, Operat
         port->getParentOp() != resolveInstanceModuleDefinition(instance))
       return refuse(module, "selected input requires an original generated child scalar input");
     // Keep the exact lexical axes, never a flattened terminal ordinal. Only an
-    // unguarded direct family or one directly nested independent family is in
-    // this execution profile; the shared selector remains the provenance owner.
+    // unguarded direct family, one directly nested independent family, or one
+    // direct family in an exact root statement arm is in this execution profile.
+    // The shared selector remains the provenance owner.
     SmallVector<Operation *, 2> families{family};
     Operation *outer = family->getParentOp();
     if (isa_and_nonnull<GenerateOp>(outer)) {
       families.insert(families.begin(), outer);
       outer = outer->getParentOp();
     }
-    if (outer != module)
+    Block *scope = module->getRegion(0).empty() ? nullptr : &module->getRegion(0).front();
+    if (isa_and_nonnull<StructuralIfOp>(outer) && families.size() == 1 &&
+        outer->getParentOp() == module && outer->getNumResults() == 0) {
+      unsigned remaining = limits.maximumGuardWork - guardWorkCount;
+      unsigned before = remaining;
+      auto header = inspectDigitalRegion(family->getBlock(), remaining);
+      guardWorkCount += before - remaining;
+      if (failed(header) || failed(ancestry(family)))
+        return failure();
+      scope = family->getBlock();
+      const unsigned arm = family->getParentRegion()->getRegionNumber();
+      Block &opposite = outer->getRegion(1 - arm).front();
+      if (opposite.empty() || opposite.getNumArguments() || !llvm::hasSingleElement(opposite) ||
+          !isa<StructuralYieldOp>(opposite.back()) || opposite.back().getNumOperands())
+        return refuse(outer, "selected input requires an otherwise empty opposite structural arm");
+      for (Operation &operation : *scope) {
+        if (failed(guardWork(&operation)))
+          return failure();
+        if (operation.getNumRegions() && &operation != family)
+          return refuse(&operation,
+                        "selected input requires one direct guarded family without nested regions");
+      }
+    } else if (outer != module) {
       return refuse(instance, "selected input requires one or two unguarded direct family axes");
+    }
+    if (failed(ancestry(family)))
+      return failure();
+    auto sameScope = [&](Operation *operation) {
+      return operation && operation->getBlock() == scope && succeeded(ancestry(operation)) &&
+             lexicalGuards.find(operation)->second == lexicalGuards.find(family)->second;
+    };
     SmallVector<GeneratedDomain, 2> domains;
     uint64_t cardinality = 1;
     unsigned remaining = 0, before = 0;
@@ -1487,21 +1519,46 @@ AssignmentQuery::selectedInputAssignments(ArrayRef<std::pair<Operation *, Operat
       ++relationCount;
       const Write &write = writes[index];
       Operation *root = write.target.root.getDefiningOp();
-      if (!isa_and_nonnull<InstancePortOp>(root) || root->getParentOp() != module ||
-          root->getNumOperands() != 2 || write.operation->getParentOp() != module ||
-          write.loop || write.guard || text(write.operation, "kind") != "continuous" ||
-          !write.target.projections.empty() ||
+      if (!isa_and_nonnull<InstancePortOp>(root) || !sameScope(root) ||
+          root->getNumOperands() != 2 || !sameScope(write.operation) || write.loop ||
+          text(write.operation, "kind") != "continuous" || !write.target.projections.empty() ||
           write.operation->getOperand(0) != write.target.root ||
           !scalar(write.target.root.getType()))
-        return refuse(write.operation, "selected input requires whole unguarded parent-local writes");
+        return refuse(write.operation,
+                      "selected input requires whole writes in the exact original family scope");
       auto actualOwner = storageOwner(write.target, write.operation);
       auto boundary = inspectInstancePort(root);
       if (failed(actualOwner) || *actualOwner != owner->second || failed(boundary) ||
           boundary->instance != instance || boundary->port != port || boundary->selection != root)
         return refuse(root, "selected input writer lost its original child and port identity");
+      if (scope->getParentOp() != module)
+        for (OpOperand &use : root->getResult(0).getUses()) {
+          if (failed(guardWork(use.getOwner())))
+            return failure();
+          if (use.getOwner() != write.operation || use.getOperandNumber() != 0)
+            return refuse(
+                use.getOwner(),
+                "guarded selected input permits only its exact assignment destination use");
+        }
       Value source = write.operation->getOperand(1);
-      Operation *producer = source.getDefiningOp();
-      if (!producer || producer->getParentOp() != module || !scalar(source.getType()))
+      // Peel only canonical explicit capture slots, charging the shared work
+      // budget. Keep operand one in the exported fact: it is the actual SSA edge.
+      Value origin = source;
+      while (auto argument = dyn_cast<BlockArgument>(origin)) {
+        if (failed(guardWork(write.operation)))
+          return failure();
+        remaining = limits.maximumGuardWork - guardWorkCount;
+        before = remaining;
+        auto captured = digitalRegionCaptureSource(argument, remaining);
+        guardWorkCount += before - remaining;
+        if (failed(captured) || !*captured || *captured == origin)
+          return refuse(write.operation,
+                        "selected input source requires an exact canonical capture");
+        origin = *captured;
+      }
+      Operation *producer = origin.getDefiningOp();
+      if (!producer || producer->getParentOp() != module || !scalar(source.getType()) ||
+          origin.getType() != source.getType())
         return refuse(write.operation, "selected input source must retain parent Module ownership");
       SmallVector<Operation *, 2> uses;
       remaining = limits.maximumGuardWork - guardWorkCount;
@@ -1521,8 +1578,8 @@ AssignmentQuery::selectedInputAssignments(ArrayRef<std::pair<Operation *, Operat
         Operation *use = uses[axis];
         if (failed(guardWork(root)))
           return failure();
-        if (selection.family != families[axis] || use->getParentOp() != module ||
-            use->getNumOperands() != 2 || selection.ordinal != use->getOperand(1) ||
+        if (selection.family != families[axis] || !sameScope(use) || use->getNumOperands() != 2 ||
+            selection.ordinal != use->getOperand(1) ||
             (axis == 0 ? use->getOperand(0) != families.front()->getResult(0)
                        : use->getOperand(0).getDefiningOp() != uses[axis - 1]))
           return refuse(root, "selected input requires exact ordered selection provenance");
@@ -1661,6 +1718,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     for (const auto &sample : *localSamples)
       seeds.emplace_back(sample.value, sample.use);
     SmallVector<std::pair<Operation *, Operation *>, 4> selectedInputKeys;
+    DenseSet<std::pair<Operation *, Operation *>> selectedInputSeen;
     unsigned portWork = 0;
     auto portInventory = context.module->walk([&](Operation *op) {
       if (++portWork > limits.maximumNodes) {
@@ -1670,8 +1728,16 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       if (!isa<PortValueOp, InstancePortOp>(op) || op->getNumResults() != 1 ||
           isDigitalControlBoundaryType(op->getResult(0).getType()) || op->getResult(0).use_empty())
         return WalkResult::advance();
-      if (isa<InstancePortOp>(op) && failed(inspectInstancePort(op)))
-        return WalkResult::interrupt();
+      if (isa<InstancePortOp>(op)) {
+        auto boundary = inspectInstancePort(op);
+        if (failed(boundary))
+          return WalkResult::interrupt();
+        if (boundary->selection == op && text(op, "direction") == "input") {
+          auto key = std::make_pair(boundary->instance, boundary->port);
+          if (selectedInputSeen.insert(key).second)
+            selectedInputKeys.push_back(key);
+        }
+      }
       seeds.emplace_back(op->getResult(0), *op->getResult(0).getUsers().begin());
       return WalkResult::advance();
     });
@@ -1681,18 +1747,12 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     if (resetRoots != resetSeeds.end())
       seeds.append(resetRoots->second.begin(), resetRoots->second.end());
     LocalGraph local;
-    unsigned inventoryWork = 0;
-    auto localGraph = AssignmentQuery(context.module, limits)
-                          .graph(seeds, &local.guards, &selectedInputKeys, &inventoryWork,
-                                 &local.selectedInterfaceInputs);
-    if (failed(localGraph))
-      return failure();
-    local.graph = std::move(*localGraph);
-    local.samples = std::move(*localSamples);
     if (!selectedInputKeys.empty()) {
-      if (inventoryWork > limits.maximumGuardWork - selectedInputWork)
+      // The existing walk charges all operations, covering both writer and
+      // selected-boundary inventory without a second traversal or budget.
+      if (portWork > limits.maximumGuardWork - selectedInputWork)
         return reject(context.module, "selected input inventory exceeds finite proof-work budget");
-      selectedInputWork += inventoryWork;
+      selectedInputWork += portWork;
       auto queryLimits = limits;
       queryLimits.maximumGuardWork = limits.maximumGuardWork - selectedInputWork;
       unsigned charged = 0;
@@ -1703,6 +1763,13 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
         return failure();
       local.selectedInputs = std::move(*facts);
     }
+    auto localGraph = AssignmentQuery(context.module, limits)
+                          .graph(seeds, &local.guards, &local.selectedInterfaceInputs,
+                                 local.selectedInputs, &selectedInputWork);
+    if (failed(localGraph))
+      return failure();
+    local.graph = std::move(*localGraph);
+    local.samples = std::move(*localSamples);
     for (unsigned i = 0; i < seeds.size(); ++i)
       local.values.try_emplace(seeds[i].first, local.graph.roots[i]);
     for (auto [value, node] : local.values) {

@@ -4288,3 +4288,94 @@ previous broader whole-model capacity gap stays open. CI and full qualification
 were not run; neither were the held CIRCT HW comparator repair, firtool,
 `check.py`, installation, external exporter or simulator acceptance. This adds no
 public API or Extended policy and closes no parent or roadmap checkbox.
+
+
+## Checkpoint 86: guarded selected generated child scalar input routing
+
+### Bounded amendment — 2026-10-24
+
+This partial B.2.2 checkpoint extends the existing selected scalar-input API only
+to one direct fixed rank-one child family in an exact root result-free structural
+arm, with the opposite arm empty. The canonical baseline is checkpoint 85,
+`72b4d9d683589034dc86fde85c8df676c1138b39`. Module-owned RHS values enter through
+authenticated captures; selected inputs are exact destinations, not general
+readable or writable selected views. Complete original child-input coverage and
+canonical child/port, lane, type and domain identities remain required.
+
+Native canonical destination-only proof precedes local hierarchy graph
+construction. An inactive branch does not erase actual source/RHS dependencies,
+unused descendant cycles, observations or sample obligations. The existing
+hierarchy and Assignment owners remain authoritative. A bounded map records the
+proved facts, with insertion charged to the existing independent limits and one
+constant-time lookup per expanded node; no new public layout, evaluator, plugin,
+semantic registry or budget is introduced.
+
+Unguarded rank-one scalar, two-axis scalar and rank-one Interface predecessors
+remain supported. This is not guarded two-axis or guarded Interface admission,
+nested/value-producing structural guards, symbolic/general products, selected
+input reads or broader aggregate/state/resolved/crossing support. The default
+construction limit remains 65536; the earlier whole-model capacity gap remains
+open. F-058.B.2.2, B.2, D.1 and Foundation 58 remain open.
+
+### Focused native evidence and preserved failures
+
+The first Hierarchy run had 424 cases and six failures: four exposed real inactive
+graph-seed defects and two used malformed fixtures. Its failed execution is
+preserved, not reclassified as fixture-only or composed into a passing run.
+After the proof-before-graph correction and fixture repairs, the distinct matched
+attempt2 Hierarchy run passed 429/429.
+
+The first target run passed 44/46. Its two failing fixtures had not rebased family
+identity under the authored structural arm. The source-v3 correction changes the
+target test only; production objects are unchanged. The distinct target-attempt3
+run passed 46/46. Both failed binaries and their receipts are retained losslessly.
+These native suites are distinct from the actual Scala evidence below.
+
+### Actual source and target evidence
+
+Actual v2 Scala capture, bridge emission, native verification and CIRCT IR
+verification pass for `guarded-two`, `guarded-default-one` and `guarded-else`.
+The three independently reviewed output checks authenticate the original child,
+exact authored arm and parameter comparison, ordered lane ordinals and complete
+RHS/capture/helper routing. Changing the parameter default does not specialize
+away the authored guard. Unguarded rank-one `two` and two-axis `nested-two`
+predecessors also convert successfully.
+
+Four causal controls retain the planned refusals: missing-lane source capture
+succeeds, then native complete coverage rejects; duplicate writer, arm-local RHS
+and nonempty opposite arm reject at source. There was no production failure in
+this Scala phase. The initial fixture compile lacked `nodal.*`; its failure is
+preserved and v2 compiles after that import-only correction. A later harness
+path typo was caught before compiler/runtime execution and corrected for v3.
+The v3 rank-one Interface predecessor compiles and converts through native/CIRCT
+IR; its duplicate-alias control rejects as expected. All nine actual origin
+assertions match. In total, six actual source/native positives and five causal
+negatives pass. The independent nested tuple-routing checker also passes.
+Interface receipts are retained in `test-output/scala-focused-v3`.
+
+The actual `guarded-two` source IR SHA256 is
+`b79d26d3988de1f7ab75614c5f48b63f00ba5a6d41a60f12ea59eee0ab3769ff`;
+its CIRCT IR SHA256 is
+`a7225a1e9e4a12d467821715520bbffaac6d7df1cf60b6989a6455385c33d30a`.
+The matched target executable SHA256 is
+`772f6285a554ce519d7b6b2b8b86b95b0632971b7f29ac8d4702573842856d3f`.
+The actual-output checker's SHA256 is
+`456b9eba3c8440269209216eab6f27aaf722055318d65ce99c6a7082bfa8b325`.
+Exact commands and artifacts are retained in `test-output/scala-focused-v2`;
+`guarded-target-review.json` records all three independent routing checks. The
+source/native witness command, relative to the repository root, is:
+
+```sh
+.work/f58-guarded-selected-input-routing/target-attempt3/bin/GeneratedOccurrenceCIRCTTest --lower-selected-input .work/f58-guarded-selected-input-routing/test-output/scala-focused-v2/source/guarded-two.mlir
+```
+
+Matched sources, build/runtime receipts and preserved failures are
+retained under ignored `.work/f58-guarded-selected-input-routing`: the corrected
+Assignment/Hierarchy sources are in `source-v2`, unchanged production target and
+header sources are in `source`, native execution is in `attempt2`, and the final
+target-test correction and execution are in `source-v3` and `target-attempt3`.
+
+CI, the full unit suite, held CIRCT comparator/firtool work, external exporter,
+installation, simulation and downstream qualification were not run for this
+checkpoint. The actual CIRCT IR witnesses do not constitute Verilog export
+or simulator acceptance. No historical evidence or roadmap checkbox is changed.

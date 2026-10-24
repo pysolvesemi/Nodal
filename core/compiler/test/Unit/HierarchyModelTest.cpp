@@ -2168,7 +2168,8 @@ int main() {
   receiverContract("receiver-context-prior-work-is-not-refunded", 4, false);
 
   auto selectedInputQuery = [&](StringRef name, std::string source, bool expected,
-                                 unsigned mutation = 0, int64_t lower = 0, int64_t step = 1) {
+                                unsigned mutation = 0, int64_t lower = 0, int64_t step = 1,
+                                bool capturedSources = false) {
     ++count;
     diagnostics.clear();
     auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
@@ -2205,6 +2206,12 @@ int main() {
         limits.maximumGuardWork = 1;
       if (mutation == 5)
         limits.maximumNodes = 1;
+      if (mutation == 6)
+        top->walk([&](nodal::StructuralIfOp condition) {
+          // Keep the fixture parseable, then forge the actual capture signature.
+          if (condition->getNumOperands() == 4)
+            condition->setOperand(1, condition->getOperand(2));
+        });
       auto facts = nodal::inspectGeneratedSelectedInputAssignments(top, seeds, limits);
       ok = succeeded(facts) == expected;
       if (expected && succeeded(facts)) {
@@ -2215,8 +2222,10 @@ int main() {
                 fact.family == child->getParentOp() && fact.lanes.size() == 2;
           for (auto [i, lane] : llvm::enumerate(fact.lanes)) {
             ok &= lane.ordinal == static_cast<int64_t>(i) && lane.assignment &&
-                  lane.assignment->getOperand(1) == lane.source &&
-                  i < sources.size() && lane.source == sources[i] &&
+                  lane.assignment->getOperand(1) == lane.source && i < sources.size() &&
+                  (capturedSources ? isa<BlockArgument>(lane.source) &&
+                                         cast<BlockArgument>(lane.source).getArgNumber() == i + 1
+                                   : lane.source == sources[i]) &&
                   lane.proof.family == fact.family && lane.proof.selections.size() == 1;
             if (lane.proof.selections.size() == 1) {
               auto bounds = lane.proof.selections.front().coordinate.bounds;
@@ -2288,6 +2297,200 @@ int main() {
   selectedInputQuery("selected-input-folded-active-guard-refused", guardedInput, false);
   selectedInputQuery("selected-input-folded-inactive-guard-refused",
                      replace(guardedInput, "comparison = \"eq\"", "comparison = \"ne\""), false);
+
+  // The guarded profile retains the actual arm argument as the source edge.
+  // Both folded arms remain lexical facts, not equivalent guard IDs.
+  auto guardedSelectedInputs = [&](bool otherwise = false, bool inactive = false,
+                                   std::string source = {}) {
+    if (source.empty())
+      source = selectedInputSource();
+    auto begin = source.find("%lanes_lo =");
+    auto end = source.find("}) : () -> ()", begin);
+    auto body = source.substr(begin, end - begin);
+    std::string arm = otherwise ? "else" : "then";
+    for (size_t at = 0; (at = body.find("Top.lanes", at)) != std::string::npos;) {
+      std::string path = "Top.input_guard." + arm + ".lanes";
+      body.replace(at, 9, path);
+      at += path.size();
+    }
+    body = replace(body, "instance_domain_binding\"(%clock_a)",
+                   "instance_domain_binding\"(%arm_clock)");
+    body = replace(body, assign("input0", "x"), assign("input0", "arm_x"));
+    body = replace(body, assign("input1", "y"), assign("input1", "arm_y"));
+    auto yield = [&](StringRef name) {
+      return "\"nodal.structural_yield\"() <{metadata = {semantic_path = \"Top.input_guard." +
+             name.str() + ".yield\"}}> : () -> ()\n";
+    };
+    std::string active = "^bb0(%arm_clock: " + clockType + ", %arm_x: " + bit + ", %arm_y: " + bit +
+                         "):\n" + body + yield(arm);
+    std::string predicate =
+        "%guard_zero = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\", metadata = "
+        "{}}> : () -> i64\n"
+        "%input_predicate = \"nodal.static_compare\"(%guard_zero, %guard_zero) <{comparison = \"" +
+        std::string(otherwise != inactive ? "ne" : "eq") +
+        "\", metadata = {semantic_path = \"Top.input_guard.predicate\"}}> : (i64, i64) -> "
+        "!nodal.static_predicate\n";
+    std::string conditional =
+        "\"nodal.structural_if\"(%input_predicate, %clock_a, %x, %y) <{contract_version = "
+        "\"structural-if-v1\", "
+        "region_id = \"Top.input_guard\", operandSegmentSizes = array<i32: 1, " +
+        std::string(otherwise ? "0, 3" : "3, 0") +
+        ">, metadata = {semantic_path = \"Top.input_guard\"}}> ({" +
+        (otherwise ? yield("then") : active) + "}, {" + (otherwise ? active : yield("else")) +
+        "}) : (!nodal.static_predicate, " + clockType + ", " + bit + ", " + bit + ") -> ()\n";
+    source.replace(begin, end - begin, predicate + conditional);
+    return source;
+  };
+  auto guardedInputs = guardedSelectedInputs();
+  for (bool otherwise : {false, true})
+    for (bool inactive : {false, true}) {
+      auto source = guardedSelectedInputs(otherwise, inactive);
+      selectedInputQuery("selected-input-exact-structural-arm", source, true, 0, 0, 1, true);
+      check("selected-input-guarded-whole-hierarchy", source, true);
+    }
+  selectedInputQuery("selected-input-guarded-missing-lane",
+                     replace(guardedInputs, assign("input1", "arm_y"), ""), false);
+  selectedInputQuery("selected-input-guarded-duplicate-lane",
+                     replace(guardedInputs, assign("input1", "arm_y"), assign("input0", "arm_y")),
+                     false);
+  selectedInputQuery("selected-input-guarded-forged-raw-source",
+                     replace(guardedInputs, assign("input0", "arm_x"), assign("input0", "x")),
+                     false);
+  auto localInput =
+      replace(guardedInputs, assign("input0", "arm_x"),
+              "%local_rhs = \"nodal.digital_expr\"(%arm_x, %arm_y) <{operator_name = \"or\", "
+              "metadata = {}}> : (" +
+                  bit + ", " + bit + ") -> " + bit + "\n" + assign("input0", "local_rhs"));
+  selectedInputQuery("selected-input-guarded-local-rhs-refused", localInput, false);
+  auto nonemptyOpposite = replace(guardedInputs,
+                                  "}, {\"nodal.structural_yield\"() <{metadata = {semantic_path = "
+                                  "\"Top.input_guard.else.yield\"}}>",
+                                  "}, {%other = \"nodal.const_literal\"() <{value = 0 : i64, "
+                                  "spelling = \"0\", metadata = {}}> : () -> i64\n"
+                                  "\"nodal.structural_yield\"() <{metadata = {semantic_path = "
+                                  "\"Top.input_guard.else.yield\"}}>");
+  selectedInputQuery("selected-input-guarded-nonempty-opposite-refused", nonemptyOpposite, false);
+  for (unsigned budget : {3u, 4u, 5u})
+    selectedInputQuery("selected-input-guarded-budget-refused", guardedInputs, false, budget);
+
+  check("selected-input-guarded-unused-descendant-cycle",
+        guardedSelectedInputs(false, false, selectedInputDescendant(true)), false,
+        "combinational dependency cycle");
+  check("selected-input-guarded-inactive-unused-descendant-cycle",
+        guardedSelectedInputs(false, true, selectedInputDescendant(true)), false,
+        "combinational dependency cycle");
+  std::string guardedSample = "%guarded_sample = \"nodal.digital_storage\"() <{name = "
+                              "\"guarded_sample\", kind = \"register\", "
+                              "domain = @req, metadata = {}}> : () -> " +
+                              bit + "\n" + assign("guarded_sample", "in", "register_next");
+  auto sampledGuarded =
+      replace(guardedInputs, assign("out", "in"), guardedSample + assign("out", "in"));
+  check("selected-input-guarded-unused-child-matching-sample", sampledGuarded, true);
+  auto foreignGuarded = replace(sampledGuarded, domain("a"), domain("a") + domain("b"));
+  foreignGuarded = replace(foreignGuarded, port("y", "input", "a"), port("y", "input", "b"));
+  check("selected-input-guarded-unused-child-foreign-sample", foreignGuarded, false,
+        "NODAL-CDC-001");
+  auto inactiveForeignGuarded =
+      replace(foreignGuarded, "comparison = \"eq\"", "comparison = \"ne\"");
+  check("selected-input-inactive-guarded-unused-child-foreign-sample", inactiveForeignGuarded,
+        false, "NODAL-CDC-001");
+  auto inactiveInputs = guardedSelectedInputs(false, true);
+  auto illegalGuardedRead = replace(inactiveInputs, assign("input0", "arm_x"),
+                                    assign("input0", "arm_x") +
+                                        "%illegal_read = \"nodal.digital_expr\"(%input0, %arm_y) "
+                                        "<{operator_name = \"or\", metadata = {}}> : (" +
+                                        bit + ", " + bit + ") -> " + bit + "\n");
+  selectedInputQuery("selected-input-inactive-guarded-destination-read-refused", illegalGuardedRead,
+                     false);
+  check("selected-input-inactive-guarded-destination-read-hierarchy-refused", illegalGuardedRead,
+        false);
+  auto selfReadGuarded =
+      replace(inactiveInputs, assign("input0", "arm_x"), assign("input0", "input0"));
+  selectedInputQuery("selected-input-inactive-guarded-assignment-rhs-refused", selfReadGuarded,
+                     false);
+  check("selected-input-inactive-guarded-assignment-rhs-hierarchy-refused", selfReadGuarded, false);
+
+  auto guardWriter = [&](bool opposite) {
+    std::string yieldThen = "\"nodal.structural_yield\"() <{metadata = {semantic_path = "
+                            "\"Top.input_guard.then.inner.then.yield\"}}> : () -> ()\n";
+    std::string yieldElse = "\"nodal.structural_yield\"() <{metadata = {semantic_path = "
+                            "\"Top.input_guard.then.inner.else.yield\"}}> : () -> ()\n";
+    std::string body = "^bb0(%inner_input: " + bit + ", %inner_source: " + bit + "):\n" +
+                       assign("inner_input", "inner_source");
+    return "%inner_predicate = \"nodal.static_compare\"(%zero, %zero) <{comparison = \"eq\", "
+           "metadata = {semantic_path = \"Top.input_guard.then.inner.predicate\"}}> : (i64, i64) "
+           "-> !nodal.static_predicate\n"
+           "\"nodal.structural_if\"(%inner_predicate, %input0, %arm_x) <{contract_version = "
+           "\"structural-if-v1\", "
+           "region_id = \"Top.input_guard.then.inner\", operandSegmentSizes = array<i32: 1, " +
+           std::string(opposite ? "0, 2" : "2, 0") +
+           ">, metadata = {semantic_path = \"Top.input_guard.then.inner\"}}> ({" +
+           (opposite ? yieldThen : body + yieldThen) + "}, {" +
+           (opposite ? body + yieldElse : yieldElse) + "}) : (!nodal.static_predicate, " + bit +
+           ", " + bit + ") -> ()\n";
+  };
+  selectedInputQuery("selected-input-guarded-same-predicate-different-owner-refused",
+                     replace(guardedInputs, assign("input0", "arm_x"), guardWriter(false)), false);
+  selectedInputQuery("selected-input-guarded-opposite-writer-refused",
+                     replace(guardedInputs, assign("input0", "arm_x"), guardWriter(true)), false);
+  selectedInputQuery("selected-input-guarded-forged-capture-order-refused", guardedInputs, false,
+                     6);
+
+  std::string guardedParameter =
+      "\"nodal.parameter\"() <{sym_name = \"COUNT\", type = i64, default_value = 2 : i64, "
+      "classification = \"structural\", variability = \"symbolic\", metadata = {}}> : () -> ()\n"
+      "%count_min = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\", metadata = {}}> "
+      ": () -> i64\n"
+      "%count_max = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\", metadata = {}}> "
+      ": () -> i64\n"
+      "\"nodal.parameter_constraint\"(%count_min, %count_max) <{parameter = @COUNT, "
+      "constraint_kind = \"range\", "
+      "lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()\n"
+      "\"nodal.parameter_envelope\"() <{parameter = @COUNT, policy = \"static_generate\", "
+      "effects = [\"rank\", \"shape\", \"topology\"], metadata = {}}> : () -> ()\n";
+  auto symbolicGuarded =
+      replace(guardedInputs, "%guard_zero =", guardedParameter + "%guard_zero =");
+  symbolicGuarded = replace(symbolicGuarded,
+                            "%lanes_hi = \"nodal.const_literal\"() <{value = 2 : i64, spelling = "
+                            "\"2\", metadata = {}}> : () -> i64",
+                            "%lanes_hi = \"nodal.const_parameter_ref\"() <{parameter = @COUNT, "
+                            "metadata = {}}> : () -> i64");
+  selectedInputQuery("selected-input-guarded-symbolic-family-refused", symbolicGuarded, false);
+  auto parameterGuarded =
+      replace(guardedInputs, "%guard_zero =",
+              guardedParameter + "%guard_count = \"nodal.const_parameter_ref\"() <{parameter = "
+                                 "@COUNT, metadata = {}}> : () -> i64\n%guard_zero =");
+  parameterGuarded = replace(parameterGuarded, "static_compare\"(%guard_zero, %guard_zero)",
+                             "static_compare\"(%guard_count, %guard_zero)");
+  selectedInputQuery("selected-input-exact-parameter-structural-arm", parameterGuarded, true, 0, 0,
+                     1, true);
+  check("selected-input-parameter-guarded-whole-hierarchy", parameterGuarded, true);
+  auto nestedGuarded = guardedInputs;
+  auto familyBegin = nestedGuarded.find("%lanes_lo =");
+  auto familyEnd =
+      nestedGuarded.find("}) : (i64, i64, i64) -> !nodal.generated_family", familyBegin);
+  familyEnd = nestedGuarded.find('\n', familyEnd) + 1;
+  auto innerFamily = nestedGuarded.substr(familyBegin, familyEnd - familyBegin);
+  for (size_t at = 0;
+       (at = innerFamily.find("Top.input_guard.then.lanes", at)) != std::string::npos;) {
+    innerFamily.replace(at, 26, "Top.input_guard.then.outer.lanes");
+    at += 32;
+  }
+  for (size_t at = 0; (at = innerFamily.find("%lanes", at)) != std::string::npos;) {
+    innerFamily.replace(at, 6, "%inner_lanes");
+    at += 12;
+  }
+  innerFamily +=
+      "\"nodal.generated_export\"(%inner_lanes) <{member = \"inner\", access = \"read\", "
+      "kind = \"family\", metadata = {}}> : (!nodal.generated_family) -> ()\n";
+  std::string outerSelection =
+      "%lanes = \"nodal.generated_member\"(%input_guard.then.outer, %input_guard.then.outer_lo) "
+      "<{member = \"inner\", access = \"read\", kind = \"family\", metadata = {}}> : "
+      "(!nodal.generated_family, i64) -> !nodal.generated_family\n";
+  nestedGuarded.replace(familyBegin, familyEnd - familyBegin,
+                        generatedFamily("input_guard.then.outer", "2", innerFamily) +
+                            outerSelection);
+  selectedInputQuery("selected-input-guarded-rank-two-family-refused", nestedGuarded, false);
 
   // Two independent axes share terminal ordinals. The full original selection
   // vector, rather than ordinal or alias identity, owns each authored input.

@@ -1466,6 +1466,19 @@ private[nodal] object DigitalValueMlir:
     // Query-local admitted profiles only; original Generate/export records remain authoritative.
     private val selectedInputOuterFamilies = mutable.HashMap.empty[String, String]
 
+    /** Query the original statement arm; a lexical path alone is not an admission proof. */
+    private def guardedSelectedInputArm(family: KernelGeneratedRegionSnapshot)
+        : Option[(Conditional, KernelStructuralArmSnapshot)] =
+      family.lexicalParent.flatMap(arms.get).filter: (conditional, arm) =>
+        family.parent.isEmpty && conditional.owner == family.owner &&
+          conditional.parentRegion.isEmpty && conditional.behavioralRoot.isEmpty &&
+          conditional.dataType.isEmpty && arm.yieldValue.isEmpty &&
+          ((conditional.trueArm eq arm) || (conditional.falseArm eq arm)) &&
+          regions.get(arm.path).exists(region =>
+            region.owner == family.owner && region.parentRegion.isEmpty &&
+              region.arguments == arm.arguments && region.captures == arm.captures
+          )
+
     private def selectedInputFamilyProfile(
         family: KernelGeneratedRegionSnapshot,
         selection: KernelGeneratedMemberSnapshot,
@@ -1476,7 +1489,8 @@ private[nodal] object DigitalValueMlir:
           Vector(value.lower, value.upperExclusive, value.step).forall(_.toLongOption.nonEmpty) &&
           value.step.toLongOption.exists(_ > 0L)
       if selection.selectionPrefix.isEmpty then
-        family.parent.isEmpty && family.lexicalParent.isEmpty
+        family.parent.isEmpty &&
+          (family.lexicalParent.isEmpty || guardedSelectedInputArm(family).nonEmpty)
       else selection.selectionPrefix match
         case Vector(prefix) =>
           val outer = generated(prefix.family)
@@ -1681,6 +1695,18 @@ private[nodal] object DigitalValueMlir:
               )
               assignmentRoot(scope.captures(capture), owner, scope.parentRegion, depth + 1)
             case None => path
+
+    // assignmentRoot has already authenticated ownership, visibility and each capture edge.
+    // A selected whole target may use captures, but must never acquire a shape projection.
+    private def wholeSelectedInputTarget(path: String, root: String, depth: Int = 0): Boolean =
+      requireValid(depth <= 128, "selected input capture chain exceeds depth limit", path)
+      !shapeByPath.contains(path) && (arguments.get(path) match
+        case Some((scope, argument)) =>
+          val index = scope.arguments.indexWhere(_.path == argument.path) -
+            (scope.arguments.size - scope.captures.size)
+          argument.role == "capture" && scope.captures.lift(index)
+            .exists(wholeSelectedInputTarget(_, root, depth + 1))
+        case None => path == root && declarations.contains(path))
 
     private def wholeRegisterTarget(path: String, depth: Int = 0): Boolean =
       requireValid(depth <= 128, "register capture chain exceeds depth limit", path)
@@ -2141,6 +2167,36 @@ private[nodal] object DigitalValueMlir:
       "duplicate digital assignment identities",
       snapshot.root
     )
+    // Snapshot-local admission only. Existing regions and generated owners remain authoritative.
+    private lazy val checkedGuardedSelectedInputArms = mutable.HashSet.empty[String]
+    private def verifyGuardedSelectedInputArm(
+        family: KernelGeneratedRegionSnapshot,
+        conditional: Conditional,
+        arm: KernelStructuralArmSnapshot,
+        path: String
+    ): Unit =
+      if checkedGuardedSelectedInputArms.add(arm.path) then
+        val opposite = if conditional.trueArm eq arm then conditional.falseArm else conditional.trueArm
+        requireValid(
+          opposite.captures.isEmpty && opposite.arguments.isEmpty && opposite.yieldValue.isEmpty &&
+            arms.get(opposite.path).exists((actual, value) =>
+              (actual eq conditional) && (value eq opposite)) &&
+            childrenByRegion.getOrElse(Some(arm.path), Vector.empty).forall(_.path == family.path) &&
+            generatedByRegion.getOrElse(family.owner -> Some(arm.path), Vector.empty)
+              .map(_.path) == Vector(family.path) &&
+            childrenByRegion.getOrElse(Some(opposite.path), Vector.empty).isEmpty &&
+            byRegion.getOrElse(Some(opposite.path), Vector.empty).isEmpty &&
+            staticByRegion.getOrElse(Some(opposite.path), Vector.empty).isEmpty &&
+            predicatesByRegion.getOrElse(Some(opposite.path), Vector.empty).isEmpty &&
+            indicesByRegion.getOrElse(opposite.path, Vector.empty).isEmpty &&
+            assignmentsByRegion.getOrElse(family.owner -> Some(opposite.path), Vector.empty).isEmpty &&
+            memoryWritesByRegion.getOrElse(family.owner -> Some(opposite.path), Vector.empty).isEmpty &&
+            !snapshot.digitalConnectivity.exists(_.region.contains(opposite.path)) &&
+            !declarations.keysIterator.exists(valueRegion(_).contains(opposite.path)),
+          "guarded selected inputs require one direct family and an empty opposite statement arm",
+          path
+        )
+
     snapshot.digitalAssignments.foreach: assignment =>
       requireValid(
         modules.contains(assignment.owner) && assignment.path.startsWith(assignment.owner + ".") &&
@@ -2179,11 +2235,24 @@ private[nodal] object DigitalValueMlir:
         val fixedScalar = target.dataType.exists(value =>
           value == "Bool" || value.matches("(?:UInt|Bits)\\([1-9][0-9]*\\)")
         )
+        val guarded = guardedSelectedInputArm(family)
+        val admittedScope = guarded match
+          case None => assignment.region.isEmpty && boundary.region.isEmpty
+          case Some((conditional, arm)) =>
+            verifyGuardedSelectedInputArm(family, conditional, arm, assignment.path)
+            val sourceCapture = arguments.get(assignment.value).exists: (scope, argument) =>
+              val index = scope.arguments.indexWhere(_.path == argument.path)
+              scope.path == arm.path && scope.parentRegion.isEmpty && argument.role == "capture" &&
+                arm.arguments.lift(index).contains(argument) && arm.captures.lift(index).exists(source =>
+                  valueOwner(source).contains(assignment.owner) && valueRegion(source).isEmpty &&
+                    expressionType(source) == argument.dataType
+                )
+            assignment.region.contains(arm.path) && boundary.region.contains(arm.path) && sourceCapture
         requireValid(
-          assignment.kind == "continuous" && assignment.region.isEmpty &&
-            assignment.eventProcess.isEmpty && assignment.target == target.path &&
+          assignment.kind == "continuous" && admittedScope &&
+            assignment.eventProcess.isEmpty && wholeSelectedInputTarget(assignment.target, target.path) &&
             target.kind == "instance-input" && boundary.direction == "input" &&
-            boundary.region.isEmpty && target.generatedScope.isEmpty &&
+            target.generatedScope.isEmpty &&
             selection.familyInput.isEmpty && !selection.member.contains(".") &&
             selectedInputFamilyProfile(family, selection, assignment.path) && family.digitalBody.nonEmpty &&
             Vector(family.lower, family.upperExclusive, family.step).forall(_.toLongOption.nonEmpty) &&

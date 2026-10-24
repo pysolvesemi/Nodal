@@ -512,3 +512,34 @@ rank greater than two/general products, captured Integer alias/general constant-
 source bounds and aggregate/state/resolved/crossing profiles remain outside this
 amendment. No new registry, evaluator, public layout, capacity or budget is added.
 The earlier whole-model capacity gap and F-058.B.2.2/B.2/D.1/Foundation 58 stay open.
+
+
+## Guarded selected scalar-input amendment — 2026-10-24
+
+[Checkpoint 86](../implementation/increment58-readiness.md#checkpoint-86-guarded-selected-generated-child-scalar-input-routing)
+records a bounded amendment using the existing API: one direct fixed rank-one
+scalar child-input family in an exact root result-free structural arm, an empty
+opposite arm and authenticated captures of Module-owned RHS values. Exact
+selected-input destination-only proof precedes native hierarchy graph construction;
+inactive arms retain actual source, descendant-cycle, observation and sample
+obligations. Original child/port, lane, type, domain and complete coverage checks
+remain authoritative.
+
+The corrected native Hierarchy run passes 429/429 and the corrected target run
+passes 46/46. The first native run's four real inactive graph-seed failures and two
+malformed fixtures, and the first target run's two authored-arm family-identity
+fixture failures, remain preserved as failed runs. Three actual guarded Scala-to-
+CIRCT IR witnesses and independently reviewed full routing checks pass, including
+a changed parameter default and an authored else arm. Unguarded scalar rank-one
+and nested-two predecessors convert; four causal source/native refusals pass.
+Exact identities and preserved fixture-only corrections are recorded in checkpoint
+86. The rank-one Interface predecessor and its alias refusal also pass, retaining all
+nine origin assertions: six actual source/native positives and five causal
+negatives in total, with the nested tuple-routing check also passing.
+
+Unguarded rank-one scalar, two-axis scalar and rank-one Interface predecessors
+remain required. Guarded nested or Interface writes, value-producing/nested guards,
+symbolic/general products, arbitrary selected-input reads and broader profiles
+remain outside this amendment. No public layout, plugin, policy or budget changes;
+no Verilog export, simulator or capacity claim. F-058.B.2.2/B.2/D.1/Foundation 58
+and the earlier whole-model capacity gap remain open.

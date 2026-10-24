@@ -12453,14 +12453,28 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           if Set("assignment", "value-connect", "memory-write")(kind) || orderedInterface then
             nextEffectOrdinal()
           else 0
+      val capturedValues = values.toVector
+      val preparedSource =
+        if kind == "assignment" && digitalAssignment && effectRegion.isEmpty && activeGeneratedRegion.isEmpty &&
+          activeEventProcess.isEmpty && constructionCapturePrefixAllowed(semanticOrigin) &&
+          boundaryClosureOwner.exists(_.boundDomainAccountingCandidate)
+        then
+          boundaryClosureOwner.map: closure =>
+            closure.guard:
+              semanticOrigin.prepareOperationSource(owner, kind, capturedValues)
+        else None
       val captured = Operation(
         owner,
         kind,
-        values.toVector,
+        capturedValues,
         if effectRegion.nonEmpty then None else activeGeneratedRegion,
         if digitalAssignment || memoryWrite || orderedInterface || (structuralTopology && activeGeneratedRegion.nonEmpty)
         then
-          semanticOrigin.captureSemanticSource()
+          preparedSource match
+            case Some(prepared) =>
+              try semanticOrigin.captureSemanticSource(prepared)
+              catch case failure: Throwable => boundaryClosureOwner.get.guard(throw failure)
+            case None => semanticOrigin.captureSemanticSource()
         else None,
         effectRegion,
         sourceOrdinal,
@@ -12470,12 +12484,25 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       moduleStack.lastOption.foreach(module =>
         // Admission distinguishes analog storage effects; source naming retains
         // the shared assignment sink-affinity semantics for both kinds.
-        semanticOrigin.captureOperation(
-          module.handle,
-          if kind == "analog-assignment" then "assignment" else kind,
-          captured.values
-        )
+        preparedSource match
+          case Some(prepared) if prepared.canReuse =>
+            consumePreparedOperationSource(prepared, module.handle, kind, captured.values)
+          case _ =>
+            semanticOrigin.captureOperation(
+              module.handle,
+              if kind == "analog-assignment" then "assignment" else kind,
+              captured.values
+            )
       )
+
+  private def consumePreparedOperationSource(
+      prepared: semanticOrigin.PreparedOperationSource,
+      module: Long,
+      kind: String,
+      values: Vector[Any]
+  ): Unit =
+    boundaryClosureOwner.get.guard:
+      semanticOrigin.consumeOperationSource(prepared, module, kind, values)
 
   private def provisionalModulePath(handle: Long): String =
     closureCharge(1L)

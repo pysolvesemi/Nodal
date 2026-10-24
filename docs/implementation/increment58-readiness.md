@@ -2308,3 +2308,65 @@ The final maintained replay stayed below the 62 MiB owned-stage cap with more th
 No API rebuild during this recovery, CI, full qualification, publication retry or
 held consumer action occurred. All source changes remain locally checkpointed
 while the explicit publication denial remains in force.
+
+## Checkpoint 66: operation-local prepared source capture
+
+The canonical Session now pairs the two source captures for an eligible ordinary
+bound-domain digital assignment through one private builder-owned, single-use
+prepared result. It retains the complete first source site and immutable decoded
+source observations, not resolved names or a drain-wide cache. Existing ordinal
+allocation and Session/origin append order remain unchanged. Consumption validates
+exact builder/module/kind/operand-vector identity, rereads bounded source input,
+compares stamps and decoded lines with actual work charged, then appends the origin.
+A failure after Session append poisons the canonical owner without rollback or
+publication. Observable between-capture source changes now deliberately reject;
+the earlier independent captures did not promise this stronger rejection.
+
+Reuse requires the exact registered-construction owner, a real successful source
+observation, no text-discovery/span fallback, and a positively terminated constructor
+prefix of at most 80 frames. First capture and noneligible second capture retain
+the original call depth. Independent emitted-code review proves the old second
+path adds four visible frames, so an eligible constructor remains within 96.
+Classification/normalization instructions are unchanged. A provisional wrapper-based
+design was rejected before build because it perturbed the fallback stack boundary.
+No whole-drain cache, second owner, budget increase or public API is introduced.
+
+The unchanged compiled whole fixture on one identical anchored projection has
+byte-identical complete snapshots; paid whole-route work falls from 88,526 to
+83,489 units. This is a 5,037-unit accounting reduction, not a CPU speedup claim.
+Twenty-five retained runtime suites pass, with full snapshot and C2a/domain-free/
+automatic-precompleted fee pairs byte-equal. Eleven new freshly compiled controls
+cover identity/reuse/freshness failures and actual assignment exhaustion before
+capture or during paid decoded-line comparison, including exact ordinal/append
+order, poison/stale queries/refused publication and fresh recovery. Synthetic
+corruption seams are identified separately from actual public-assignment cases.
+
+Actual first-source/full-origin provenance matches across ordinary and nonreusable
+constructor-prefix cases and controlled cache/source absence. A separate compact-name
+fixture reaches depths through 110 under unchanged diagnostic capacity; emitted
+non-tail recursion proves the constructor lies outside the 96-frame window at
+depth 96. Its shorter names serve only stack-boundary validation, never whole-route
+capacity acceptance. These boundary fixtures intentionally stop after capture;
+they do not establish successful final publication. Original long-name
+depth-80-and-higher exhaustion receipts
+remain failures, not parity passes.
+
+The maintained bundle passes three fresh strict-warning compilations, 38 suites
+and 12 exact-output pairs. Its shared runner also passes a fresh legacy fee suite
+with unchanged default manifest selection; all six new Scala fixtures pass formatting.
+
+See the [prepared-source guide](../../tests/scala/domain-hierarchy/prepared-operation-source/README.md)
+for focused fixture and runner recipes.
+
+The unchanged default positive still exhausts during final semantic-name source
+reading with 165 units remaining on its separately anchored route. Diagnostic
+131,072 is not production capacity. Default admission, automatic pending-cell
+completion, broader C2b/C2c and Foundation 58 remain open. Measurements from
+different source projections are not interchangeable. No Verilog generation
+change is claimed; complete captured snapshots match.
+
+The 97-source API build was archive-verified with full raw/archive coexistence
+of 62,308,352 bytes below the 65,011,712-byte stage cap and with the existing
+246,808,576-byte free-space reserve. Reconstructable compaction retained source,
+recipes, failure/diagnostic receipts, both baseline APIs and current raw outputs.
+No CI, full qualification, publication retry or held consumer operation ran.

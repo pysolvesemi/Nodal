@@ -423,6 +423,86 @@ private[nodal] final class SemanticOriginBuilder:
       captureSite()
     )
 
+  // A single synchronous operation owns this result. It is neither a cache nor a
+  // naming capability: only this builder can create or consume its private state.
+  final class PreparedOperationSource private[SemanticOriginBuilder] (
+      private[SemanticOriginBuilder] val module: Long,
+      private[SemanticOriginBuilder] val kind: String,
+      private[SemanticOriginBuilder] val values: Vector[Any]
+  ):
+    private[SemanticOriginBuilder] val builder = SemanticOriginBuilder.this
+    private[SemanticOriginBuilder] var sourceFallback = false
+    private[SemanticOriginBuilder] var site: Option[KernelSourceSite] = None
+    private[SemanticOriginBuilder] var lines = Map.empty[Path, ResolutionSourceLines]
+    private[SemanticOriginBuilder] var prefixComplete = false
+    private[SemanticOriginBuilder] var sourceTextRead = false
+    private[SemanticOriginBuilder] var reusable = false
+    private[SemanticOriginBuilder] var consumed = false
+    def canReuse: Boolean = reusable
+
+  private var preparingOperation: Option[PreparedOperationSource] = None
+
+  def prepareOperationSource(module: Long, kind: String, values: Vector[Any])
+      : PreparedOperationSource =
+    // Session calls this only under its exact registered-construction owner guard.
+    ConstructionKernel.chargeBoundaryWork(12L)
+    new PreparedOperationSource(module, kind, values)
+
+  // Same one-frame wrapper as the original no-argument source capture. Never
+  // put a guard, callback or Option traversal around this stack-sensitive call.
+  def captureSemanticSource(prepared: PreparedOperationSource): Option[SourceSpan] =
+    val previous = preparingOperation
+    preparingOperation = Some(prepared)
+    try
+      val site = captureSite()
+      prepared.site = Some(site)
+      site.span
+    finally preparingOperation = previous
+
+  def consumeOperationSource(
+      prepared: PreparedOperationSource,
+      module: Long,
+      kind: String,
+      values: Vector[Any]
+  ): Unit =
+    // Consumed even when identity, freshness or budget validation fails. The
+    // Session guard preserves its already appended operation and poisons the owner.
+    if prepared.consumed then throw new IllegalStateException("operation source already consumed")
+    prepared.consumed = true
+    ConstructionKernel.chargeBoundaryWork(8L + kind.length.toLong)
+    if !(prepared.builder eq this) || prepared.module != module || prepared.kind != kind ||
+      !(prepared.values eq values) ||
+      !ConstructionKernel.constructionCapturePrefixAllowed(this)
+    then throw new IllegalStateException("operation source authority changed")
+    if !prepared.reusable then throw new IllegalStateException("operation source is not reusable")
+    else
+      val previousWork = resolutionWork
+      val previousLines = resolutionSourceLines
+      resolutionWork = Some(units => ConstructionKernel.chargeBoundaryWork(units.toLong))
+      resolutionSourceLines = Some(Map.empty)
+      try
+        chargeWork(3L)
+        prepared.lines.foreach: (path, original) =>
+          chargeWork(3L)
+          val current = readSourceLines(path)
+          chargeWork(7L)
+          val currentEntry = resolutionSourceLines.flatMap(_.get(path))
+          if !currentEntry.exists(_.stamp == original.stamp) || current.size != original.lines.size
+          then sourceChanged()
+          var index = 0
+          while index < current.size do
+            val left = original.lines(index)
+            val right = current(index)
+            chargeWork(3L + left.length.toLong + right.length.toLong)
+            if left != right then sourceChanged()
+            index += 1
+        chargeWork(2L)
+        operations += OriginOperationCapture(module, kind, values, prepared.site.get)
+      catch case aborted: ResolutionWorkAborted => throw aborted.original
+      finally
+        resolutionSourceLines = previousLines
+        resolutionWork = previousWork
+
   def captureOperation(module: Long, kind: String, values: Vector[Any]): Unit =
     operations += OriginOperationCapture(module, kind, values, captureSite())
 
@@ -487,6 +567,15 @@ private[nodal] final class SemanticOriginBuilder:
         Option(frame.getFileName).map(fileName =>
           locateSpan(fileName, frame.getClassName, frame.getLineNumber)
         )
+      preparingOperation.foreach: prepared =>
+        chargeWork(5L)
+        val observed = resolutionSourceLines.getOrElse(Map.empty)
+        prepared.reusable = installed && prepared.prefixComplete && !prepared.sourceTextRead &&
+          !prepared.sourceFallback &&
+          located.nonEmpty && observed.nonEmpty
+        if prepared.reusable then
+          chargeWork(observed.size.toLong + 1L)
+          prepared.lines = observed
       KernelSourceSite(
         located.map(_._1),
         api.map(frame => normalizeOwner(frame.getClassName)).getOrElse("user"),
@@ -568,8 +657,15 @@ private[nodal] final class SemanticOriginBuilder:
           ) -> binding.map(_._2)
         catch
           case _: Exception =>
+            preparingOperation.foreach: prepared =>
+              chargeWork()
+              prepared.sourceFallback = true
             SourceSpan(fileName, line, 1, line, 1) -> None
-      case None => SourceSpan(fileName, line, 1, line, 1) -> None
+      case None =>
+        preparingOperation.foreach: prepared =>
+          chargeWork()
+          prepared.sourceFallback = true
+        SourceSpan(fileName, line, 1, line, 1) -> None
 
   private def bindingNear(
       lines: Vector[String],
@@ -977,6 +1073,9 @@ private[nodal] final class SemanticOriginBuilder:
     withBoundedSourceReader(path, advertised)(_.lines().iterator().asScala.toVector)
 
   private def readSourceText(path: Path): String =
+    preparingOperation.foreach: prepared =>
+      chargeWork()
+      prepared.sourceTextRead = true
     chargeSourcePath(path)
     val before = sourceStamp(path)
     if !before.regular then throw new java.io.IOException("source is not a regular file")
@@ -2090,4 +2189,12 @@ private[nodal] final class SemanticOriginBuilder:
               case Some(Some(_)) => complete = true
               case Some(None) => ()
               case None => mayStop = false
+    preparingOperation.foreach: prepared =>
+      chargeWork(2L)
+      // Only a positive stop before the old 96-frame bound can be reused.
+      // The caller preserves the original first-capture wrapper depth; fallback
+      // also calls the original second-capture wrapper directly. Baseline bytecode
+      // adds four visible frames for that second call (Session lambda, two
+      // JProcedure1.apply bridges and Option.foreach): 80 + 4 stays below 96.
+      prepared.prefixComplete = complete && frames.size <= 80
     frames

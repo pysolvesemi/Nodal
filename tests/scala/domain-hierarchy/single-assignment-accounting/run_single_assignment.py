@@ -41,10 +41,15 @@ def relative(value):
 def main():
     require(sys.flags.isolated and sys.dont_write_bytecode, 'invoke with python3 -I -B')
     maintained = Path(__file__).resolve().parent
-    manifest_path = maintained / MANIFEST
+    selector = argparse.ArgumentParser(add_help=False)
+    selector.add_argument('--manifest', default=str(maintained / MANIFEST))
+    chosen, _ = selector.parse_known_args()
+    manifest_path = Path(chosen.manifest).resolve(strict=True)
+    maintained = manifest_path.parent
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     require(manifest['schema'] == 1, 'unsupported manifest schema')
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--manifest', default=str(manifest_path))
     for name in ('repository-root', 'compiler-classpath', 'runtime-classpath',
                  'api-jar', 'baseline-api-jar', 'java', 'output-root', 'effective-source-map'):
         parser.add_argument('--' + name, required=True)
@@ -109,6 +114,9 @@ def main():
             require(bundled.resolve().is_relative_to(maintained), 'bundled fixture escapes test tree')
             pin(bundled, entry['sha256'])
             source = pin(root / relative(entry['virtual_path']), entry['sha256'])
+            if spec.get('isolated_fixtures', False):
+                require(source.stat().st_nlink == 1 and bundled.stat().st_nlink == 1,
+                        'mutable fixture must have isolated single-link copies: ' + str(source))
             if entry['compile']:
                 fixtures[group].append(source)
     java = pin(Path(args.java))
@@ -182,7 +190,7 @@ def main():
             selected_api = baseline_api if suite.get('api') == 'baseline' else api
             suite_cp = os.pathsep.join(map(str, [selected_api] + bridge + runtime))
             run(name, java_base + ['-cp', str(classes) + os.pathsep + suite_cp,
-                'nodal.internal.testkit.' + suite['main'], *arguments], group, suite['success'])
+                suite.get('main_class') or 'nodal.internal.testkit.' + suite['main'], *arguments], group, suite['success'])
     comparisons = []
     for comparison in manifest['comparisons']:
         if all(name in selected for name in comparison['suites']):
@@ -192,8 +200,8 @@ def main():
     verify()
     save(output / 'comparisons.json', comparisons)
     save(output / 'summary.json', dict(passed=selected,
-        scope='private opt-in policy diagnostics only; default65536 remains unaccepted; driven131072 topology is separate'))
-    print('PASS bounded single-assignment accounting controls: ' + ', '.join(selected))
+        scope=manifest.get('scope', 'private opt-in policy diagnostics only; default65536 remains unaccepted; driven131072 topology is separate')))
+    print(manifest.get('success_label', 'PASS bounded single-assignment accounting controls') + ': ' + ', '.join(selected))
 
 
 if __name__ == '__main__':

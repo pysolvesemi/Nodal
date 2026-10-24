@@ -46,3 +46,27 @@ package tests.
 
 Any public source-surface change, global construction registry, thread-local implementation, or
 identity-derived emitted name invalidates this gate.
+
+## Foundation 58 checkpoint 66: paired operation-source ownership
+
+For the already admitted ordinary bound-domain digital assignment, ConstructionSession
+continues to own ordinal allocation, operations, closure work and poisoning.
+SemanticOriginBuilder may retain one private invocation-local prepared source result
+containing its first complete site and immutable decoded source observations. This
+is not a persistent source cache or a reusable naming/epoch capability.
+
+The paired consume validates exact builder/module/kind/operand identity, consumes
+once before validation, rereads via the existing bounded reader, and pays for
+stamp/decoded-line comparisons before the origin append. Session append remains
+earlier; consume failure poisons without rollback. Observable source changes
+between captures deliberately reject rather than combine two source versions.
+First and fallback capture wrappers retain their original stack depth. Positive
+constructor-prefix proof at at most 80 frames plus the emitted four-frame second
+wrapper delta is required for reuse under the existing 96-frame capture bound.
+
+This focused shared-owner correction was preferred to a whole-drain cache, another
+source registry or raising a work allowance. Existing eager/zero/domain-free paths
+retain their original branches. Real paid work is reduced on the matched whole
+fixture, but default 65,536-unit admission remains open; diagnostic 131,072 is not
+a production profile. Any future finite production resource profile requires a
+separate explicit API/ownership/workload decision and unchanged independent limits.

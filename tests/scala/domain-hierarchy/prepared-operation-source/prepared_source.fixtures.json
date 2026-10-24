@@ -1,0 +1,682 @@
+{
+  "schema": 1,
+  "api_sha256": "4a3e63583768836d83827fb2eb4e2fe28bd2a2947696a2d59fce4a072c83a204",
+  "baseline_api_sha256": "a55f3114691b9d00df0e96105d67188d1647cce28ebf13c843466d2ad539ecb5",
+  "scope": "focused prepared-operation-source diagnostics only; unchanged default65536 remains unaccepted; no production capacity promotion",
+  "success_label": "PASS bounded prepared-operation-source controls",
+  "groups": {
+    "controls": {
+      "isolated_fixtures": true,
+      "fixtures": [
+        {
+          "maintained_path": "controls/C2b2aRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aRoot.scala",
+          "sha256": "ba16a9b1a8ac15cb27ba576fdcf9f0268bdf84d2b6ff897507d7442a835df1f9",
+          "bytes": 824,
+          "compile": true
+        },
+        {
+          "maintained_path": "controls/PreparedTokenControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/PreparedTokenControls.scala",
+          "sha256": "17880be8033fb83efb172fea149dde2cffe482978f36956ae01f77255ca14bf2",
+          "bytes": 10158,
+          "compile": true
+        }
+      ]
+    },
+    "fallback": {
+      "isolated_fixtures": true,
+      "fixtures": [
+        {
+          "maintained_path": "fallback/C2b2aRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aRoot.scala",
+          "sha256": "e9156b93cee358e2e6913cb5a69b37df2ad5db25cec79e98cf529918870bbe87",
+          "bytes": 1092,
+          "compile": true
+        },
+        {
+          "maintained_path": "fallback/TokenFallbackControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/TokenFallbackControls.scala",
+          "sha256": "6849d50cef47c17f47b4a10b6f47ce5f77ed97856df0a1db48543558c79887be",
+          "bytes": 4276,
+          "compile": true
+        }
+      ]
+    },
+    "deep": {
+      "isolated_fixtures": true,
+      "fixtures": [
+        {
+          "maintained_path": "deep/F.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/F.scala",
+          "sha256": "2b97deb3184af3bd1e498bc40833176329ebeda23ab5758f84a481c92ca86c32",
+          "bytes": 4175,
+          "compile": true
+        },
+        {
+          "maintained_path": "deep/R.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/R.scala",
+          "sha256": "7f9984af88b07ccc477ec3b9ca1592ba82128f7f6c16195bacbc551dff350590",
+          "bytes": 938,
+          "compile": true
+        }
+      ]
+    }
+  },
+  "suites": {
+    "controls-positive": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "positive"
+      ],
+      "success": [
+        "PASS actual assignment debit="
+      ]
+    },
+    "controls-budget_first": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "budget_first"
+      ],
+      "success": [
+        "PASS actual assignment debit=",
+        "PASS negative budget_first",
+        "PASS fresh recovery"
+      ]
+    },
+    "controls-budget_second": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "budget_second"
+      ],
+      "success": [
+        "PASS actual assignment debit=",
+        "PASS negative budget_second",
+        "PASS fresh recovery",
+        "PASS exhaustion at paid decoded-line comparison"
+      ]
+    },
+    "controls-wrong_module": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "wrong_module"
+      ],
+      "success": [
+        "PASS actual assignment debit=",
+        "PASS negative wrong_module",
+        "PASS fresh recovery"
+      ]
+    },
+    "controls-wrong_kind": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "wrong_kind"
+      ],
+      "success": [
+        "PASS actual assignment debit=",
+        "PASS negative wrong_kind",
+        "PASS fresh recovery"
+      ]
+    },
+    "controls-wrong_values": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "wrong_values"
+      ],
+      "success": [
+        "PASS actual assignment debit=",
+        "PASS negative wrong_values",
+        "PASS fresh recovery"
+      ]
+    },
+    "controls-foreign_builder": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "foreign_builder"
+      ],
+      "success": [
+        "PASS actual assignment debit=",
+        "PASS negative foreign_builder",
+        "PASS fresh recovery"
+      ]
+    },
+    "controls-consumed": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "consumed"
+      ],
+      "success": [
+        "PASS actual assignment debit=",
+        "PASS negative consumed",
+        "PASS fresh recovery"
+      ]
+    },
+    "controls-freshness_content": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "freshness_content"
+      ],
+      "success": [
+        "PASS actual assignment debit=",
+        "PASS negative freshness_content",
+        "PASS fresh recovery"
+      ]
+    },
+    "controls-freshness_missing": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "freshness_missing"
+      ],
+      "success": [
+        "PASS actual assignment debit=",
+        "PASS negative freshness_missing",
+        "PASS fresh recovery"
+      ]
+    },
+    "controls-freshness_nonregular": {
+      "group": "controls",
+      "main": "drivendiagnostic.PreparedTokenControls",
+      "arguments": [
+        "freshness_nonregular"
+      ],
+      "success": [
+        "PASS actual assignment debit=",
+        "PASS negative freshness_nonregular",
+        "PASS fresh recovery"
+      ]
+    },
+    "fallback-ordinary-0-baseline": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "ordinary",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=0"
+      ],
+      "api": "baseline"
+    },
+    "fallback-ordinary-0-candidate": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "ordinary",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=0"
+      ],
+      "api": "candidate"
+    },
+    "fallback-ordinary-50-baseline": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "ordinary",
+        "50"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=50"
+      ],
+      "api": "baseline"
+    },
+    "fallback-ordinary-50-candidate": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "ordinary",
+        "50"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=50"
+      ],
+      "api": "candidate"
+    },
+    "fallback-ordinary-65-baseline": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "ordinary",
+        "65"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=65"
+      ],
+      "api": "baseline"
+    },
+    "fallback-ordinary-65-candidate": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "ordinary",
+        "65"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=65"
+      ],
+      "api": "candidate"
+    },
+    "fallback-ordinary-70-baseline": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "ordinary",
+        "70"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=70"
+      ],
+      "api": "baseline"
+    },
+    "fallback-ordinary-70-candidate": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "ordinary",
+        "70"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=70"
+      ],
+      "api": "candidate"
+    },
+    "fallback-ordinary-75-baseline": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "ordinary",
+        "75"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=75"
+      ],
+      "api": "baseline"
+    },
+    "fallback-ordinary-75-candidate": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "ordinary",
+        "75"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=75"
+      ],
+      "api": "candidate"
+    },
+    "fallback-cache_missing-0-baseline": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "cache_missing",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=cache_missing depth=0"
+      ],
+      "api": "baseline"
+    },
+    "fallback-cache_missing-0-candidate": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "cache_missing",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=cache_missing depth=0"
+      ],
+      "api": "candidate"
+    },
+    "fallback-source_missing-0-baseline": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "source_missing",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=source_missing depth=0"
+      ],
+      "api": "baseline"
+    },
+    "fallback-source_missing-0-candidate": {
+      "group": "fallback",
+      "main": "drivendiagnostic.TokenFallbackControls",
+      "arguments": [
+        "source_missing",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=source_missing depth=0"
+      ],
+      "api": "candidate"
+    },
+    "deep-ordinary-0-baseline": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "ordinary",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=0"
+      ],
+      "api": "baseline"
+    },
+    "deep-ordinary-0-candidate": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "ordinary",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=0"
+      ],
+      "api": "candidate"
+    },
+    "deep-ordinary-75-baseline": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "ordinary",
+        "75"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=75"
+      ],
+      "api": "baseline"
+    },
+    "deep-ordinary-75-candidate": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "ordinary",
+        "75"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=75"
+      ],
+      "api": "candidate"
+    },
+    "deep-ordinary-96-baseline": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "ordinary",
+        "96"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=96"
+      ],
+      "api": "baseline"
+    },
+    "deep-ordinary-96-candidate": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "ordinary",
+        "96"
+      ],
+      "success": [
+        "CAPTURE mode=ordinary depth=96"
+      ],
+      "api": "candidate"
+    },
+    "deep-cache_missing-0-baseline": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "cache_missing",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=cache_missing depth=0"
+      ],
+      "api": "baseline"
+    },
+    "deep-cache_missing-0-candidate": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "cache_missing",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=cache_missing depth=0"
+      ],
+      "api": "candidate"
+    },
+    "deep-source_missing-0-baseline": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "source_missing",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=source_missing depth=0"
+      ],
+      "api": "baseline"
+    },
+    "deep-source_missing-0-candidate": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "source_missing",
+        "0"
+      ],
+      "success": [
+        "CAPTURE mode=source_missing depth=0"
+      ],
+      "api": "candidate"
+    },
+    "deep-probe-0": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "probe",
+        "0"
+      ],
+      "success": [
+        "PROBE depth=0"
+      ]
+    },
+    "deep-probe-75": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "probe",
+        "75"
+      ],
+      "success": [
+        "PROBE depth=75"
+      ]
+    },
+    "deep-probe-96": {
+      "group": "deep",
+      "main_class": "nodal.F",
+      "arguments": [
+        "probe",
+        "96"
+      ],
+      "success": [
+        "PROBE depth=96"
+      ]
+    }
+  },
+  "default_suites": [
+    "controls-positive",
+    "controls-budget_first",
+    "controls-budget_second",
+    "controls-wrong_module",
+    "controls-wrong_kind",
+    "controls-wrong_values",
+    "controls-foreign_builder",
+    "controls-consumed",
+    "controls-freshness_content",
+    "controls-freshness_missing",
+    "controls-freshness_nonregular",
+    "fallback-ordinary-0-baseline",
+    "fallback-ordinary-0-candidate",
+    "fallback-ordinary-50-baseline",
+    "fallback-ordinary-50-candidate",
+    "fallback-ordinary-65-baseline",
+    "fallback-ordinary-65-candidate",
+    "fallback-ordinary-70-baseline",
+    "fallback-ordinary-70-candidate",
+    "fallback-ordinary-75-baseline",
+    "fallback-ordinary-75-candidate",
+    "fallback-cache_missing-0-baseline",
+    "fallback-cache_missing-0-candidate",
+    "fallback-source_missing-0-baseline",
+    "fallback-source_missing-0-candidate",
+    "deep-ordinary-0-baseline",
+    "deep-ordinary-0-candidate",
+    "deep-ordinary-75-baseline",
+    "deep-ordinary-75-candidate",
+    "deep-ordinary-96-baseline",
+    "deep-ordinary-96-candidate",
+    "deep-cache_missing-0-baseline",
+    "deep-cache_missing-0-candidate",
+    "deep-source_missing-0-baseline",
+    "deep-source_missing-0-candidate",
+    "deep-probe-0",
+    "deep-probe-75",
+    "deep-probe-96"
+  ],
+  "comparisons": [
+    {
+      "suites": [
+        "fallback-ordinary-0-baseline",
+        "fallback-ordinary-0-candidate"
+      ],
+      "files": [
+        "fallback-ordinary-0-baseline.stdout",
+        "fallback-ordinary-0-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "fallback-ordinary-50-baseline",
+        "fallback-ordinary-50-candidate"
+      ],
+      "files": [
+        "fallback-ordinary-50-baseline.stdout",
+        "fallback-ordinary-50-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "fallback-ordinary-65-baseline",
+        "fallback-ordinary-65-candidate"
+      ],
+      "files": [
+        "fallback-ordinary-65-baseline.stdout",
+        "fallback-ordinary-65-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "fallback-ordinary-70-baseline",
+        "fallback-ordinary-70-candidate"
+      ],
+      "files": [
+        "fallback-ordinary-70-baseline.stdout",
+        "fallback-ordinary-70-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "fallback-ordinary-75-baseline",
+        "fallback-ordinary-75-candidate"
+      ],
+      "files": [
+        "fallback-ordinary-75-baseline.stdout",
+        "fallback-ordinary-75-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "fallback-cache_missing-0-baseline",
+        "fallback-cache_missing-0-candidate"
+      ],
+      "files": [
+        "fallback-cache_missing-0-baseline.stdout",
+        "fallback-cache_missing-0-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "fallback-source_missing-0-baseline",
+        "fallback-source_missing-0-candidate"
+      ],
+      "files": [
+        "fallback-source_missing-0-baseline.stdout",
+        "fallback-source_missing-0-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "deep-ordinary-0-baseline",
+        "deep-ordinary-0-candidate"
+      ],
+      "files": [
+        "deep-ordinary-0-baseline.stdout",
+        "deep-ordinary-0-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "deep-ordinary-75-baseline",
+        "deep-ordinary-75-candidate"
+      ],
+      "files": [
+        "deep-ordinary-75-baseline.stdout",
+        "deep-ordinary-75-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "deep-ordinary-96-baseline",
+        "deep-ordinary-96-candidate"
+      ],
+      "files": [
+        "deep-ordinary-96-baseline.stdout",
+        "deep-ordinary-96-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "deep-cache_missing-0-baseline",
+        "deep-cache_missing-0-candidate"
+      ],
+      "files": [
+        "deep-cache_missing-0-baseline.stdout",
+        "deep-cache_missing-0-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "deep-source_missing-0-baseline",
+        "deep-source_missing-0-candidate"
+      ],
+      "files": [
+        "deep-source_missing-0-baseline.stdout",
+        "deep-source_missing-0-candidate.stdout"
+      ]
+    }
+  ]
+}

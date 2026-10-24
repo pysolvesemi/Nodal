@@ -1204,6 +1204,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private val staticPredicates = mutable.LinkedHashMap.empty[ExpressionRef, StaticPredicate]
   private val structuralIfs = mutable.LinkedHashMap.empty[ExpressionRef, StructuralIfRecord]
   private val structuralArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private var capturingStructuralValue = false
   private val behavioralIfs = mutable.LinkedHashMap.empty[ExpressionRef, BehavioralIfRecord]
   private val behavioralArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
   private val flatFsms = mutable.LinkedHashMap.empty[ExpressionRef, FlatFsmRecord[?]]
@@ -2332,9 +2333,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private var constructorFailure: Option[(Throwable, String)] = None
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
-    scala.util.Failure[Nothing](
-      new ConstructionException(KernelDiagnostic(code, message, path))
-    ).get
+    val failure = new ConstructionException(KernelDiagnostic(code, message, path))
+    if guardedLegacyGeneration then poisonConstructor(failure, path.getOrElse("guarded hdlRange"))
+    scala.util.Failure[Nothing](failure).get
 
   private def moduleName(module: Module): String =
     val name = module.getClass.getSimpleName.stripSuffix("$")
@@ -3100,7 +3101,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val rangeAnalog =
         current.exists(region => region.isLoop && region.loop.get.generated.nonEmpty) &&
           !pure && !staticInteger && !knownArgument
-      if generatedAnalog || rangeAnalog then
+      if (generatedAnalog || rangeAnalog) && !guardedLegacyGeneration then
         validateGeneratedDependencies(expression.operands)
         None
       else
@@ -3150,7 +3151,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           val _ = bindCollectionValue(value, destination, currentModule.handle)
         destination
 
-  private def newLoopRegion(header: DigitalLoopHeader): DigitalValueRegionRecord =
+  private def newLoopRegion(
+      header: DigitalLoopHeader,
+      retainParent: Boolean = false
+  ): DigitalValueRegionRecord =
     if collectionStack.size >= 128 || collectionRegions.size + loopRegions.size >= 65536 then
       collectionFailure("iteration region inventory exceeds its finite budget")
     val module = currentModule
@@ -3161,7 +3165,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       result
     val region = new DigitalValueRegionRecord(
       reference,
-      if header.generated.exists(_.areaFamily) then activeValueRegion else None,
+      if retainParent || header.generated.exists(_.areaFamily) then activeValueRegion else None,
       "bounded_loop",
       Vector.empty,
       None,
@@ -3485,9 +3489,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       def capture(region: DigitalValueRegionRecord, callback: () => Option[Expr[?]])
           : Option[KernelTypeDescriptor] =
         collectionStack += region
+        val previousStructuralValue = capturingStructuralValue
+        capturingStructuralValue = previousStructuralValue || hasResult
         val yielded = try
           callback().map(value => bindCollectionValue(value, Some(region), module.handle))
         finally
+          capturingStructuralValue = previousStructuralValue
           val removed = collectionStack.remove(collectionStack.size - 1)
           if removed ne region then structuralFailure("structural arm lexical stack is corrupt")
         if yielded.nonEmpty != hasResult then
@@ -5828,6 +5835,48 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     moduleStack.lastOption.flatMap(module =>
       generationStack.reverseIterator.find(_.owner == module.handle)
     )
+
+  // The new lexical legacy profile shares the actual Generate owner, never Area storage rights.
+  private def guardedLegacyGeneration: Boolean =
+    activeGeneratedRegion.exists(generated =>
+      !generated.areaFamily && generated.digitalRegion.exists(region =>
+        region.structuralGenerate && region.parent.nonEmpty
+      )
+    )
+
+  private def requireGuardedLegacyScope(): Unit =
+    if capturingStructuralValue || activeGeneratedRegion.nonEmpty || activeLoop.nonEmpty ||
+      activeEventProcess.nonEmpty || analogStack.nonEmpty || analogSemanticContext.nonEmpty ||
+      AnalogProceduralConstruction.generatedProcedureActive
+    then structuralFailure("guarded hdlRange requires structural statement ancestry")
+    val owner = currentModule.handle
+    val chain = mutable.ArrayBuffer.empty[DigitalValueRegionRecord]
+    var current = activeValueRegion
+    while current.nonEmpty do
+      // Charge identity comparison, both canonical lookups, and retained ancestry before work.
+      closureCharge(5L + chain.size.toLong)
+      val region = current.get
+      if chain.size >= 128 || chain.exists(_ eq region) || region.reference.module != owner ||
+        !structuralArms.get(region.reference).exists(_ eq region)
+      then structuralFailure("guarded hdlRange lost its exact structural ancestry")
+      val header = region.structuralArm.getOrElse(
+        structuralFailure("guarded hdlRange requires an actual structural arm")
+      )
+      val conditional = structuralIfs.getOrElse(
+        header.conditional,
+        structuralFailure("guarded hdlRange lost its actual structural conditional")
+      )
+      val actual = if header.whenTrue then conditional.trueArm else conditional.falseArm
+      if (actual ne region) || conditional.parent != region.parent || conditional.result.nonEmpty then
+        structuralFailure("guarded hdlRange requires actual structural statement arms")
+      chain += region
+      current = region.parent
+    closureCharge(2L * collectionStack.size.toLong)
+    val active = collectionStack.filter(_.reference.module == owner)
+    closureCharge(2L * chain.size.toLong + active.size.toLong)
+    if chain.isEmpty || chain.size != active.size ||
+      !chain.reverseIterator.zip(active.iterator).forall((left, right) => left eq right)
+    then structuralFailure("guarded hdlRange differs from the active lexical stack")
 
   private def generatedScopeSnapshot(region: Option[GeneratedRegionRecord])
       : Option[KernelGeneratedScope] =
@@ -11720,7 +11769,21 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       step: Int | Expr[Integer],
       maximum: Option[Int]
   )(body: Expr[Integer] => Unit): Unit =
-    val _ = captureGeneratedRegion(lower, upperExclusive, step, maximum, areaFamily = false)(body)
+    val guardedEntry = activeValueRegion.exists(_.structuralArm.nonEmpty)
+    val collectionDepth = collectionStack.size
+    val generationDepth = generationStack.size
+    try
+      val _ = captureGeneratedRegion(lower, upperExclusive, step, maximum, areaFamily = false)(body)
+    catch
+      case failure: Throwable =>
+        if guardedEntry then
+          poisonConstructor(failure, "guarded hdlRange")
+          // Setup can fail before captureGeneratedRegion installs its body cleanup.
+          while collectionStack.size > collectionDepth do
+            collectionStack.remove(collectionStack.size - 1)
+          while generationStack.size > generationDepth do
+            generationStack.remove(generationStack.size - 1)
+        throw failure
 
   private def captureGeneratedRegion[A](
       lower: Int | Expr[Integer],
@@ -11729,8 +11792,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       maximum: Option[Int],
       areaFamily: Boolean
   )(body: Expr[Integer] => A): (A, GeneratedRegionRecord) =
+    if guardedLegacyGeneration then
+      structuralFailure("nested generation is outside the guarded hdlRange profile")
+    val guardedLegacy = !areaFamily && activeValueRegion.exists(_.structuralArm.nonEmpty)
     if areaFamily then requireAreaFamilyScope("generated Area family", requireBody = false)
+    else if guardedLegacy then requireGuardedLegacyScope()
     else requireNoCollectionEffect("structural generation")
+    val structuralBody = areaFamily || guardedLegacy
     if activeLoop.exists(_.loop.get.generated.isEmpty) then
       collectionFailure("nested effectful iteration is outside the bounded loop profile")
     val module = currentModule
@@ -11769,7 +11837,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     def captureBound(value: Int | Expr[Integer]): Int | Expr[Integer] = value match
       case literal: Int => literal
       case expression: Expr[Integer] =>
-        if areaFamily then
+        if structuralBody then
           bindCollectionValue(expression, activeValueRegion, module.handle)
             .asInstanceOf[Expr[Integer]]
         else expression
@@ -11784,7 +11852,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
     val inductionReference = captureExpression(
       induction,
-      scopeOverride = Option.when(areaFamily)(None)
+      scopeOverride = Option.when(structuralBody)(None)
     ).getOrElse(
       fail("NODAL-ITERATION-043-001", "hdlRange induction has no active construction owner")
     )
@@ -11821,19 +11889,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         capturedStep,
         maximum,
         envelope,
-        (if areaFamily then activeValueRegion else None).map: parent =>
+        (if structuralBody then activeValueRegion else None).map: parent =>
           val ordinal = parent.assignmentCount
           parent.assignmentCount += 1
           ordinal
         .getOrElse(nextEffectOrdinal()),
         Some(record)
-      ))
+      ), retainParent = guardedLegacy)
     )
     record.digitalRegion = digitalRegion
     digitalRegion.foreach: region =>
-      if region.structuralGenerate != areaFamily then
+      if region.structuralGenerate != structuralBody then
         beforeRegionMutation(region)
-        region.structuralGenerate = areaFamily
+        region.structuralGenerate = structuralBody
     val domainCount = module.domains.size
     val analogRegionCount = analogRegions.size
     val continuousOperatorCount = continuousOperators.size
@@ -12144,6 +12212,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   def withAnalogSemanticRegion[A](
       kind: AnalogEquationRuntime.RegionKind
   )(body: => A): A =
+    if guardedLegacyGeneration then
+      structuralFailure("analog regions are outside the guarded hdlRange profile")
     val module = currentModule
     if analogSemanticContext.nonEmpty then
       fail(

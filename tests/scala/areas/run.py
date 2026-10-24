@@ -160,10 +160,24 @@ def main() -> None:
             raise RuntimeError("both pure collection and procedural loop guards must reject")
     guarded = fixtures / "guarded"
     guarded_producer, _ = compile_sources(
-        "guarded-producer", [guarded / "producer/Producer.scala"])
+        "guarded-producer", [guarded / "producer/Producer.scala",
+                             guarded / "producer/LegacyWritingHelper.scala",
+                             guarded / "producer/LegacyScalarWritingHelper.scala"])
     guarded_jar = out / "guarded-producer.jar"
     run("guarded-producer-jar", [str(Path(args.java).with_name("jar")), "cf", str(guarded_jar),
                                  "-C", str(guarded_producer), "."])
+    # Check the emitted annotation, not a fabricated marker or an unavailable helper.
+    # A final class receiver avoids singleton profile64 masking the method profile8.
+    scalar_summary = run("guarded-scalar-writing-summary", [
+        str(Path(args.java).with_name("javap")), "-v", "-p", "-classpath", str(guarded_jar),
+        "nodal_external.guardedjar.LegacyScalarWritingHelper"])
+    if ('public final void write(' not in scalar_summary or
+            'kind="helper"' not in scalar_summary or 'profile=8' not in scalar_summary or
+            'kind="singleton"' in scalar_summary):
+        raise RuntimeError("scalar writer must have an actual checked method profile8")
+    compile_sources("root-legacy-imported-scalar-write",
+                    [guarded / "positive/RootLegacyImportedScalarWrite.scala"],
+                    dependencies=[guarded_jar])
     guarded_consumer, _ = compile_sources(
         "guarded-consumer", sorted((guarded / "consumer").glob("*.scala")),
         dependencies=[guarded_jar])
@@ -173,11 +187,31 @@ def main() -> None:
         "BehavioralFamily": "NODAL-SEQUENTIAL-056-UNAVAILABLE",
         "GuardedDirectStorage": "NODAL-STRUCTURAL-055-UNAVAILABLE",
         "GuardedLegacyForeach": "NODAL-STRUCTURAL-055-EFFECT",
+        "GuardedLegacyStorage": "NODAL-STRUCTURAL-055-UNAVAILABLE",
+        "GuardedLegacyInstance": "NODAL-STRUCTURAL-055-EFFECT",
+        "GuardedLegacyAnalog": "NODAL-STRUCTURAL-055-EFFECT",
+        "GuardedLegacyEffect": "NODAL-ITERATION-CALLBACK-MUTABLE",
+        "GuardedLegacyHiddenEffect": "NODAL-ITERATION-CALLBACK-UNAVAILABLE",
+        "GuardedLegacyImportedWrite": "NODAL-ITERATION-CALLBACK-UNAVAILABLE",
+        "GuardedLegacyImportedScalarWrite": "NODAL-STRUCTURAL-055-SUMMARY",
+        "GuardedLegacyValueStatement": "NODAL-STRUCTURAL-055-EFFECT",
         "GuardedModule": "NODAL-STRUCTURAL-055-UNAVAILABLE",
         "LoopHelper": "NODAL-ITERATION-CALLBACK-SUMMARY",
         "PureHelper": "NODAL-COLLECTION-CALLBACK-SUMMARY",
         "SequentialHelper": "NODAL-SEQUENTIAL-056-SUMMARY",
         "ForgedSummary": "NODAL-CONSTRUCTOR-METADATA",
+    }
+    # Keep these causal targets distinct from unrelated compiler errors. The imported
+    # writer is deliberately compiled separately; absent summary is not claimed to
+    # demonstrate rejection of an incompatible, otherwise valid summary profile.
+    guarded_legacy_reasons = {
+        "GuardedLegacyStorage": "nodal.Reg$",
+        "GuardedLegacyInstance": "guarded hdlRange admits only continuous digital assignments",
+        "GuardedLegacyAnalog": "guarded hdlRange admits only continuous digital assignments",
+        "GuardedLegacyEffect": "callback assignments are unsupported",
+        "GuardedLegacyHiddenEffect": "scala.Predef$.println",
+        "GuardedLegacyImportedWrite": "nodal_external.guardedjar.LegacyWritingHelper$.write",
+        "GuardedLegacyImportedScalarWrite": "helper.write(output, input)",
     }
     for name, diagnostic in guarded_expected.items():
         source = guarded / "negative" / (name + ".scala")
@@ -185,6 +219,9 @@ def main() -> None:
                                     dependencies=[guarded_jar])
         if f"/{source.name}:" not in output or diagnostic not in output:
             raise RuntimeError(f"{name}: missing exact guarded diagnostic {diagnostic}\n{output}")
+        reason = guarded_legacy_reasons.get(name)
+        if reason is not None and reason not in output:
+            raise RuntimeError(f"{name}: missing causal guarded refusal {reason}\n{output}")
     unknown, _ = compile_sources("guarded-unknown-producer",
                                   [guarded / "raw/UnknownFactory.scala"], plugin=False,
                                   dependencies=[guarded_jar])

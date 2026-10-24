@@ -276,3 +276,39 @@ loops, shape maps and source identities. Check malformed/deep/resource-bound IR
 without assuming source attestation. Record a concise shared-owner/scale review.
 No target HDL execution, F55 completion, or full F58/Area completion is implied.
 No CI or broad qualification is required under the current prototype policy.
+
+
+## F58 checkpoint 82: unit-step guarded legacy foreach
+
+The bounded repair uses existing `hdlRange` callback syntax and `HdlRange.foreach`
+inside a parameter-only structural statement arm. It introduces no public API or
+new effect-summary bit. The accepted native profile uses unit step and continuous indexed digital assignments
+with pure expressions and read-only structural value choices. Both authored
+alternatives remain checked, including empty ranges and inactive defaults.
+
+Admission requires exact actual structural statement ancestry, explicit captured
+bounds, canonical Generate induction ownership and parent-local source ordering.
+A value-producing structural choice cannot hide an effectful range, even through
+a nested statement. Further Generate nesting, state/register-next, behavioral or
+procedural effects, analog effects, Interface effects, storage, Instances and Area
+allocation remain outside this profile. Existing root-range and generated-family
+permissions are unchanged; this is not general mixed-effect partitioning.
+
+The existing typed callback validator owns the narrow continuous restriction and
+shared budget. Local helper bodies are checked under that restriction; unavailable
+helper/singleton summaries require the existing Pure profile, not the broader
+StructuralIf profile. The callback compatibility extension in
+`GeneratedAreaApi.scala` delegates to `HdlRange.foreach`; it is not Area allocation.
+ConstructionSession owns actual lexical capture and poisoning. Independent native
+verification must check the same owner/stage/effect boundaries without trusting
+source attestation. Existing construction and native proof limits are unchanged.
+
+Focused acceptance comprises 129 native cases, six actual Scala MLIR artifacts,
+source/runtime controls and retained predecessor parity, recorded in
+[checkpoint 82](../implementation/increment58-readiness.md#checkpoint-82-unit-step-guarded-legacy-foreach).
+The shared NodalOps owner now proves exact arm-local index literals without an
+integer environment, retaining existing scope/order/type checks and budgets.
+Nonunit construction can emit IR, but even a fully driven step-2 singleton is
+refused by existing shared residue-coalescing coverage. Nonunit native support,
+direct indexed writes outside Generate, F-159.B.4.2 and broader mixed-effect
+obligations remain open. No generated Verilog-* acceptance is claimed.

@@ -49,6 +49,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var iterationFactories = Set.empty[Symbol]
   private var loops = Set.empty[Symbol]
   private var ranges = Set.empty[Symbol]
+  private var legacyRanges = Set.empty[Symbol]
+  private var legacyRangeDefaults = Set.empty[Symbol]
   private var areaRanges = Set.empty[Symbol]
   private var areaRangeFactories = Set.empty[Symbol]
   private var areaFamilyMethods = Set.empty[Symbol]
@@ -86,7 +88,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
   private enum Profile:
     case Pure, Loop, Range, StructuralRange, Selection, StructuralIf, Sequential, GeneratedArea,
-      ImmutableFsm, StructuralFamily
+      ImmutableFsm, StructuralFamily, ContinuousRange
 
   private final class Budget:
     var visitedNodes = 0
@@ -499,10 +501,14 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     areaRangeFactories = moduleMethods("nodal.CandidateApi$package", "hdlRange").filter(
       _.info.finalResultType.widen.dealias.derivesFrom(requiredClass("nodal.HdlRange"))
     )
-    ranges =
+    legacyRanges =
       (methods(requiredModule("nodal.CandidateApi$package"), "hdlRange") -- areaRangeFactories) ++
         methods(requiredClass("nodal.HdlRange"), "foreach") ++
+        // This exact extension preserves callback syntax by delegating to HdlRange.foreach.
+        // It is not HdlRange.map or generated Area allocation.
         moduleMethods("nodal.GeneratedAreaApi$package", "apply")
+    legacyRangeDefaults = defaultGetters(legacyRanges)
+    ranges = legacyRanges
     iterationFactories =
       methods(
         requiredModule("nodal.DigitalIterationCallback"),
@@ -1169,15 +1175,24 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       sharedBudget: Budget,
       reportErrors: Boolean = true,
       structuralDiagnostic: Boolean = false,
-      sequentialDiagnostic: Boolean = false
+      sequentialDiagnostic: Boolean = false,
+      allowGuardedRange: Boolean = false,
+      continuousRangeRestriction: Boolean = false,
+      guardedRangeForbidden: Boolean = false
   )(using Context):
+    // Each validator owns caches for one immutable permission context. Never reuse a broad
+    // structural proof to authorize a guarded legacy range or its nested pure operands.
+    private val continuousOnly = continuousRangeRestriction || profile == Profile.ContinuousRange
+    private def guardedRange(symbol: Symbol): Boolean =
+      allowGuardedRange && !guardedRangeForbidden && !continuousOnly && legacyRanges(symbol)
     private val permitsStructure = profile == Profile.Range || profile == Profile.StructuralRange ||
       profile == Profile.GeneratedArea
     private val permitsAreaFamily = permitsStructure || profile == Profile.StructuralFamily
     private def permitsInterface = directModuleInitializer || profile == Profile.GeneratedArea ||
       profile == Profile.StructuralFamily || profile == Profile.StructuralIf
     private val permitsWrites = profile == Profile.Loop || profile == Profile.Range ||
-      profile == Profile.StructuralIf || profile == Profile.StructuralFamily || profile == Profile.GeneratedArea
+      profile == Profile.StructuralIf || profile == Profile.StructuralFamily || profile == Profile.GeneratedArea ||
+      profile == Profile.ContinuousRange
     // Quotes may insert a synthetic module accessor whose name is absent from the source member table.
     // Admit only this exact compiler-owned, zero-argument accessor with its exact module result.
     private def generatedRuntimeAccessor(symbol: Symbol): Boolean =
@@ -1232,11 +1247,13 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       ((profile == Profile.GeneratedArea || profile == Profile.StructuralFamily) &&
         areaConservativeMethods(symbol)) ||
       (directModuleInitializer && requiredDomainMethods(symbol)) ||
-      sequentialMethods(symbol) ||
+      (!continuousOnly && sequentialMethods(symbol)) ||
       ((profile == Profile.Sequential || profile == Profile.GeneratedArea || profile == Profile.StructuralIf || profile == Profile.StructuralFamily) &&
         (sequentialBranches(symbol) || sequentialFactories(symbol) || sequentialWrites(symbol))) ||
       structuralMethods(symbol) || structuralBranches(symbol) || structuralFactories(symbol) ||
       (permitsWrites && loopMethods(symbol)) ||
+      (allowGuardedRange && !guardedRangeForbidden && !continuousOnly &&
+        (areaRangeFactories(symbol) || legacyRangeDefaults(symbol))) ||
       (permitsStructure && rangeMethods(symbol)) ||
       (permitsAreaFamily && (areaFamilyMethods(symbol) || areaRangeFactories(symbol))) ||
       (profile == Profile.Selection && selectionMethods(symbol))
@@ -1248,7 +1265,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           (symbol == requiredModule("nodal.ConservativeAccess.Connect") ||
             symbol == requiredModule("nodal.ConservativeAccess.Connect.connectAccess"))) ||
         (directModuleInitializer && symbol == requiredModule("nodal.ClockDomain")) ||
-        structuralModules(symbol) || sequentialModules(symbol) ||
+        structuralModules(symbol) || (!continuousOnly && sequentialModules(symbol)) ||
         (permitsWrites && loopModules(symbol)) || (permitsStructure && rangeModules(symbol))
     private def fail(code: String, message: String, tree: Tree): Boolean =
       if !reportErrors then false
@@ -1260,7 +1277,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         false
       else if profile == Profile.Pure && !structuralDiagnostic then
         DigitalCollectionCallbackPhase.this.fail(code, message, tree)
-      else if profile == Profile.StructuralIf || profile == Profile.StructuralFamily || structuralDiagnostic
+      else if profile == Profile.StructuralIf || profile == Profile.StructuralFamily ||
+        profile == Profile.ContinuousRange || structuralDiagnostic
       then
         report.error(s"NODAL-STRUCTURAL-055-$code: $message", tree.srcPos)
         false
@@ -1301,7 +1319,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
     private def moduleReference(symbol: Symbol, tree: Tree, depth: Int): Boolean =
       if trustedModule(symbol) || checkedModules(symbol) then true
-      else if profile == Profile.Pure && enumPureProofs.get(symbol).exists:
+      else if profile == Profile.Pure && !continuousOnly && enumPureProofs.get(symbol).exists:
           case (_, provedDepth, helperDepth, _) => depth <= provedDepth &&
             active.size <= helperDepth
       then
@@ -1326,7 +1344,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 sharedBudget,
                 reportErrors,
                 structuralDiagnostic,
-                sequentialDiagnostic
+                sequentialDiagnostic,
+                continuousRangeRestriction = continuousOnly
               )
             else this
             if proof ne this then
@@ -1338,7 +1357,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             activeModules -= symbol
             if valid then
               checkedModules += symbol
-              if profile == Profile.Pure then
+              if profile == Profile.Pure && !continuousOnly then
                 enumPureProofs(symbol) =
                   (
                     sharedBudget.visitedNodes - before,
@@ -1467,6 +1486,13 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           .exists(name => tree.tpe.widen.dealias.finalResultType.derivesFrom(requiredClass(name)))
       then
         fail("EFFECT", "immutable graph callback cannot capture runtime hardware or bindings", tree)
+      else if continuousOnly && !pureMethods(symbol) &&
+        (sequentialMethods(symbol) || sequentialBranches(symbol) || sequentialFactories(symbol) ||
+          sequentialWrites(symbol) || rangeMethods(symbol) || areaInterfaceMethods(symbol) ||
+          areaConservativeMethods(symbol) || areaFamilyMethods(symbol) || ranges(symbol) ||
+          areaRanges(symbol) || areaRangeFactories(symbol))
+      then
+        fail("EFFECT", "guarded hdlRange admits only continuous digital assignments", tree)
       else if memoryReads(symbol) then
         fail(
           "MEMORY-READ",
@@ -1542,6 +1568,11 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                   "nodal.DigitalIterationCallback.checkedAreaRange"
                 ) =>
             callback(closure, depth + 1)
+          case Apply(function, List(closure))
+              if profile == Profile.ContinuousRange &&
+                function.symbol == requiredMethod("nodal.DigitalIterationCallback.checkedRange") =>
+            // Recheck the original closure: the root-range attestation is deliberately broader.
+            callback(closure, depth + 1)
           case Inlined(_, bindings, expansion) =>
             bindings.forall(check(_, depth + 1)) && callback(expansion, depth + 1)
           case Typed(expression, _) => callback(expression, depth + 1)
@@ -1591,16 +1622,36 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
               tree
             )
 
-    private def nestedCallback(tree: Tree, nested: Profile, depth: Int): Boolean =
-      if nested == profile then callback(tree, depth)
+    private def inheritLexicalContext(validation: Validation): Unit =
+      validation.active ++= active
+      validation.activeModules ++= activeModules
+      validation.callbackAliases ++= callbackAliases
+      validation.constructionOwners = constructionOwners
+      validation.localInstances ++= localInstances
+
+    private def nestedCallback(
+        tree: Tree,
+        nested: Profile,
+        depth: Int,
+        statementArm: Boolean = false,
+        valueArm: Boolean = false
+    ): Boolean =
+      val forbidden = guardedRangeForbidden || valueArm
+      if nested == profile && statementArm == allowGuardedRange &&
+        forbidden == guardedRangeForbidden
+      then callback(tree, depth)
       else
         val validation = new Validation(
           nested,
           sharedBudget,
           reportErrors,
           structuralDiagnostic,
-          sequentialDiagnostic || profile == Profile.Sequential
+          sequentialDiagnostic || profile == Profile.Sequential,
+          allowGuardedRange = statementArm,
+          continuousRangeRestriction = continuousOnly,
+          guardedRangeForbidden = forbidden
         )
+        inheritLexicalContext(validation)
         val valid = validation.callback(tree, depth)
         importedDependencies ++= validation.importedDependencies
         valid &&
@@ -1643,7 +1694,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             // The original allocation profiles (1, 3) never attest a structural branch.
             // Profile 4 is read-only; 8 permits the bounded digital branch/write effects.
             val helperKind = kind == "helper" || kind == "singleton"
-            val compatible = if profile == Profile.ImmutableFsm then
+            val compatible = if continuousOnly then helperKind && effects.contains(4)
+            else if profile == Profile.ImmutableFsm then
               helperKind && effects.contains(64)
             else
               (helperKind &&
@@ -1749,7 +1801,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         tree match
           case application: Apply =>
             val symbol = application.fun.symbol
-            if globalInterfaceInitializers(symbol) then
+            if continuousOnly && globalInterfaceInitializers(symbol) then
+              fail("EFFECT", "guarded hdlRange cannot initialize Interface effects", application)
+            else if globalInterfaceInitializers(symbol) then
               application.args.size == 1 &&
               nestedCallback(application.args.head, Profile.Pure, depth + 1)
             else if instanceDomainMethods(symbol) then
@@ -1789,7 +1843,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 "behavioral callbacks admit only read-only structural value expressions",
                 application
               )
-            else if loops(symbol) || (ranges(symbol) && !permitsStructure) ||
+            else if loops(symbol) || (ranges(symbol) && !permitsStructure && !guardedRange(symbol)) ||
               (areaRanges(symbol) && !permitsAreaFamily)
             then
               fail("EFFECT", "nested effectful digital iteration is unsupported", application)
@@ -1811,19 +1865,28 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 else if (structuralBranches(symbol) || structuralFactories(symbol)) &&
                   argument.tpe.widen.dealias.derivesFrom(requiredClass("scala.Function0"))
                 then
+                  val statement = if structuralFactories(symbol) then allowGuardedRange
+                  else symbol.name.toString == "statement"
+                  val nested = if profile == Profile.Sequential || (continuousOnly && !statement)
+                  then Profile.Pure else profile
+                  val permitsGuarded = statement && !continuousOnly &&
+                    (profile == Profile.StructuralIf || profile == Profile.StructuralFamily)
                   argument match
                     case Apply(function, List(closure)) if structuralFactories(function.symbol) =>
-                      if profile == Profile.Sequential then
-                        nestedCallback(closure, Profile.Pure, depth + 1)
-                      else callback(closure, depth + 1)
-                    case _ =>
-                      if profile == Profile.Sequential then
-                        nestedCallback(argument, Profile.Pure, depth + 1)
-                      else callback(argument, depth + 1)
+                      nestedCallback(
+                        closure, nested, depth + 1, permitsGuarded,
+                        valueArm = structuralBranches(symbol) && !statement
+                      )
+                    case _ => nestedCallback(
+                        argument, nested, depth + 1, permitsGuarded,
+                        valueArm = structuralBranches(symbol) && !statement
+                      )
                 else if collections(symbol) && callbackArity(argument) > 0 then
                   nestedCallback(argument, Profile.Pure, depth + 1)
                 else if ranges(symbol) && callbackArity(argument) > 0 then
-                  nestedCallback(argument, Profile.StructuralRange, depth + 1)
+                  val nested = if guardedRange(symbol) then Profile.ContinuousRange
+                  else Profile.StructuralRange
+                  nestedCallback(argument, nested, depth + 1)
                 else if areaRanges(symbol) && callbackArity(argument) > 0 then
                   nestedCallback(argument, Profile.GeneratedArea, depth + 1)
                 else if ((permitsStructure && rangeClosures(symbol)) ||
@@ -1849,12 +1912,12 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             check(selection.qualifier, depth + 1) &&
             (collections(
               selection.symbol
-            ) || ((permitsStructure && ranges(
+            ) || (((permitsStructure || guardedRange(selection.symbol)) && ranges(
               selection.symbol
             )) || (permitsAreaFamily && areaRanges(selection.symbol))) ||
               reference(selection, depth + 1))
           case identifier: Ident => collections(identifier.symbol) ||
-            ((permitsStructure && ranges(identifier.symbol)) || (permitsAreaFamily && areaRanges(
+            (((permitsStructure || guardedRange(identifier.symbol)) && ranges(identifier.symbol)) || (permitsAreaFamily && areaRanges(
               identifier.symbol
             ))) || reference(identifier, depth + 1)
           case _ => fail("UNKNOWN", "unsupported callback call target", tree)
@@ -1865,7 +1928,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         sharedBudget,
         reportErrors,
         structuralDiagnostic = !sequential,
-        sequentialDiagnostic = sequential
+        sequentialDiagnostic = sequential,
+        continuousRangeRestriction = continuousOnly
       )
       val valid = trees.map(validation.check(_, depth)).forall(identity)
       importedDependencies ++= validation.importedDependencies
@@ -1936,9 +2000,26 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             false
         // Both authored arms are checked even when an earlier check fails. No runtime callback
         // exists until this shared validation has succeeded for the whole conditional.
-        val trueValid = check(tree.thenp, depth + 1)
-        val falseValid = check(tree.elsep, depth + 1)
-        resultValid && predicateValid && trueValid && falseValid
+        val statement = structural.resultType(tree).exists(_ =:= defn.UnitType)
+        val armProfile = if continuousOnly && !statement then Profile.Pure else profile
+        val arms = new Validation(
+          armProfile,
+          sharedBudget,
+          reportErrors,
+          structuralDiagnostic,
+          sequentialDiagnostic,
+          allowGuardedRange = statement && !continuousOnly &&
+            (profile == Profile.StructuralIf || profile == Profile.StructuralFamily),
+          continuousRangeRestriction = continuousOnly,
+          guardedRangeForbidden = guardedRangeForbidden || !statement
+        )
+        inheritLexicalContext(arms)
+        val trueValid = arms.check(tree.thenp, depth + 1)
+        val falseValid = arms.check(tree.elsep, depth + 1)
+        importedDependencies ++= arms.importedDependencies
+        resultValid && predicateValid && trueValid && falseValid &&
+        (dependenciesWithinBudget ||
+          fail("LIMIT", "structural arm dependencies exceed the bounded summary profile", tree))
 
     private def check(tree: Tree, depth: Int): Boolean =
       if !budget(tree, depth) then false

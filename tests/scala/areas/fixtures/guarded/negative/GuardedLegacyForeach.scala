@@ -8,5 +8,6 @@ final class GuardedLegacyForeach extends Module:
   clock:
     if choice == 0 then
       hdlRange(0, 2): i =>
-        val _ = i
+        hdlRange(0, 2): j =>
+          val _ = (i, j)
     else ()

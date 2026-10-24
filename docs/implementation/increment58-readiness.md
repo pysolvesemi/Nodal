@@ -3835,3 +3835,102 @@ Focused recipes are retained under `.work/f58-area-alias-identity/`: original
 `run_area_predecessor_parity_v1.py`. The original fixture source and failure
 are preserved separately; its old freeze is not a claim about the corrected
 current test source. No production rebuild was needed for the fixture correction.
+
+
+## Checkpoint 82: unit-step guarded legacy foreach
+
+Accepted focused prototype scope: existing callback-form `hdlRange` and
+`HdlRange.foreach` under an actual parameter-only structural statement guard,
+with unit step, continuous indexed digital assignments and pure/structural value
+RHS expressions. No public API, effect-summary bit, lane evaluator or mixed-effect
+partitioner was added. This is a partial F-159.B.4.2 implementation, not closure
+of that child or Foundation 58.
+
+### Canonical ownership and limits
+
+`DigitalCollectionCallbackPhase` retains the existing callback validator and
+budget, separating continuous guarded-body permissions from broader root/family
+permissions. The `GeneratedAreaApi` compatibility extension delegates to legacy
+foreach; it is not Area allocation. Imported helpers require existing Pure
+summaries; same-compilation bodies are inspected under the restricted context.
+`ConstructionSession` proves actual conditional/arm ancestry, captures bounds,
+retains canonical induction and source order, and poisons failed transactions.
+Value-producing structural choices cannot hide effectful ranges.
+
+Independent `StructuralIfModel` verification enforces the same continuous profile,
+including empty domains, without trusting Scala attestation. A shared `NodalOps`
+correction proves exact index literals defined directly in a verified structural
+arm for environment-free projection queries, using existing literal, scope,
+ordering and bounded region proofs. It does not change Module/Generate/i64 proofs
+or introduce another evaluator. The correction resolves an actual emitted-artifact
+dependency-root failure rather than substituting diagnostic IR.
+
+Further nested generation, state/register-next, behavioral/procedural/analog or
+Interface effects, storage, Instances and Area allocation remain outside this
+profile. Existing root/family permissions, default 65536 construction budget and
+independent native limits are unchanged. No performance or capacity improvement
+is claimed; the earlier whole-model construction gap remains open.
+
+### Focused executed evidence
+
+- Matched Scala API `27485ea4…f1602` and corrected plugin `211a1530…5faee`:
+  source compile, replay, runtime class origins, authoritative source projection,
+  deterministic bridge output, both defaults, empty range/clock context,
+  invalid alternative, foreign/runtime bounds, caught failure and fresh recovery.
+- Source rejection evidence composes the original passing prefix with six
+  independently checked causal diagnostic supplements. The original negative
+  runner was **not** an all-pass run. Storage, allocation, analog, host mutation,
+  hidden effects, nested generation and value-context restrictions remain checked.
+  A separately compiled genuine helper profile 8 is accepted by ordinary root
+  foreach and rejected at its guarded call with `STRUCTURAL-055-SUMMARY`.
+- Six predecessor fee observations and whole-131072 diagnostic snapshot/output
+  parity match checkpoint 81. The larger policy is diagnostic only, not default
+  acceptance or a new public capacity profile.
+- Native revision 3: **129/129** focused cases pass, including all 95 predecessors,
+  consumed index projections, bounds, ownership/order/unit/type controls, malformed
+  and direct-entry restrictions. Exact two-object replacement link and actual
+  dependency/header closure were verified. Binary SHA256:
+  `2687d760cde8fc075f2bf6a81a7c687cac6bac33676538103d0b6f56dcab4a50`.
+- Six unchanged actual Scala-generated MLIR artifacts pass that native verifier:
+  defaults zero/one, empty range, empty clock, root legacy and guarded Area
+  predecessors. No hand-authored or index-to-i64 diagnostic replacement is credited.
+
+Reproduction recipes and concise results are retained under ignored
+`.work/f58-guarded-legacy-foreach` (`run_fixture_v4.py`,
+`run_scalar_helper_consumer_v2.py`, `run_guarded_predecessor_parity_v2.py`) and
+`.work/f58-guarded-index-literal-native` (versioned `run.py` recipes and
+`r3.final-summary.json`, SHA256 `1265dd422b9d7198724e5edea1de5f807273064a93cb54d5b1b9c210740e0f19`).
+Original source, fixture, dependency-manifest and runtime failures remain retained;
+corrected receipts do not retroactively relabel those executions. Completed objects
+may be archived with exact hash/mode restoration recipes; restore before a rebuild.
+
+### Actual generated demonstration and open follow-on
+
+The compiled `Increment58GuardedLegacyRangeSource` contains:
+
+```scala
+hdlRange(lower, count, stride): i =>
+  val selected: Expr[UInt] = if i == 0 then first.at(i) else second.at(i)
+  output.writable.at(i) := selected
+```
+
+The accepted defaults use `lower = 0`, `stride = 1`. Actual bridge output retains
+one zero-result `nodal.generate` in the structural then arm, consuming
+`%shape_index_static_4`, `%structural_arm_6_arg2`, `%shape_index_static_5`, with
+`maximum_trip_count = 8 : i64` and `source_ordinal = 1 : i64`. This is actual
+Nodal MLIR and native verification, **not generated Verilog-* acceptance**.
+No held exporter, firtool, CI or full qualification was invoked.
+
+Nonunit native coverage is explicitly **not accepted**. The original stride-2
+fixture leaves lanes undriven and correctly fails. A separate fully driven Vec1
+witness with actual range `[0,1)`, step 2, maximum trip count 1 compiles and emits
+MLIR (`04babb3e…fbc38`) but still fails native physical coverage. Existing shared
+`ShapeModel` classifies every nonunit stride as strided and requires a complete
+residue set during coalescing, even for a singleton; this applies to root Generate
+as well as guarded Generate. Singleton normalization/coverage is an unchecked
+follow-on, not repaired or budget-relaxed here. Direct indexed writes outside the
+Generate remain unsupported; a failed complementary-write fixture is preserved.
+
+F-159.B.4.2, F-058.B.2.2, F-159.C.3.2 and broader mixed-effect/emission parents
+remain open. Architecture review accepts this narrow shared-owner repair and
+unit-step evidence only; no full feature, target HDL or whole-suite claim follows.

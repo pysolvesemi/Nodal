@@ -2408,6 +2408,22 @@ nodal::resolveShapeIndexProof(Value value, Operation *use,
     return ShapeIndexProof{{StaticShapeIndexIdentity::Literal, *number, nullptr},
                            ParameterIntegerBounds{*number, *number}};
   }
+  if (definition && value.getType().isIndex() &&
+      llvm::isa<StructuralIfOp>(definition->getParentOp())) {
+    // Projection queries have no supplied integer environment. A closed arm-local
+    // literal needs its exact lexical owner, not the Module-only static fallback.
+    unsigned remainingWork = digitalTypeMaximumNodes;
+    auto owner = inspectDigitalRegion(definition->getBlock(), remainingWork);
+    auto number = staticShapeLiteral(value);
+    if (failed(owner) || owner->kind != DigitalRegionKind::StructuralArm ||
+        owner->module != module || failed(number) || definition->getNumRegions() ||
+        definition->getNumSuccessors() ||
+        failed(verifyDigitalValueScope(value, use, remainingWork)) ||
+        !isDeclaredBeforeStructuredUse(definition, use))
+      return failure();
+    return ShapeIndexProof{{StaticShapeIndexIdentity::Literal, *number, nullptr},
+                           ParameterIntegerBounds{*number, *number}};
+  }
   auto identity = resolveStaticShapeIndexIdentity(module, value);
   auto bounds = inferStaticShapeIndexBounds(module, value);
   if (failed(identity) || failed(bounds))

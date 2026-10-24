@@ -255,10 +255,43 @@ namespace {
 struct Budget {
   unsigned work = 0;
 };
-LogicalResult verifyIf(Operation *, const ParameterIntegerEnvironment *, Budget &, unsigned);
-LogicalResult verifyGenerateBody(Operation *, Budget &, unsigned);
+// A guarded legacy range has continuous effects, not generated-family authority.
+// Keep this restriction separate from collection purity and propagate it through
+// the same recursive verifier, including independent operation entry points.
+enum class EffectProfile { Existing, ContinuousOnly };
+FailureOr<EffectProfile> lexicalEffectProfile(Operation *op, Budget &budget) {
+  EffectProfile profile = EffectProfile::Existing;
+  unsigned depth = 0;
+  for (Operation *scope = op; scope && !llvm::isa<ModuleOp>(scope); scope = scope->getParentOp()) {
+    if (++depth > 128 || ++budget.work > 65536) {
+      (void)reject(op, "effect ancestry exceeds its finite proof budget");
+      return failure();
+    }
+    // Once the guarded range has been encountered, restrictions apply only
+    // above it. Value choices inside its continuous body remain supported.
+    if (profile == EffectProfile::ContinuousOnly &&
+        (!llvm::isa<StructuralIfOp>(scope) || scope->getNumResults() != 0)) {
+      (void)reject(op, "guarded continuous generation requires statement-only non-generated ancestry");
+      return failure();
+    }
+    if (!llvm::isa<GenerateOp>(scope) || scope->getNumResults() != 0)
+      continue;
+    Operation *parent = scope->getParentOp();
+    if (!llvm::isa_and_nonnull<StructuralIfOp>(parent))
+      continue;
+    if (parent->getNumResults() != 0) {
+      (void)reject(scope, "guarded continuous generation requires a structural statement arm");
+      return failure();
+    }
+    profile = EffectProfile::ContinuousOnly;
+  }
+  return profile;
+}
+LogicalResult verifyIf(Operation *, const ParameterIntegerEnvironment *, Budget &, unsigned,
+                       EffectProfile);
+LogicalResult verifyGenerateBody(Operation *, Budget &, unsigned, EffectProfile);
 LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &environment, bool pure,
-                         Budget &budget, unsigned depth) {
+                         Budget &budget, unsigned depth, EffectProfile effects) {
   if (depth >= 128 || ++budget.work > 65536)
     return reject(op, "structural body exceeds its finite proof budget");
   auto at = environment.atUse(op);
@@ -270,7 +303,7 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
       return reject(op, "body operands require actual local SSA or explicit captures");
   auto family = op->getParentOfType<GenerateOp>();
   const bool generatedStorage = family && family->getNumResults() == 1;
-  if (!pure && !op->getParentOfType<HardwareLoopOp>()) {
+  if (!pure && effects == EffectProfile::Existing && !op->getParentOfType<HardwareLoopOp>()) {
     if (llvm::isa<BehavioralIfOp>(op))
       return verifyBehavioralIfOperation(op);
     if (llvm::isa<SequentialUpdateOp>(op))
@@ -278,19 +311,26 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
     if (llvm::isa<SequentialSelectOp>(op))
       return verifySequentialSelect(op);
   }
+  if (llvm::isa<GenerateOp>(op) && effects == EffectProfile::ContinuousOnly)
+    return reject(op, "guarded continuous generation does not admit further generation");
+  if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<GenerateOp>(op) &&
+      op->getNumResults() == 0 && llvm::isa_and_nonnull<StructuralIfOp>(op->getParentOp()) &&
+      op->getParentOp()->getNumResults() == 0)
+    return verifyGenerateBody(op, budget, depth + 1, EffectProfile::ContinuousOnly);
   if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<GenerateOp>(op) &&
       op->getNumResults() == 1 &&
       ((generatedStorage && op->getParentOp() == family) ||
        llvm::isa_and_nonnull<StructuralIfOp>(op->getParentOp())))
-    return verifyGenerateBody(op, budget, depth + 1);
-  if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<GeneratedMemberOp>(op))
+    return verifyGenerateBody(op, budget, depth + 1, effects);
+  if (!pure && effects == EffectProfile::Existing && !op->getParentOfType<HardwareLoopOp>() &&
+      llvm::isa<GeneratedMemberOp>(op))
     return success(succeeded(inspectGeneratedMember(op)));
-  if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<InstancePortOp>(op) &&
-      op->getNumOperands() == 2)
+  if (!pure && effects == EffectProfile::Existing && !op->getParentOfType<HardwareLoopOp>() &&
+      llvm::isa<InstancePortOp>(op) && op->getNumOperands() == 2)
     // Only an actual selected carrier may cross this lexical seam. The shared
     // inspector retains the exact family/ordinal capture chain and child owner.
     return success(succeeded(inspectInstancePort(op)));
-  if (!pure && !op->getParentOfType<HardwareLoopOp>() &&
+  if (!pure && effects == EffectProfile::Existing && !op->getParentOfType<HardwareLoopOp>() &&
       llvm::isa<InterfaceOp, InterfaceInstanceOp, InterfaceAbiOp, InterfaceBoundaryOp,
                 MemberAccessOp, InterfaceConnectOp, InterfaceDriveOp, InterfaceObserveOp>(op)) {
     // Structural admission never supplies role, type, domain or driver authority.
@@ -302,7 +342,7 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
                ? success(succeeded(inspectDigitalInterfaceBoundary(op)))
                : success();
   }
-  if (!pure && generatedStorage && op->getParentOp() == family) {
+  if (!pure && effects == EffectProfile::Existing && generatedStorage && op->getParentOp() == family) {
     if (llvm::isa<NodeOp, InstanceTerminalOp, ConnectOp>(op)) {
       // This admits only the exact scalar lexical carrier. Complete topology,
       // actual Interface permissions and child incidence remain conservative-
@@ -355,7 +395,7 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
   if (llvm::isa<StructuralIfOp>(op)) {
     if (pure && op->getNumResults() != 1)
       return reject(op, "pure callbacks require value-only structural choices");
-    return verifyIf(op, &*at, budget, depth + 1);
+    return verifyIf(op, &*at, budget, depth + 1, effects);
   }
   if (llvm::isa<CollectionOp>(op))
     return verifyDigitalCollectionOperation(op, &*at);
@@ -365,7 +405,8 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
     return verifyStaticPredicateOperation(op);
   if (llvm::isa<DigitalAssignOp>(op)) {
     if (pure || (text(op, "kind") != "continuous" &&
-                 !(!op->getParentOfType<HardwareLoopOp>() && text(op, "kind") == "register_next")))
+                 !(effects == EffectProfile::Existing && !op->getParentOfType<HardwareLoopOp>() &&
+                   text(op, "kind") == "register_next")))
       return reject(op, "this body admits no state or procedural effects");
     return verifyDigitalAssignmentOperation(op);
   }
@@ -507,7 +548,7 @@ FailureOr<SmallVector<BlockArgument, 8>> captureUseOrder(Block *body, unsigned &
   return result;
 }
 LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, Budget &budget,
-                       unsigned depth) {
+                       unsigned depth, EffectProfile effects) {
   if (depth >= 128 || ++budget.work > 65536)
     return reject(op, "conditional nesting/work budget exhausted");
   auto h = inspectStructuralIfHeader(op);
@@ -562,7 +603,7 @@ LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, 
       if (argument.getArgNumber() != index)
         return reject(op, "arm captures must retain deterministic first actual use order");
     for (Operation &child : *body) {
-      if (failed(verifyBody(&child, *context, pure, budget, depth + 1)))
+      if (failed(verifyBody(&child, *context, pure, budget, depth + 1, effects)))
         return failure();
       for (Value value : child.getResults())
         for (Operation *user : value.getUsers())
@@ -617,18 +658,20 @@ LogicalResult canonicalizeStructuralIfCaptures(Operation *op, unsigned &work,
   return success();
 }
 LogicalResult verifyStructuralIfOperation(Operation *op, const ParameterIntegerEnvironment *outer) {
+  Budget budget;
+  auto effects = lexicalEffectProfile(op, budget);
+  if (failed(effects))
+    return failure();
   if (!outer && op && isDigitalRegionOwner(op->getParentOp())) {
     auto contexts = digitalIntegerContextsAtUse(op);
     if (failed(contexts))
       return failure();
-    Budget budget;
     for (const auto &context : *contexts)
-      if (failed(verifyIf(op, &context, budget, 0)))
+      if (failed(verifyIf(op, &context, budget, 0, *effects)))
         return failure();
     return success();
   }
-  Budget budget;
-  return verifyIf(op, outer, budget, 0);
+  return verifyIf(op, outer, budget, 0, *effects);
 }
 LogicalResult verifyStructuralIfModel(Operation *module) {
   if (!llvm::isa_and_nonnull<ModuleOp>(module))
@@ -658,27 +701,36 @@ LogicalResult verifyStructuralIfModel(Operation *module) {
   return success();
 }
 namespace {
-LogicalResult verifyGenerateBody(Operation *op, Budget &budget, unsigned depth) {
+LogicalResult verifyGenerateBody(Operation *op, Budget &budget, unsigned depth,
+                                 EffectProfile effects) {
   if (depth >= 128 || ++budget.work > 65536)
     return reject(op, "structural body exceeds its finite proof budget");
   if (!llvm::isa_and_nonnull<GenerateOp>(op))
     return failure();
+  if (effects == EffectProfile::ContinuousOnly && failed(lexicalEffectProfile(op, budget)))
+    return failure();
   // Legacy attribute-bound Generate has its existing target-neutral contract.
   // Only the real SSA-domain form participates in this new digital admission.
+  if (effects == EffectProfile::ContinuousOnly &&
+      (!isDigitalRegionOwner(op) || op->getNumResults() != 0 ||
+       op->getParentOfType<CollectionOp>() || op->getParentOfType<HardwareLoopOp>() ||
+       op->getNumRegions() != 1 ||
+       !llvm::hasSingleElement(op->getRegion(0))))
+    return reject(op, "guarded continuous generation requires an actual zero-result SSA domain");
   if (!isDigitalRegionOwner(op))
     return success();
   bool digital = op->getNumResults() == 1;
   for (Operation &child : op->getRegion(0).front())
     digital |= llvm::isa<StructuralIfOp, StaticCompareOp, StaticLogicOp, DigitalAssignOp,
                          DigitalExprOp, CollectionOp>(child);
-  if (!digital)
+  if (!digital && effects == EffectProfile::Existing)
     return success(); // Preserve the separately owned analog/conservative profile.
   auto domain = resolveGeneratedDomain(op);
   if (failed(domain))
     return failure();
   for (Operation &child : op->getRegion(0).front()) {
     auto context = digitalGenerateIntegerContextAtUse(&child);
-    if (failed(context) || failed(verifyBody(&child, *context, false, budget, depth)))
+    if (failed(context) || failed(verifyBody(&child, *context, false, budget, depth, effects)))
       return failure();
   }
   if (llvm::any_of(op->getRegion(0).front(),
@@ -692,6 +744,14 @@ LogicalResult verifyGenerateBody(Operation *op, Budget &budget, unsigned depth) 
 } // namespace
 LogicalResult verifyDigitalGenerateBody(Operation *op) {
   Budget budget;
-  return verifyGenerateBody(op, budget, 0);
+  auto parentEffects = lexicalEffectProfile(op ? op->getParentOp() : nullptr, budget);
+  if (failed(parentEffects))
+    return failure();
+  if (*parentEffects == EffectProfile::ContinuousOnly)
+    return reject(op, "guarded continuous generation does not admit further generation");
+  auto effects = lexicalEffectProfile(op, budget);
+  if (failed(effects))
+    return failure();
+  return verifyGenerateBody(op, budget, 0, *effects);
 }
 } // namespace nodal

@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "api_sha256": "790f927c6eb3e251737ad0d54eec613aeee7d8f9ca75bd53856b80376ee6832b",
+  "groups": {
+    "policy": {
+      "fixtures": [
+        {
+          "maintained_path": "C2b2aControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aControls.scala",
+          "sha256": "609a6ef5936ffa47027a5002682b4c04a9fac5b8b87959fcfb4a4edd7792211f",
+          "bytes": 24170,
+          "compile": true
+        },
+        {
+          "maintained_path": "C2b2aRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aRoot.scala",
+          "sha256": "cd16a9827aed0c4b2f0437ee37636e55e368229a5f07797f43dac7f1deed2710",
+          "bytes": 1102,
+          "compile": true
+        },
+        {
+          "maintained_path": "AutomaticPolicy.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/automatic-policy/AutomaticPolicy.scala",
+          "sha256": "9be69b93575d5e7e407becc0d096bb7bc0463625eaff631003dc4091a1bc71b2",
+          "bytes": 5269,
+          "compile": true
+        },
+        {
+          "maintained_path": "AutomaticPolicyRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/automatic-policy/AutomaticPolicyRoot.scala",
+          "sha256": "c5dd9f9ca4c07a21499d88f40dd182a578639efecef431f4f73605a07b3fc153",
+          "bytes": 403,
+          "compile": true
+        }
+      ]
+    }
+  },
+  "suites": {
+    "driven-17-plus-calibration": {
+      "group": "policy",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [],
+      "success": [
+        "PASS C2b2a new proxy, drain and finalized cache reuse",
+        "PASS C2b2a copied_unregistered",
+        "PASS C2b2a late_occurrence",
+        "PASS C2b2a late_foreign_type_root",
+        "PASS C2b2a cached_mapping",
+        "PASS C2b2a cached_target",
+        "PASS C2b2a cached_formal",
+        "PASS C2b2a permit_missing",
+        "PASS C2b2a permit_consumed",
+        "PASS C2b2a permit_foreign",
+        "PASS C2b2a permit_wrong_kind",
+        "PASS C2b2a permit_wrong_type",
+        "PASS C2b2a permit_wrong_name",
+        "PASS C2b2a permit_dimensions",
+        "PASS C2b2a permit_boundary",
+        "PASS C2b2a same-route full-finish calibration",
+        "PASS C2b2a post_registration_failure",
+        "PASS C2b2a fresh recovery"
+      ]
+    },
+    "automatic-precompleted": {
+      "group": "policy",
+      "main": "automaticpolicy.AutomaticPolicy",
+      "arguments": [],
+      "success": [
+        "PASS automatic policy=registered-construction-diagnostic-131072"
+      ]
+    }
+  },
+  "default_suites": [
+    "driven-17-plus-calibration",
+    "automatic-precompleted"
+  ]
+}

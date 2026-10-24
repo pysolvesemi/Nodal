@@ -2225,3 +2225,43 @@ reached 4,558,848 bytes, exceeding its 3 MiB suballowance despite staying within
 the whole-stage cap. This overrun is retained honestly; only separately allowed
 compact finalization followed. Measurements are not a continuous-peak guarantee.
 No CI, broad qualification, publication retry or held consumer action occurred.
+
+## Checkpoint 64: driven input and automatic-owner diagnostic witnesses
+
+Tests and documentation only: the production API and all 97 effective source
+inputs are unchanged from checkpoint 63. A separately named driven witness adds
+one real public assignment from the existing completed singleton scalar to its
+selected child-input proxy. Canonical assignment operands, domain, source ordinal,
+source map and final snapshot linkage are asserted. Metadata-only exact accounting
+continues to reject this operation, so the existing coarse fallback remains active.
+No driver count is fabricated and no hierarchy or CDC validator is relaxed.
+
+The maintained runner freshly compiles four sources and passes two mains. The
+driven main passes the seventeen original cases on this valid topology plus one
+separately named calibration. Full publication uses 117,839 diagnostic units;
+calibration finishes using 118,409. Both fresh Sessions execute selection through
+the same callsite after identical paid observations. Its measured 11,182-unit cost
+allows the negative to debit monotonically to one unit short of completion. It
+then fails at the actual final registration charge, retaining exactly one stamped
+proxy and source entry but no binding, with zero balance, stale queries, restored
+scopes, poison, no rollback and fresh recovery. Earlier calibration failures are
+retained rather than counted as successful post-registration tests.
+
+The second main proves automatic owner and policy activation during normal finish
+after manual singleton precompletion. It checks the exact canonical shape-index
+projection, result identity, policy tag and debt, with zero callbacks and 25,448
+units used. It does not demonstrate automatic pending-cell completion. The earlier
+assertion expecting an unused value in reachable digital expressions was corrected
+to its actual shape-index representation without changing hardware.
+
+See the [driven diagnostic guide](../../tests/scala/domain-hierarchy/fixtures/driven-diagnostic-policy/DRIVEN_DIAGNOSTIC.md).
+The fixed 131,072-unit policy remains diagnostic-only. The default 65,536-unit
+positive remains unaccepted, and the original undriven witness remains invalid.
+No exact-accounting gate, budget, public callback or context admission changed.
+The source partition and changed diagnostic setup are recorded; no equality with
+the original default workload is claimed. Foundation 58 remains unfinished.
+
+The complete fixture slice used 2,060,288 allocated bytes within its separately
+approved 2 MiB allowance, while the existing 62 MiB stage cap and free-space reserve
+remained intact. No API rebuild, CI, broad qualification, publication retry or held
+consumer action was performed.

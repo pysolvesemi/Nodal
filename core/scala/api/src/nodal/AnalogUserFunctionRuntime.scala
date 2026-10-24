@@ -118,6 +118,9 @@ private[nodal] object AnalogUserFunctionRuntime:
   final class Registry:
     private val definitions = mutable.LinkedHashMap.empty[(Long, String), Definition]
 
+    /** Read-only eligibility proof; the caller charges its one inventory inspection. */
+    def publicationEmpty: Boolean = definitions.isEmpty
+
     def definition(module: Long, name: String): Definition =
       definitions.getOrElse(module -> name, fail(5, s"unresolved analog function '$name'"))
 
@@ -155,6 +158,8 @@ private[nodal] object AnalogUserFunctionRuntime:
       new AnalogFunction(this, module, definition, dataType)
 
     def snapshots(owner: Long => String): Vector[Snapshot] =
+      // Empty-profile dispatch, vector copy, map and sort still execute.
+      ConstructionKernel.chargePublicationWork(4L)
       definitions.toVector.map((key, value) => Snapshot(owner(key._1), value))
         .sortBy(value => (value.owner, value.definition.name))
 
@@ -162,6 +167,7 @@ private[nodal] object AnalogUserFunctionRuntime:
   def semanticPath(owner: String, name: String): String = s"$owner.@function.$name"
 
   def sourceMap(snapshots: Vector[Snapshot]): Vector[SourceMapEntry] =
+    ConstructionKernel.chargePublicationWork(3L) // Dispatch, empty flatMap and sort.
     snapshots.flatMap: snapshot =>
       val definition = snapshot.definition
       val base = semanticPath(snapshot.owner, definition.name)

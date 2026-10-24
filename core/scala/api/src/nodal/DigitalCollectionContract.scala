@@ -6,8 +6,8 @@ package nodal
 private[nodal] object DigitalCollectionContract:
   val Operation = "digital_collection"
   val Argument = "collection_argument"
-  val Kinds: Set[String] = Set("map", "zip_with", "fold_left", "scan_left") ++
-    DigitalReductionContract.Kinds
+  val OrdinaryKinds: Set[String] = Set("map", "zip_with", "fold_left", "scan_left")
+  val Kinds: Set[String] = OrdinaryKinds ++ DigitalReductionContract.Kinds
 
   def fail(number: Int, message: String, semanticPath: Option[String] = None): Nothing =
     scala.util.Failure[Nothing](
@@ -39,11 +39,33 @@ private[nodal] object DigitalCollectionContract:
 
   def arguments(kind: String, inputs: Vector[Expr[?]], seed: Option[Expr[?]])
       : Vector[(DataType[?], String)] =
+    DeferredResultType.requireFinal(inputs ++ seed, "collection argument contract")
+    argumentSignature(kind, inputs, seed, checkDimensions = true)
+
+  /** Intermediate shape only. The session must retain exact pending operands and discharge the
+    * strict arguments/result contracts before any complete snapshot can leave construction.
+    */
+  def constructionArguments(kind: String, inputs: Vector[Expr[?]], seed: Option[Expr[?]])
+      : Vector[(DataType[?], String)] =
+    if !OrdinaryKinds(kind) then fail(1, "deferred construction requires an ordinary collection")
+    argumentSignature(
+      kind,
+      inputs,
+      seed,
+      checkDimensions = !inputs.exists(DeferredResultType.pending)
+    )
+
+  private def argumentSignature(
+      kind: String,
+      inputs: Vector[Expr[?]],
+      seed: Option[Expr[?]],
+      checkDimensions: Boolean
+  ): Vector[(DataType[?], String)] =
     if !Kinds.contains(kind) || inputs.size != (if kind == "zip_with" then 2 else 1) ||
       seed.nonEmpty != Set("fold_left", "scan_left").contains(kind)
     then fail(1, "collection kind, input count and seed disagree")
     val vectors = inputs.map(vector)
-    if kind == "zip_with" then
+    if kind == "zip_with" && checkDimensions then
       // Use the existing exact static identity algebra, never matching defaults/cardinality.
       val left = KernelTypeDescriptor("Vec", Vector(Bool, vectors(0)._2))
       val right = KernelTypeDescriptor("Vec", Vector(Bool, vectors(1)._2))
@@ -64,6 +86,7 @@ private[nodal] object DigitalCollectionContract:
       seed: Option[Expr[?]],
       yielded: Expr[?]
   ): KernelTypeDescriptor =
+    DeferredResultType.requireFinal(Vector(input, yielded) ++ seed, "collection result contract")
     val yieldedType = descriptor(yielded)
     seed.foreach: initial =>
       if !DigitalEnumContract.sameType(descriptor(initial), yieldedType) then
@@ -78,6 +101,25 @@ private[nodal] object DigitalCollectionContract:
         "Vec",
         Vector(CandidateRuntime.dataTypeFromDescriptor(elementType), vector(input)._2)
       )
+
+  /** Retains the original complete descriptor, without asserting pending equality or bounds. */
+  def constructionResult(
+      kind: String,
+      input: Expr[?],
+      seed: Option[Expr[?]],
+      yielded: Expr[?]
+  ): KernelTypeDescriptor =
+    if !OrdinaryKinds(kind) then fail(1, "deferred construction requires an ordinary collection")
+    if !(Vector(input, yielded) ++ seed).exists(DeferredResultType.pending) then
+      result(kind, input, seed, yielded)
+    else
+      val element = seed.map(descriptor).getOrElse(descriptor(yielded))
+      if kind == "fold_left" then element
+      else
+        KernelTypeDescriptor(
+          "Vec",
+          Vector(CandidateRuntime.dataTypeFromDescriptor(element), vector(input)._2)
+        )
 
   def map[A <: Data, B <: Data](value: Expr[Vec[A]], function: Expr[A] => Expr[B])
       : Expr[Vec[B]] =
@@ -120,6 +162,5 @@ private[nodal] object DigitalCollectionContract:
       if balanced then "reduce_balanced" else "reduce_left",
       Vector(value),
       None
-    ): arguments =>
-      function(arguments(0).asInstanceOf[Expr[A]], arguments(1).asInstanceOf[Expr[A]])
-    .asInstanceOf[Expr[A]]
+    )(DigitalCollectionCallback.reductionBody(function))
+      .asInstanceOf[Expr[A]]

@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "api_sha256": "4a3e63583768836d83827fb2eb4e2fe28bd2a2947696a2d59fce4a072c83a204",
+  "baseline_api_sha256": "4a3e63583768836d83827fb2eb4e2fe28bd2a2947696a2d59fce4a072c83a204",
+  "scope": "bounded eager FSM occurrence/stack storage and repeated-session snapshot determinism only; no A/B API comparison, target execution, capacity promotion or F-058.F completion",
+  "success_label": "PASS bounded eager FSM scale",
+  "groups": {
+    "scale": {
+      "isolated_fixtures": true,
+      "fixtures": [
+        {
+          "maintained_path": "FsmScale.scala",
+          "virtual_path": "tests/scala/reusable-fsm/fixtures/scale/FsmScale.scala",
+          "sha256": "904cd8379a82fdfff1decc0c919245594ac13f491052909122e783bac86dcff6",
+          "bytes": 9794,
+          "compile": true
+        }
+      ]
+    }
+  },
+  "suites": {
+    "single": {
+      "group": "scale",
+      "main_class": "nodal.internal.testkit.fsmscale.FsmScale",
+      "arguments": [
+        "single"
+      ],
+      "success": [
+        "PASS profile=single"
+      ],
+      "api": "candidate"
+    },
+    "parallel": {
+      "group": "scale",
+      "main_class": "nodal.internal.testkit.fsmscale.FsmScale",
+      "arguments": [
+        "parallel"
+      ],
+      "success": [
+        "PASS profile=parallel"
+      ],
+      "api": "candidate"
+    },
+    "nested": {
+      "group": "scale",
+      "main_class": "nodal.internal.testkit.fsmscale.FsmScale",
+      "arguments": [
+        "nested"
+      ],
+      "success": [
+        "PASS profile=nested"
+      ],
+      "api": "candidate"
+    }
+  },
+  "default_suites": [
+    "single",
+    "parallel",
+    "nested"
+  ],
+  "comparisons": []
+}

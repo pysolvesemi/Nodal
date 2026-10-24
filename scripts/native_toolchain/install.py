@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from toolchain_lock import required_install_paths, version_at_least
+from native_toolchain.overlay import apply_overlay, identity, load_overlay
 from native_toolchain.state import (
     BootstrapError,
     cache_home,
@@ -142,15 +143,21 @@ def install(
     jobs: int | None = None,
     force: bool = False,
     dry_run: bool = False,
+    overlay: str | None = None,
 ) -> dict[str, Any]:
-    plan = plan_install(root, lock, mode=mode, prefix=prefix, host=host, jobs=jobs)
+    plan = plan_install(root, lock, mode=mode, prefix=prefix, host=host, jobs=jobs, overlay=overlay)
     if dry_run:
         return plan
 
     selected_prefix = Path(plan["prefix"])
+    if selected_prefix.exists() and overlay is not None:
+        errors = validate_install(selected_prefix, lock, host=host, root=root, required_overlay=overlay)
+        if not errors:
+            return plan | {"status": "already-installed"}
+        raise BootstrapError("managed overlay requires a fresh destination; --force never replaces a base or invalid installation")
     if selected_prefix.exists():
         if not force:
-            errors = validate_install(selected_prefix, lock, host=host)
+            errors = validate_install(selected_prefix, lock, host=host, root=root)
             if not errors:
                 return plan | {"status": "already-installed"}
             raise BootstrapError(
@@ -170,10 +177,13 @@ def install(
         stage = Path(temporary) / "extract"
         safe_extract(archive_path, stage)
         install_host = (plan["host"]["os"], plan["host"]["arch"])
+        # Overlay builds are transactional and never compile into a user's
+        # base installation. The verified archive supplies all ABI inputs.
+        destination = Path(temporary) / "prefix" if overlay is not None else selected_prefix
         if plan["mode"] == "prebuilt":
             shutil.copytree(
                 _find_prebuilt_root(stage, plan["host"]["os"]),
-                selected_prefix,
+                destination,
                 symlinks=True,
             )
         else:
@@ -186,12 +196,27 @@ def install(
                 jobs=jobs,
             )
             _run(commands)
-        write_manifest(selected_prefix, lock, mode=plan["mode"], host=install_host)
+        repair = None
+        if overlay is not None:
+            check_source_host_tools(lock)
+            profile = load_overlay(root, lock, overlay)
+            if identity(profile) != plan["overlay"]:
+                raise BootstrapError("checked overlay identity changed during installation")
+            repair = apply_overlay(destination, profile, Path(temporary), cache_home(), download, jobs)
+        write_manifest(destination, lock, mode=plan["mode"], host=install_host, overlay=repair)
+        if overlay is not None:
+            errors = validate_install(destination, lock, host=install_host, root=root, required_overlay=overlay)
+            if errors:
+                raise BootstrapError("staged overlay failed validation: " + "; ".join(errors))
+            if selected_prefix.exists():
+                raise BootstrapError("overlay destination appeared during installation; refusing replacement")
+            destination.rename(selected_prefix)
 
     errors = validate_install(
         selected_prefix,
         lock,
         host=(plan["host"]["os"], plan["host"]["arch"]),
+        root=root, required_overlay=overlay,
     )
     if errors:
         raise BootstrapError("installed toolchain failed validation:\n  - " + "\n  - ".join(errors))

@@ -10,6 +10,8 @@ import java.lang.annotation.Target;
  * Profile 4 attests read-only helpers/singletons; profile 8 permits the bounded structural
  * conditional and continuous-write profile for helpers/singletons, without allocation.
  * Profile 16 permits behavioral guard/register-update helpers, with pure predicates.
+ * Profile 128 permits independently bounded generated Area families in structural arms;
+ * it does not expand profile 8 or admit allocation in pure, procedural or behavioral callbacks.
  * The frontend validates the kind, exact signature, profile and transitive dependency records.
  * User source must not declare this annotation. It is a compiler ABI, not a security boundary.
  */

@@ -4,6 +4,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 
 namespace nodal {
 
@@ -17,6 +18,19 @@ mlir::LogicalResult materializeConservativeConnectivity(mlir::ModuleOp module);
 /// component contract. Partial components retain local topology evidence but
 /// do not claim a complete local equation boundary.
 bool isPartialPhysicalComponent(mlir::Operation *module);
+
+/// Bounded checked view of an actual exported conservative occurrence.
+/// The shared inspector owns the ordered original selection tuple; ParameterModel
+/// owns its positionally matched domains. Borrowed SSA survives through adaptation.
+struct ConservativeGeneratedSelection {
+  mlir::Operation *declaration = nullptr;
+  GeneratedSelectionProof selection;
+  llvm::SmallVector<GeneratedDomain, 2> domains;
+  /// Only the existing one-axis child profile admits a symbolic physical extent.
+  mlir::Operation *extentParameter = nullptr;
+};
+mlir::FailureOr<ConservativeGeneratedSelection>
+resolveConservativeGeneratedSelection(mlir::Operation *boundary);
 
 /// Actual conservative capability over the shared element-neutral map.
 struct ConservativeShape {
@@ -34,6 +48,8 @@ struct ConservativeEndpoint {
   mlir::Value value;
   ConservativeShape shape;
   mlir::Operation *instance = nullptr;
+  /// For a verified Interface member, this is its actual endpoint declaration;
+  /// shape.declaration is its canonical member_access retaining the complete path.
   mlir::Operation *port = nullptr;
   mlir::Operation *declarationScope = nullptr;
   mlir::Operation *useScope = nullptr;

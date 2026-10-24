@@ -89,13 +89,19 @@ private[nodal] final case class KernelDeclarationSnapshot(
     conservativeDimensions: Vector[String] = Vector.empty,
     generatedScope: Option[KernelGeneratedScope] = None,
     resolvedDomain: Option[String] = None,
-    instancePort: Option[KernelInstancePortSnapshot] = None
+    instancePort: Option[KernelInstancePortSnapshot] = None,
+    interfaceBoundary: Option[KernelInterfaceBoundarySnapshot] = None,
+    resolvedBoundary: Option[KernelInterfaceBoundarySnapshot] = None,
+    resolvedMember: Option[KernelInterfaceMemberOrigin] = None,
+    conservativeMember: Option[KernelInterfaceMemberOrigin] = None
 )
 
 private[nodal] final case class KernelInstancePortSnapshot(
     instance: String,
     port: String,
-    direction: String
+    direction: String,
+    selection: Option[KernelGeneratedMemberSnapshot] = None,
+    region: Option[String] = None
 )
 
 /** Executable immediate-child binding; actual is always parent-local, unlike resolved occurrence
@@ -172,7 +178,10 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     crossing: Option[KernelExecutableCrossingSnapshot] = None,
     reset: Option[KernelResetSnapshot] = None,
     clock: Option[KernelClockSnapshot] = None,
-    waiver: Option[KernelExecutableWaiverSnapshot] = None
+    waiver: Option[KernelExecutableWaiverSnapshot] = None,
+    generatedMember: Option[KernelGeneratedMemberSnapshot] = None,
+    hierarchyDriver: Boolean = false,
+    interfaceMember: Option[KernelInterfaceMemberOrigin] = None
 )
 
 private[nodal] final case class KernelClockSnapshot(
@@ -350,10 +359,12 @@ private[nodal] final case class KernelFlatFsmState(
 )
 private[nodal] final case class KernelFlatFsmTransition(
     sourceCase: String,
-    destinationCase: String,
+    destinationCase: Option[String],
     mode: String,
     guard: String,
-    sourceOrdinal: Int
+    sourceOrdinal: Int,
+    kind: String = "ordinary",
+    resumeCase: Option[String] = None
 )
 private[nodal] final case class KernelFlatFsmAction(
     path: String,
@@ -363,6 +374,14 @@ private[nodal] final case class KernelFlatFsmAction(
     sourceOrdinal: Int,
     captures: Vector[String],
     arguments: Vector[KernelDigitalRegionArgument]
+)
+private[nodal] final case class KernelFlatFsmControl(
+    storage: String,
+    restart: String,
+    cancel: String,
+    enable: String,
+    entered: String,
+    exited: String
 )
 private[nodal] final case class KernelFlatFsmSnapshot(
     path: String,
@@ -382,7 +401,51 @@ private[nodal] final case class KernelFlatFsmSnapshot(
     actions: Vector[KernelFlatFsmAction],
     nextLocal: String,
     transitionTaken: String,
-    sourceOrdinal: Int
+    sourceOrdinal: Int,
+    control: Option[KernelFlatFsmControl] = None,
+    composition: Option[KernelFsmCompositionSnapshot] = None,
+    timerStorage: Option[String] = None,
+    timerEdges: Vector[KernelFsmTimerEdge] = Vector.empty,
+    transferEdges: Vector[KernelFsmTransferEdge] = Vector.empty,
+    stack: Option[KernelFsmStack] = None
+)
+private[nodal] final case class KernelFsmTimerEdge(ordinal: Int, cycles: Int, guard: String)
+private[nodal] final case class KernelFsmTransferEdge(
+    ordinal: Int,
+    guard: String,
+    payload: String,
+    valid: String,
+    ready: String
+)
+private[nodal] final case class KernelFsmChildGroup(
+    ownerCase: String,
+    children: Vector[String],
+    restart: String,
+    cancel: String,
+    enable: String
+)
+private[nodal] final case class KernelFsmJoinSnapshot(
+    result: String,
+    ownerCase: String,
+    children: Vector[String],
+    policy: String,
+    selection: String
+)
+private[nodal] final case class KernelFsmCompositionSnapshot(
+    root: String,
+    parent: Option[String],
+    ownerCase: Option[String],
+    slot: Option[String],
+    establishment: String,
+    groups: Vector[KernelFsmChildGroup],
+    joins: Vector[KernelFsmJoinSnapshot],
+    definitionName: String,
+    definitionHash: String,
+    fragments: Vector[(String, Vector[String])],
+    occurrences: Int,
+    records: Int,
+    depth: Int,
+    completionPossible: Boolean
 )
 private[nodal] final case class KernelEnumSwitchSnapshot(
     path: String,
@@ -400,7 +463,8 @@ private[nodal] final case class KernelEnumSwitchSnapshot(
 private[nodal] final case class KernelDigitalGeneratedBody(
     captures: Vector[String],
     arguments: Vector[KernelDigitalRegionArgument],
-    sourceOrdinal: Int
+    sourceOrdinal: Int,
+    parentRegion: Option[String] = None
 )
 
 private[nodal] final case class KernelGeneratedRegionSnapshot(
@@ -414,8 +478,12 @@ private[nodal] final case class KernelGeneratedRegionSnapshot(
     maximum: Option[Int],
     maximumTripCount: Int,
     declarations: Vector[String],
-    digitalBody: Option[KernelDigitalGeneratedBody] = None
-)
+    digitalBody: Option[KernelDigitalGeneratedBody] = None,
+    yieldedArea: Option[String] = None,
+    exports: Vector[KernelGeneratedAreaExport] = Vector.empty
+):
+  /** Legacy direct generated ancestry remains the lexical edge when no arm edge is present. */
+  def lexicalParent: Option[String] = digitalBody.flatMap(_.parentRegion).orElse(parent)
 
 private[nodal] final case class KernelShapeIndexSnapshot(
     path: String,
@@ -449,7 +517,14 @@ private[nodal] final case class KernelModuleSnapshot(
     className: String,
     domains: Vector[KernelDomainSnapshot],
     declarations: Vector[KernelDeclarationSnapshot],
-    instances: Vector[KernelInstanceSnapshot]
+    instances: Vector[KernelInstanceSnapshot],
+    externalName: Option[String] = None
+)
+
+private[nodal] final case class KernelInterfaceMemberOrigin(
+    endpoint: String,
+    member: String,
+    role: String
 )
 
 private[nodal] final case class KernelResolvedNetSnapshot(
@@ -458,7 +533,9 @@ private[nodal] final case class KernelResolvedNetSnapshot(
     mode: String,
     placement: String,
     profile: String,
-    operations: Vector[String]
+    operations: Vector[String],
+    boundary: Option[KernelInterfaceBoundarySnapshot] = None,
+    member: Option[KernelInterfaceMemberOrigin] = None
 )
 
 private[nodal] final case class KernelTopologyEdge(
@@ -589,6 +666,7 @@ private[nodal] final case class ConstructionSnapshot(
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
     waivers: Vector[KernelWaiverSnapshot] = Vector.empty,
     generatedRegions: Vector[KernelGeneratedRegionSnapshot] = Vector.empty,
+    areas: Vector[KernelAreaSnapshot] = Vector.empty,
     shapeIndices: Vector[KernelShapeIndexSnapshot] = Vector.empty,
     shapeViews: Vector[KernelShapeViewSnapshot] = Vector.empty,
     conservativeArrayBindings: Vector[KernelConservativeArrayBindingSnapshot] = Vector.empty,
@@ -634,8 +712,8 @@ private[nodal] final case class KernelSelectedCapture(
 )
 
 private final case class DomainRef(module: Long, index: Int)
-private final case class DeclarationRef(module: Long, index: Int)
-private final case class ExpressionRef(module: Long, index: Int)
+private final case class DeclarationRef(module: Long, index: Int) extends AllocationIdentity
+private final case class ExpressionRef(module: Long, index: Int) extends AllocationIdentity
 
 private final case class DomainRecord(
     reference: DomainRef,
@@ -664,9 +742,14 @@ private final class GeneratedRegionRecord(
     val upperExclusive: Any,
     val step: Any,
     val maximum: Option[Int],
-    val maximumTripCount: Int
+    val domain: IterationDomain.Structural,
+    val areaFamily: Boolean = false
 ):
+  def maximumTripCount: Int = domain.maximumTripCount
   val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
+  var yieldedArea: Option[AreaRecord] = None
+  var familyHandle: Option[GeneratedAreas[?]] = None
+  var digitalRegion: Option[DigitalValueRegionRecord] = None
 
 private final case class ConservativeArrayBindingRecord(
     left: DeclarationRef | ExpressionRef,
@@ -751,7 +834,7 @@ private final class InstanceRecord(
     val lexicalDomain: Option[ClockDomain],
     val captured: Boolean,
     val generatedScope: Option[GeneratedRegionRecord] = None
-):
+) extends AllocationIdentity:
   var defaultBinding: Option[ClockDomain] = None
   var defaultBindingSource: Option[SourceSpan] = None
   val namedBindingSources: mutable.Map[ClockDomain, SourceSpan] = mutable.Map.empty
@@ -770,6 +853,15 @@ private final class ModuleRecord(
   var expressionCount: Int = 0
   var scaffoldExpressionCount: Int = 0
   var attached: Boolean = parentAtConstruction.isEmpty
+  var externalName: Option[String] = None
+
+/** Immutable construction provenance, retained by the existing complete Interface definition. */
+private[nodal] final case class InterfaceDefinitionContext(
+    owner: ModuleRecord,
+    region: DigitalValueRegionRecord,
+    sourceOrdinal: Int,
+    source: Option[SourceSpan]
+)
 
 private final case class Operation(
     owner: Long,
@@ -821,6 +913,18 @@ private final class BehavioralIfRecord(
 
 private final class BehavioralChainCursor(val root: ExpressionRef, var tail: BehavioralIfRecord)
 
+/** Non-Data argument in the same ordered lexical capture owner as ordinary values. */
+private[nodal] final class GeneratedFamilyArgument(
+    val region: DigitalValueRegionRecord,
+    val position: Int,
+    val family: GeneratedRegionRecord
+)
+
+private[nodal] type DigitalCaptureValue = Expr[?] | GeneratedRegionRecord | GeneratedFamilyArgument
+private[nodal] type DigitalCaptureKey = DeclarationRef | ExpressionRef | GeneratedRegionRecord |
+  GeneratedFamilyArgument
+private[nodal] type DigitalRegionArgument = KernelExpr[?] | GeneratedFamilyArgument
+
 /** Mutable lexical capture state owned exclusively by ConstructionSession. */
 private final class DigitalValueRegionRecord(
     val reference: ExpressionRef,
@@ -849,8 +953,9 @@ private final class DigitalValueRegionRecord(
     case DigitalRegionKind.BoundedLoop | DigitalRegionKind.Generate | DigitalRegionKind.StructuralArm | DigitalRegionKind.BehavioralArm | DigitalRegionKind.FsmAction | DigitalRegionKind.SwitchArm =>
       true
     case DigitalRegionKind.Collection => false
-  val arguments: mutable.ArrayBuffer[(KernelExpr[?], String)] = mutable.ArrayBuffer.empty
-  val captures: mutable.LinkedHashMap[DeclarationRef | ExpressionRef, (Expr[?], KernelExpr[?])] =
+  val arguments: mutable.ArrayBuffer[(DigitalRegionArgument, String)] = mutable.ArrayBuffer.empty
+  val captures
+      : mutable.LinkedHashMap[DigitalCaptureKey, (DigitalCaptureValue, DigitalRegionArgument)] =
     mutable.LinkedHashMap.empty
   var expressionCount: Int = 0
   var assignmentCount: Int = 0
@@ -890,3 +995,56 @@ private final case class DigitalLoopHeader(
     sourceOrdinal: Int,
     generated: Option[GeneratedRegionRecord] = None
 )
+
+private[nodal] final case class KernelFsmStack(
+    capacity: Int,
+    pointerWidth: Int,
+    pointerStorage: String,
+    frameStorage: Vector[String],
+    overflow: Option[String],
+    underflow: Option[String],
+    invalidFrame: Option[String]
+)
+
+/** Private allocation metadata is not a case-class key or serialized ordering field. */
+private[nodal] final case class ConstructionAllocation(
+    session: AnyRef,
+    module: ModuleRecord,
+    serial: Long,
+    region: Option[DigitalValueRegionRecord],
+    generation: Option[GeneratedRegionRecord],
+    area: Option[AreaRecord]
+)
+
+private[nodal] trait AllocationIdentity:
+  private var allocation: Option[ConstructionAllocation] = None
+  private[nodal] final def constructionAllocation: Option[ConstructionAllocation] = allocation
+  private[nodal] final def stampConstructionAllocation(value: ConstructionAllocation): Unit =
+    require(allocation.isEmpty, "canonical identity may be stamped only once")
+    allocation = Some(value)
+
+private[nodal] final case class ConstructionRootIdentity(
+    value: AnyRef,
+    reference: DeclarationRef | ExpressionRef
+)
+
+/** C2b.1 admits only the already supported ordinary-root context, not a callback scope. */
+private[nodal] final case class ConstructionRequestContext(
+    session: AnyRef,
+    module: ModuleRecord,
+    input: Expr[?],
+    inputReference: DeclarationRef | ExpressionRef,
+    resultReference: ExpressionRef,
+    frontier: Long,
+    roots: Vector[ConstructionRootIdentity],
+    sourceSlot: Int
+)
+
+private[nodal] trait ConstructionRequestCarrier:
+  private var request: Option[ConstructionRequestContext] = None
+  private[nodal] final def constructionRequest: Option[ConstructionRequestContext] = request
+  private[nodal] final def attachConstructionRequest(value: ConstructionRequestContext): Unit =
+    require(request.isEmpty, "construction request may be attached only once")
+    request = Some(value)
+
+private[nodal] final case class ConstructionRequestChildren(values: Iterator[?])

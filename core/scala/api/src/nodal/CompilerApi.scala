@@ -45,8 +45,18 @@ final case class InterfaceAbiEntry(
     role: String,
     access: String,
     dataType: String,
-    domain: String
+    domain: Option[String]
 )
+object InterfaceAbiEntry:
+  def apply(
+      logicalPath: String,
+      emittedPath: String,
+      role: String,
+      access: String,
+      dataType: String,
+      domain: String
+  ): InterfaceAbiEntry =
+    new InterfaceAbiEntry(logicalPath, emittedPath, role, access, dataType, Some(domain))
 
 /** Deterministic classification, ABI, source-map, and schedule evidence. */
 final case class DesignReport(

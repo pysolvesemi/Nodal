@@ -10,11 +10,16 @@
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ResetModel.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 #include "nodal/Dialect/Nodal/WaiverModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
+
+#include <algorithm>
 
 using namespace mlir;
 namespace nodal {
@@ -40,21 +45,97 @@ Operation *local(Operation *module, Attribute reference) {
   Operation *result = module && symbol ? SymbolTable::lookupSymbolIn(module, symbol) : nullptr;
   return result && result->getParentOp() == module ? result : nullptr;
 }
+/// Retain actual lexical ancestry. Structural arms may enclose a family, but an
+/// instance itself remains directly owned by its Module or Generate body.
+FailureOr<SmallVector<Operation *, 2>> generatedAncestry(Operation *instance) {
+  SmallVector<Operation *, 2> result;
+  Operation *module = instance ? instance->getParentOfType<ModuleOp>() : nullptr;
+  Operation *scope = instance ? instance->getParentOp() : nullptr;
+  if (!module || (!isa<ModuleOp>(scope) && !isa<GenerateOp>(scope)))
+    return failure();
+  unsigned depth = 0;
+  while (scope != module) {
+    if (!scope || ++depth > 128)
+      return failure();
+    if (isa<GenerateOp>(scope)) {
+      // A digital lexical instance is never admitted merely because an analog
+      // legacy Generate has matching metadata.
+      if (!isDigitalRegionOwner(scope) || scope->getNumResults() != 1 ||
+          failed(verifyGeneratedFamilyOperation(scope)) || failed(resolveGeneratedDomain(scope)))
+        return failure();
+      result.push_back(scope);
+    } else if (isa<StructuralIfOp>(scope)) {
+      if (scope->getNumResults() || failed(inspectStructuralIfHeader(scope)))
+        return failure();
+    } else {
+      return failure();
+    }
+    scope = scope->getParentOp();
+  }
+  std::reverse(result.begin(), result.end());
+  return result;
+}
+Value capturedControlIdentity(Value value) {
+  for (unsigned depth = 0; value && depth != 128; ++depth) {
+    auto argument = dyn_cast<BlockArgument>(value);
+    if (!argument)
+      return value;
+    auto source = digitalRegionCaptureSource(argument);
+    if (failed(source) || !*source)
+      return {};
+    value = *source;
+  }
+  return {};
+}
 FailureOr<InstancePort> child(Operation *op) {
-  Operation *module = op->getParentOp();
-  auto *instance = local(module, op->getAttr("instance"));
-  if (!isa_and_nonnull<ModuleOp>(module) || !isa_and_nonnull<InstanceOp>(instance) ||
-      instance->getParentOp() != module)
+  auto resolved = resolveHierarchyInstance(op, op->getAttr("instance"));
+  if (failed(resolved))
     return failure();
-  auto *definition = local(module->getParentOp(), instance->getAttr("module"));
-  if (!isa_and_nonnull<ModuleOp>(definition))
-    return failure();
-  return InstancePort{instance, definition, nullptr};
+  return InstancePort{resolved->instance, resolved->module, nullptr};
 }
 bool hierarchyOperation(Operation *op) {
   return isa<RequirementClockOp, RequirementResetOp, InstanceDomainBindingOp, InstancePortOp>(op);
 }
+bool contextualSequentialOperation(Operation *op) {
+  if (!isa<ResetAssertedOp, SequentialAssertOp, SequentialUpdateOp, FlatFSMOp>(op) &&
+      !(isa<DigitalStorageOp>(op) && text(op, "kind") == "register"))
+    return false;
+  // The consumer itself establishes an obligation. Requiring a pre-existing
+  // capability would make projection inference circular and let an isolated
+  // formal consumer avoid the mandatory closed-root proof.
+  return DomainModel(op).unresolvedRequirement(op->getAttr("domain"));
+}
 } // namespace
+LogicalResult verifyHierarchyInstanceOperation(Operation *instance) {
+  if (!isa_and_nonnull<InstanceOp>(instance) || instance->getNumOperands() ||
+      instance->getNumResults() || instance->getNumRegions() || instance->getNumSuccessors() ||
+      !closed(instance, {"sym_name", "module", "parameter_bindings", "domain_bindings",
+                         "generated_owner", "generated_induction", "metadata"}) ||
+      failed(verifyGeneratedStructuralOwnership(instance)) || failed(generatedAncestry(instance)))
+    return reject(instance, "instance requires its exact bounded Module/Generate lexical owner");
+  Operation *definition = resolveInstanceModuleDefinition(instance);
+  Operation *module = instance->getParentOfType<ModuleOp>();
+  auto dictionary = instance->getAttrOfType<DictionaryAttr>("domain_bindings");
+  if (!definition || !dictionary)
+    return reject(instance,
+                  "hierarchy instance requires a resolved direct definition and domain dictionary");
+  for (NamedAttribute binding : dictionary) {
+    auto requirement = FlatSymbolRefAttr::get(instance->getContext(), binding.getName().getValue());
+    if (!isa_and_nonnull<DomainRequirementOp>(local(definition, requirement)) ||
+        !isa_and_nonnull<DomainOp, DomainRequirementOp>(local(module, binding.getValue())))
+      return reject(
+          instance,
+          "instance domain dictionary must name exact child requirements and parent actuals");
+  }
+  return success();
+}
+FailureOr<HierarchyInstance> resolveHierarchyInstance(Operation *use, Attribute reference) {
+  auto *instance =
+      resolveStructuralInstance(use, dyn_cast_if_present<FlatSymbolRefAttr>(reference));
+  if (!instance || failed(verifyHierarchyInstanceOperation(instance)))
+    return failure();
+  return HierarchyInstance{instance, resolveInstanceModuleDefinition(instance)};
+}
 LogicalResult verifyRequirementProjection(Operation *op) {
   bool clock = isa_and_nonnull<RequirementClockOp>(op);
   if ((!clock && !isa_and_nonnull<RequirementResetOp>(op)) ||
@@ -81,7 +162,7 @@ LogicalResult verifyInstanceDomainBinding(Operation *op) {
   if (failed(boundary) ||
       !isa_and_nonnull<DomainRequirementOp>(local(boundary->module, op->getAttr("requirement"))) ||
       !isa_and_nonnull<DomainOp, DomainRequirementOp>(
-          local(op->getParentOp(), op->getAttr("actual"))))
+          local(op->getParentOfType<ModuleOp>(), op->getAttr("actual"))))
     return reject(
         op,
         "instance binding must name one immediate child's exact requirement and a local actual");
@@ -99,7 +180,8 @@ LogicalResult verifyInstanceDomainBinding(Operation *op) {
     if (failed(binding) || !sameClock(op->getOperand(0), op, (*binding)->getOperand(0), *binding))
       return reject(op, "actual instance Clock operand disagrees with its concrete domain binding");
     if (op->getNumOperands() != (*binding)->getNumOperands() ||
-        (op->getNumOperands() == 2 && op->getOperand(1) != (*binding)->getOperand(1)))
+        (op->getNumOperands() == 2 && capturedControlIdentity(op->getOperand(1)) !=
+                                          capturedControlIdentity((*binding)->getOperand(1))))
       return reject(
           op, "actual instance Reset operand disagrees with its exact bound reset capability");
   }
@@ -115,24 +197,51 @@ FailureOr<InstancePort> inspectInstancePort(Operation *op) {
     (void)reject(op, reason);
     return failure();
   };
-  if (!isa_and_nonnull<InstancePortOp>(op) || op->getNumOperands() || op->getNumResults() != 1 ||
+  if (!isa_and_nonnull<InstancePortOp>(op) ||
+      (op->getNumOperands() != 0 && op->getNumOperands() != 2) || op->getNumResults() != 1 ||
       op->getNumRegions() || op->getNumSuccessors() ||
-      !closed(op, {"instance", "port", "direction", "metadata"}))
+      !closed(op, {"instance", "port", "direction", "metadata", "member"}))
     return fail("instance port requires its exact parent-owned typed reference");
-  auto boundary = child(op);
+  FailureOr<InstancePort> boundary = failure();
+  if (op->getNumOperands()) {
+    auto member = op->getAttrOfType<StringAttr>("member");
+    auto proof = member ? inspectGeneratedSelection(op->getOperand(0), op->getOperand(1),
+                                                    member.getValue(), op)
+                        : FailureOr<GeneratedSelectionProof>(failure());
+    auto target = succeeded(proof) ? inspectGeneratedExportSymbol(proof->exportOperation)
+                                   : FailureOr<Operation *>(failure());
+    auto reference = op->getAttrOfType<FlatSymbolRefAttr>("instance");
+    if (failed(target) || !isa<InstanceOp>(*target) || !reference ||
+        (*target)->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName()) !=
+            reference.getAttr() ||
+        failed(verifyHierarchyInstanceOperation(*target)))
+      return fail("selected instance port requires its exact exported instance target");
+    boundary = InstancePort{*target, resolveInstanceModuleDefinition(*target), nullptr, op};
+  } else {
+    if (op->hasAttr("member") || !isa<ModuleOp, GenerateOp>(op->getParentOp()))
+      return fail("direct instance port forbids selection keys or non-direct ownership");
+    boundary = child(op);
+  }
   if (failed(boundary))
-    return fail("instance port must name a concrete immediate-child instance");
+    return fail("instance port must name an exact lexical immediate-child instance");
   auto name = text(op, "port");
   boundary->port = name.empty()
                        ? nullptr
                        : local(boundary->module, FlatSymbolRefAttr::get(op->getContext(), name));
   auto type = boundary->port ? boundary->port->getAttrOfType<TypeAttr>("type") : TypeAttr();
   if (!isa_and_nonnull<PortOp>(boundary->port) || !type ||
-      type.getValue() != op->getResult(0).getType() ||
+      !(boundary->selection
+            ? equivalentSelectedDigitalStorageTypes(op, boundary->instance, type.getValue(),
+                                                    op->getResult(0).getType())
+        : isa<GenerateOp>(op->getParentOp())
+            ? equivalentGeneratedInstanceDigitalStorageTypes(boundary->instance, type.getValue(),
+                                                             op->getResult(0).getType(), op)
+            : equivalentInstanceDigitalStorageTypes(boundary->instance, type.getValue(),
+                                                    op->getResult(0).getType())) ||
       !llvm::is_contained(ArrayRef<StringRef>{"input", "output"}, text(op, "direction")) ||
       text(op, "direction") != text(boundary->port, "direction") ||
       isDigitalControlBoundaryType(type.getValue()) ||
-      failed(inferDigitalStorageMaximumBits(type.getValue(), op)))
+      failed(inferDigitalStorageMaximumBits(type.getValue(), boundary->port)))
     return fail("instance port must retain exact child data type and input/output direction");
   return *boundary;
 }
@@ -140,10 +249,11 @@ bool hasLocalHierarchyObligations(Operation *module) {
   if (!isa_and_nonnull<ModuleOp>(module) || module->getNumRegions() != 1 ||
       !module->getRegion(0).hasOneBlock())
     return false;
-  for (Operation &op : module->getRegion(0).front())
-    if (hierarchyOperation(&op))
-      return true;
-  return false;
+  bool obligation = false;
+  module->walk([&](Operation *op) {
+    obligation |= hierarchyOperation(op) || contextualSequentialOperation(op);
+  });
+  return obligation;
 }
 struct HierarchyModel::Impl {
   HierarchyModelLimits limits;
@@ -170,7 +280,7 @@ FailureOr<std::shared_ptr<HierarchyModel>> HierarchyModel::create(Operation *out
   };
   if (!isa_and_nonnull<mlir::ModuleOp>(outer))
     return failure();
-  llvm::StringMap<Operation *> definitions;
+  llvm::StringMap<Operation *> definitions, externalNames;
   unsigned work = 0;
   for (Operation &op : outer->getRegion(0).front()) {
     if (!isa<ModuleOp>(op))
@@ -178,17 +288,35 @@ FailureOr<std::shared_ptr<HierarchyModel>> HierarchyModel::create(Operation *out
     if (op.getNumRegions() != 1 || !op.getRegion(0).hasOneBlock() ||
         !definitions.try_emplace(text(&op, "sym_name"), &op).second)
       return fail(&op, "hierarchy module definitions require unique exact symbols and one body");
-    for (Operation &nested : op.getRegion(0).front()) {
-      if (++work > limits.maximumOperations)
-        return fail(&nested, "hierarchy local inventory exceeds finite operation budget");
-      if (isa<RequirementClockOp, RequirementResetOp>(nested) &&
-          failed(verifyRequirementProjection(&nested)))
+    if (op.hasAttr("external_name")) {
+      auto signature = inspectExternalModuleSignature(&op);
+      if (failed(signature))
         return failure();
-      if (isa<InstanceDomainBindingOp>(nested) && failed(verifyInstanceDomainBinding(&nested)))
-        return failure();
-      if (isa<InstancePortOp>(nested) && failed(inspectInstancePort(&nested)))
-        return failure();
+      if (!externalNames.try_emplace(signature->externalName.getValue(), &op).second)
+        return fail(&op, "external physical symbol has more than one declaration");
     }
+    auto inventory = op.walk([&](Operation *nested) {
+      if (nested == &op)
+        return WalkResult::advance();
+      if (++work > limits.maximumOperations) {
+        (void)reject(nested, "hierarchy local inventory exceeds finite operation budget");
+        return WalkResult::interrupt();
+      }
+      if ((isa<RequirementClockOp, RequirementResetOp>(nested) &&
+           failed(verifyRequirementProjection(nested))) ||
+          (isa<InstanceDomainBindingOp>(nested) && failed(verifyInstanceDomainBinding(nested))) ||
+          (isa<InstancePortOp>(nested) && failed(inspectInstancePort(nested))))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    if (inventory.wasInterrupted())
+      return failure();
+  }
+  for (const auto &external : externalNames) {
+    Operation *collision = definitions.lookup(external.getKey());
+    if (collision && collision != external.getValue() && !collision->hasAttr("external_name"))
+      return fail(external.getValue(),
+                  "external physical symbol collides with a local module definition");
   }
   // Validate every definition component, not merely selected-root reachability.
   DenseMap<Operation *, SmallVector<Operation *, 2>> children;
@@ -204,26 +332,11 @@ FailureOr<std::shared_ptr<HierarchyModel>> HierarchyModel::create(Operation *out
       Operation *op = instance.getOperation();
       auto ref = op->getAttrOfType<FlatSymbolRefAttr>("module");
       Operation *target = ref ? definitions.lookup(ref.getValue()) : nullptr;
-      if (op->getParentOp() != &definition || !target || ++definitionEdges > limits.maximumEdges) {
+      if (!target || ++definitionEdges > limits.maximumEdges ||
+          failed(verifyHierarchyInstanceOperation(op))) {
         (void)reject(
             op, "hierarchy instance requires a resolved direct definition within the edge budget");
         return WalkResult::interrupt();
-      }
-      auto dictionary = op->getAttrOfType<DictionaryAttr>("domain_bindings");
-      if (!dictionary) {
-        (void)reject(op, "instance requires an exact descriptive domain binding dictionary");
-        return WalkResult::interrupt();
-      }
-      for (NamedAttribute binding : dictionary) {
-        auto req = FlatSymbolRefAttr::get(op->getContext(), binding.getName().getValue());
-        if (!isa_and_nonnull<DomainRequirementOp>(local(target, req)) ||
-            !isa_and_nonnull<DomainOp, DomainRequirementOp>(
-                local(&definition, binding.getValue()))) {
-          (void)reject(
-              op,
-              "instance domain dictionary must name exact child requirements and parent actuals");
-          return WalkResult::interrupt();
-        }
       }
       children[&definition].push_back(target);
       ++incoming[target];
@@ -251,43 +364,68 @@ FailureOr<std::shared_ptr<HierarchyModel>> HierarchyModel::create(Operation *out
     return fail(outer, "executable hierarchy requires one exact outer nodal.root.module selector");
   auto data = std::make_unique<Impl>();
   data->limits = limits;
-  for (auto &entry : definitions)
-    for (Operation &op : entry.second->getRegion(0).front())
-      if (isa<InstanceDomainBindingOp>(op)) {
-        auto *instance = local(entry.second, op.getAttr("instance"));
-        if (!data->bindings.try_emplace(std::make_pair(instance, op.getAttr("requirement")), &op)
-                 .second)
-          return fail(&op, "one authoritative binding is required per instance and requirement");
+  for (auto &entry : definitions) {
+    auto inventory = entry.second->walk([&](InstanceDomainBindingOp binding) {
+      Operation *op = binding.getOperation();
+      auto boundary = resolveHierarchyInstance(op, op->getAttr("instance"));
+      if (failed(boundary))
+        return WalkResult::interrupt();
+      if (!data->bindings
+               .try_emplace(std::make_pair(boundary->instance, op->getAttr("requirement")), op)
+               .second) {
+        (void)reject(op, "one authoritative binding is required per instance and requirement");
+        return WalkResult::interrupt();
       }
-  data->occurrences.push_back({rootModule, nullptr, 0, root.getValue().str()});
+      return WalkResult::advance();
+    });
+    if (inventory.wasInterrupted())
+      return failure();
+  }
+  data->occurrences.push_back({rootModule, nullptr, 0, root.getValue().str(), {}});
   unsigned edges = 0;
   for (unsigned cursor = 0; cursor < data->occurrences.size(); ++cursor) {
     // Copy only this bounded context header: vector growth must not invalidate it.
     auto occurrence = data->occurrences[cursor];
-    for (Operation &op : occurrence.module->getRegion(0).front()) {
-      if (!isa<InstanceOp>(op))
-        continue;
-      auto ref = op.getAttrOfType<FlatSymbolRefAttr>("module");
+    SmallVector<Operation *, 4> instanceOperations;
+    occurrence.module->walk(
+        [&](InstanceOp op) { instanceOperations.push_back(op.getOperation()); });
+    for (Operation *op : instanceOperations) {
+      auto ref = op->getAttrOfType<FlatSymbolRefAttr>("module");
       Operation *target = ref ? definitions.lookup(ref.getValue()) : nullptr;
       if (!target)
-        return fail(&op, "reachable instance must identify one actual module definition");
+        return fail(op, "reachable instance must identify one actual module definition");
       unsigned depth = 0, ancestor = cursor;
       while (true) {
         if (data->occurrences[ancestor].module == target)
-          return fail(&op, "recursive instance hierarchy is not executable");
+          return fail(op, "recursive instance hierarchy is not executable");
         if (++depth > limits.maximumDepth)
-          return fail(&op, "concrete hierarchy exceeds finite depth budget");
+          return fail(op, "concrete hierarchy exceeds finite depth budget");
         if (!ancestor)
           break;
         ancestor = data->occurrences[ancestor].parent;
       }
       if (++edges > limits.maximumEdges || data->occurrences.size() >= limits.maximumOccurrences)
-        return fail(&op, "concrete hierarchy exceeds finite occurrence/edge budget");
-      std::string path = occurrence.path + "." + text(&op, "sym_name").str();
+        return fail(op, "concrete hierarchy exceeds finite occurrence/edge budget");
+      auto scopes = generatedAncestry(op);
+      if (failed(scopes))
+        return fail(op, "instance has no exact checked generated ancestry");
+      auto generatedScopes = occurrence.generatedScopes;
+      std::string path = occurrence.path;
+      for (Operation *family : *scopes) {
+        if (generatedScopes.size() >= limits.maximumDepth)
+          return fail(op, "generated hierarchy exceeds finite ancestry depth budget");
+        auto domain = resolveGeneratedDomain(family);
+        if (failed(domain))
+          return failure();
+        generatedScopes.push_back({cursor, family, *domain});
+        path += ".[" + text(family, "region_id").str() + "]";
+      }
+      path += "." + text(op, "sym_name").str();
       if (path.size() > 4096)
-        return fail(&op, "concrete occurrence path exceeds finite identity budget");
-      data->children.try_emplace(std::make_pair(cursor, &op), data->occurrences.size());
-      data->occurrences.push_back({target, &op, cursor, std::move(path)});
+        return fail(op, "concrete occurrence path exceeds finite identity budget");
+      data->children.try_emplace(std::make_pair(cursor, op), data->occurrences.size());
+      data->occurrences.push_back(
+          {target, op, cursor, std::move(path), std::move(generatedScopes)});
     }
   }
   return std::shared_ptr<HierarchyModel>(new HierarchyModel(std::move(data)));
@@ -354,6 +492,15 @@ FailureOr<ContextualValue> HierarchyModel::resolveCapability(ContextualValue val
   for (unsigned work = 0; work <= impl->limits.maximumDepth; ++work) {
     if (value.occurrence >= impl->occurrences.size() || !value.value)
       return failure();
+    if (auto argument = dyn_cast<BlockArgument>(value.value)) {
+      if (!value.use || failed(verifyDigitalValueScope(value.value, value.use)))
+        return failure();
+      auto source = digitalRegionCaptureSource(argument);
+      if (failed(source) || !*source)
+        return failure();
+      value = {value.occurrence, *source, argument.getOwner()->getParentOp()};
+      continue;
+    }
     Operation *op = value.value.getDefiningOp();
     Operation *module = impl->occurrences[value.occurrence].module;
     if (!op || op->getParentOp() != module || !value.use ||
@@ -410,71 +557,174 @@ bool HierarchyModel::allowsDirectSampling(ContextualDomain source,
 LogicalResult HierarchyModel::verifyBindings() const {
   for (unsigned index = 0; index < impl->occurrences.size(); ++index) {
     const auto &context = impl->occurrences[index];
-    for (Operation &op : context.module->getRegion(0).front()) {
-      if (isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op)) {
-        if (failed(inspectReset({index, op.getResult(0), &op}, *this)))
-          return failure();
-      } else if (isa<CrossingOp, AsyncFifoOp>(op) && op.hasAttr("contract")) {
-        if (failed(inspectExecutableCrossing(&op, *this, index)))
-          return failure();
-      } else if (isa<WaiverOp>(op)) {
-        if (failed(inspectExecutableWaiver(&op, *this, index)))
-          return failure();
-      } else if (isa<LocalDomainBindingOp>(op)) {
-        auto actual = resolveBinding(index, op.getAttr("domain"));
-        if (failed(actual) || failed(verifyContextualResetForBinding(*actual, *this)))
-          return failure();
-      } else if (isa<DigitalStorageOp>(op) && text(&op, "kind") == "register") {
-        auto actual = resolveBinding(index, op.getAttr("domain"));
-        if (failed(actual))
-          return reject(&op, "reachable state requires its actual occurrence domain binding");
-        if (op.getNumOperands() && !actual->reset)
-          return reject(&op, "initialized child state requires a valid actual reset binding");
-        if (failed(verifyContextualResetForBinding(*actual, *this)))
-          return failure();
-      } else if (isa<DomainRequirementOp>(op)) {
-        auto ref = FlatSymbolRefAttr::get(op.getContext(), text(&op, "sym_name"));
-        if (context.instance && !impl->bindings.count({context.instance, ref}))
-          return reject(&op, "reachable requirement lacks a unique concrete instance binding at " +
-                                 context.path);
-        if (context.instance && impl->bindings.count({context.instance, ref}) &&
-            succeeded(DomainModel(context.module).resolveDomain(ref)))
-          return reject(&op, "requirement cannot have both local and instance binding authorities");
-        auto actual = resolveBinding(index, ref);
-        if (failed(actual))
-          return reject(&op,
-                        "reachable requirement lacks a unique concrete clock/reset binding at " +
-                            context.path);
-      } else if (isa<RequirementClockOp, RequirementResetOp>(op)) {
-        if (failed(resolveCapability({index, op.getResult(0), &op})))
-          return reject(&op,
-                        "required capability is absent from concrete occurrence " + context.path);
-      } else if (isa<InstanceDomainBindingOp>(op)) {
-        auto actual = resolveBinding(index, op.getAttr("actual"));
-        if (failed(actual))
-          return reject(&op, "instance actual domain lacks an executable physical binding");
-        // Clock equality is physical/occurrence identity, never Same permission.
-        if (!sameClock(ContextualValue{index, op.getOperand(0), &op}, actual->clock, *this))
-          return reject(&op,
-                        "actual instance Clock operand disagrees with its concrete domain binding");
-        if ((op.getNumOperands() == 2) != actual->reset.has_value())
+    SmallVector<Block *, 4> scopes{&context.module->getRegion(0).front()};
+    for (unsigned scope = 0; scope < scopes.size(); ++scope)
+      for (Operation &op : *scopes[scope]) {
+        if (isa<GenerateOp>(op) && op.getNumResults() == 1) {
+          if (failed(verifyGeneratedFamilyOperation(&op)))
+            return failure();
+          scopes.push_back(&op.getRegion(0).front());
+        } else if (isa<StructuralIfOp>(op)) {
+          auto header = inspectStructuralIfHeader(&op);
+          if (failed(header))
+            return failure();
+          for (Block *body : header->bodies)
+            scopes.push_back(body);
+        }
+        if (!context.generatedScopes.empty() &&
+            ((isa<CrossingOp, AsyncFifoOp>(op) && op.hasAttr("contract")) || isa<WaiverOp>(op)))
           return reject(
-              &op, "actual instance Reset presence disagrees with its concrete domain binding");
-        if (actual->reset) {
-          auto supplied = resolveCapability({index, op.getOperand(1), &op});
-          auto expected = resolveCapability(*actual->reset);
-          if (failed(supplied) || failed(expected) ||
-              supplied->occurrence != expected->occurrence || supplied->value != expected->value)
+              &op,
+              "generated occurrence crossing/waiver requires selection-qualified lane provenance");
+        if (isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op)) {
+          if (failed(inspectReset({index, op.getResult(0), &op}, *this)))
+            return failure();
+        } else if (isa<CrossingOp, AsyncFifoOp>(op) && op.hasAttr("contract")) {
+          if (failed(inspectExecutableCrossing(&op, *this, index)))
+            return failure();
+        } else if (isa<WaiverOp>(op)) {
+          if (failed(inspectExecutableWaiver(&op, *this, index)))
+            return failure();
+        } else if (isa<LocalDomainBindingOp>(op)) {
+          auto actual = resolveBinding(index, op.getAttr("domain"));
+          if (failed(actual) || failed(verifyContextualResetForBinding(*actual, *this)))
+            return failure();
+        } else if (isa<DigitalStorageOp>(op) && text(&op, "kind") == "register") {
+          auto actual = resolveBinding(index, op.getAttr("domain"));
+          if (failed(actual))
+            return reject(&op, "reachable state requires its actual occurrence domain binding");
+          if (failed(verifyDigitalStorageOperation(&op)))
+            return failure();
+          if (op.getNumOperands() && text(&op, "initializer_policy") != "if_reset" &&
+              !actual->reset)
+            return reject(&op, "initialized child state requires a valid actual reset binding");
+          if (failed(verifyContextualResetForBinding(*actual, *this)))
+            return failure();
+        } else if (isa<DomainRequirementOp>(op)) {
+          auto ref = FlatSymbolRefAttr::get(op.getContext(), text(&op, "sym_name"));
+          if (context.instance && !impl->bindings.count({context.instance, ref}))
+            return reject(&op,
+                          "reachable requirement lacks a unique concrete instance binding at " +
+                              context.path);
+          if (context.instance && impl->bindings.count({context.instance, ref}) &&
+              succeeded(DomainModel(context.module).resolveDomain(ref)))
+            return reject(&op,
+                          "requirement cannot have both local and instance binding authorities");
+          auto actual = resolveBinding(index, ref);
+          if (failed(actual))
+            return reject(&op,
+                          "reachable requirement lacks a unique concrete clock/reset binding at " +
+                              context.path);
+          if (failed(verifyContextualResetForBinding(*actual, *this)))
+            return failure();
+        } else if (isa<RequirementClockOp, RequirementResetOp>(op)) {
+          if (failed(resolveCapability({index, op.getResult(0), &op})))
+            return reject(&op,
+                          "required capability is absent from concrete occurrence " + context.path);
+        } else if (isa<InstanceDomainBindingOp>(op)) {
+          auto actual = resolveBinding(index, op.getAttr("actual"));
+          if (failed(actual))
+            return reject(&op, "instance actual domain lacks an executable physical binding");
+          // Clock equality is physical/occurrence identity, never Same permission.
+          if (!sameClock(ContextualValue{index, op.getOperand(0), &op}, actual->clock, *this))
             return reject(
-                &op,
-                "actual instance Reset operand disagrees with its exact bound reset capability");
+                &op, "actual instance Clock operand disagrees with its concrete domain binding");
+          if ((op.getNumOperands() == 2) != actual->reset.has_value())
+            return reject(
+                &op, "actual instance Reset presence disagrees with its concrete domain binding");
+          if (actual->reset) {
+            auto supplied = resolveCapability({index, op.getOperand(1), &op});
+            auto expected = resolveCapability(*actual->reset);
+            if (failed(supplied) || failed(expected) ||
+                supplied->occurrence != expected->occurrence || supplied->value != expected->value)
+              return reject(
+                  &op,
+                  "actual instance Reset operand disagrees with its exact bound reset capability");
+          }
         }
       }
-    }
   }
   return success();
 }
+FailureOr<ExternalModuleSignature> inspectExternalModuleSignature(Operation *module) {
+  auto fail = [&](StringRef reason) -> FailureOr<ExternalModuleSignature> {
+    if (module)
+      (void)reject(module, reason);
+    return failure();
+  };
+  auto name = module ? module->getAttrOfType<StringAttr>("external_name") : StringAttr();
+  if (!isa_and_nonnull<ModuleOp>(module) || !name || name.getValue().empty() ||
+      name.getValue().size() > 256 ||
+      !(llvm::isAlpha(name.getValue().front()) || name.getValue().front() == '_') ||
+      !llvm::all_of(name.getValue().drop_front(),
+                    [](char c) { return llvm::isAlnum(c) || c == '_' || c == '$'; }) ||
+      !isa_and_nonnull<mlir::ModuleOp>(module->getParentOp()) || module->getNumRegions() != 1 ||
+      !module->getRegion(0).hasOneBlock() || module->getRegion(0).front().getNumArguments())
+    return fail("external module requires a canonical exact external symbol and declaration body");
+  ExternalModuleSignature result{module, name, {}};
+  llvm::StringSet<> pins;
+  unsigned work = 0;
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (++work > digitalTypeMaximumNodes)
+      return fail("external module signature exceeds finite declaration budget");
+    if (isa<InterfaceOp, InterfaceAbiOp, InterfaceInstanceOp>(operation) &&
+        !hasDigitalInterfaceContract(&operation))
+      return fail("external Interface signatures require fully typed declaration contracts");
+    // These are signature declarations only. The Interface owner independently
+    // checks the complete definition, selected role, ABI and exact outer axes.
+    if (isa<InterfaceOp>(operation)) {
+      if (operation.getNumRegions() != 1 || !operation.getRegion(0).hasOneBlock())
+        return fail("external Interface requires its exact declaration block");
+      bool hasLeaf = false;
+      for (Operation &member : operation.getRegion(0).front()) {
+        if (++work > digitalTypeMaximumNodes)
+          return fail("external module signature exceeds finite declaration budget");
+        if (!isa<InterfaceMemberOp>(member))
+          continue;
+        hasLeaf = true;
+        auto attr = member.getAttrOfType<TypeAttr>("type");
+        auto type = attr ? dyn_cast<ResolvedType>(attr.getValue()) : ResolvedType();
+        if (text(&member, "protocol") != "resolved" || !type ||
+            failed(inferDigitalBitPatternFixedBits(type.getElementType(), &operation)))
+          return fail("external Interface definitions require only fixed resolved leaves");
+      }
+      if (!hasLeaf)
+        return fail("external Interface definition requires at least one resolved pin leaf");
+      continue;
+    }
+    if (isa<InterfaceAbiOp>(operation))
+      continue;
+    if (isa<InterfaceInstanceOp>(operation)) {
+      if (!pins.insert(text(&operation, "sym_name")).second)
+        return fail("external module repeats an original pin declaration identity");
+      result.pins.push_back(&operation);
+      continue;
+    }
+    auto meta = operation.getAttrOfType<DictionaryAttr>("metadata");
+    auto placement = meta ? meta.getAs<StringAttr>("placement") : StringAttr();
+    auto profile = meta ? meta.getAs<StringAttr>("profile") : StringAttr();
+    auto type = operation.getNumResults() == 1
+                    ? dyn_cast<ResolvedType>(operation.getResult(0).getType())
+                    : ResolvedType();
+    if (!isa<ResolvedNetOp>(operation) || !type ||
+        !isa<BitsType, UIntType, SIntType, ParametricIntegerType>(type.getElementType()) ||
+        !placement || placement.getValue() != "black_box_pin" || !profile ||
+        profile.getValue() != "portable_boundary_only" ||
+        failed(inferDigitalBitPatternFixedBits(type.getElementType(), module)) ||
+        !pins.insert(text(&operation, "name")).second)
+      return fail("external module initial profile permits only unique fixed scalar black-box "
+                  "resolved pin declarations, never executable statements");
+    if (result.pins.size() >= 65536)
+      return fail("external module signature exceeds finite declaration budget");
+    result.pins.push_back(&operation);
+  }
+  if (result.pins.empty() || failed(verifyDigitalInterfaceModel(module)))
+    return fail("external module requires at least one independently verified resolved pin");
+  return result;
+}
 LogicalResult verifyHierarchyModule(Operation *module) {
+  if (module->hasAttr("external_name") && failed(inspectExternalModuleSignature(module)))
+    return failure();
   auto outer = dyn_cast_or_null<mlir::ModuleOp>(module->getParentOp());
   if (!outer)
     return success();
@@ -486,11 +736,33 @@ LogicalResult verifyHierarchyModule(Operation *module) {
     }
   if (module != first)
     return success();
+  llvm::StringMap<Operation *> externalNames, definitions;
+  for (Operation &definition : outer.getBody()->getOperations()) {
+    if (!isa<ModuleOp>(definition))
+      continue;
+    definitions.try_emplace(text(&definition, "sym_name"), &definition);
+    if (!definition.hasAttr("external_name"))
+      continue;
+    auto signature = inspectExternalModuleSignature(&definition);
+    if (failed(signature))
+      return failure();
+    if (!externalNames.try_emplace(signature->externalName.getValue(), &definition).second)
+      return reject(&definition, "external physical symbol has more than one declaration");
+  }
+  for (const auto &external : externalNames) {
+    Operation *collision = definitions.lookup(external.getKey());
+    if (collision && collision != external.getValue() && !collision->hasAttr("external_name"))
+      return reject(external.getValue(),
+                    "external physical symbol collides with a local module definition");
+  }
   bool hierarchy = false, instances = false, executable = false;
   auto status = outer->walk([&](Operation *op) {
     instances |= isa<InstanceOp>(op);
     executable |= isa<LocalDomainBindingOp, SequentialUpdateOp, WaiverOp, EventProcessOp>(op) ||
                   (isa<CrossingOp, AsyncFifoOp>(op) && op->hasAttr("contract"));
+    hierarchy |= contextualSequentialOperation(op) ||
+                 isa<InterfaceBoundaryOp, ResolvedBoundaryOp>(op) ||
+                 (isa<NetSplitOp>(op) && op->hasAttr("hierarchy_driver"));
     if (!hierarchyOperation(op))
       return WalkResult::advance();
     hierarchy = true;
@@ -511,6 +783,19 @@ LogicalResult verifyHierarchyModule(Operation *module) {
                   "executable hierarchy requires one exact outer nodal.root.module selector");
   auto hierarchyModel = HierarchyModel::create(outer);
   if (failed(hierarchyModel) || failed((*hierarchyModel)->verifyBindings()))
+    return failure();
+  // A context-dependent split cannot hide in an unused definition. Its empty
+  // local dependencies are obligations, not domainless constants.
+  DenseSet<Operation *> reached;
+  for (const auto &occurrence : (*hierarchyModel)->occurrences())
+    reached.insert(occurrence.module);
+  auto obligations = outer->walk([&](NetSplitOp split) {
+    if (!split->hasAttr("hierarchy_driver") || reached.contains(split->getParentOp()))
+      return WalkResult::advance();
+    (void)reject(split, "hierarchy-driver split belongs to an unreachable definition");
+    return WalkResult::interrupt();
+  });
+  if (obligations.wasInterrupted())
     return failure();
   return verifyHierarchyDependencies(*hierarchyModel);
 }

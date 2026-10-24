@@ -10,11 +10,18 @@ private[nodal] object ConstructionKernel:
     AnalogUserFunctionRuntime.rejectEffect()
     if Current.isBound then Some(Current.get) else None
 
+  // Metering is not a hardware effect: do not route this through active()'s effect guard.
+  def boundaryWorkActive: Boolean = Current.isBound && Current.get.boundaryWorkActive
+
+  def chargeBoundaryWork(units: Long): Unit =
+    if Current.isBound then Current.get.chargeBoundaryWork(units)
+
   private def elaborate[M <: Module](
       top: => M,
       options: EmitOptions,
       stimulusOnly: Boolean = false
   )(select: M => Vector[AnyRef]): KernelSelectedCapture =
+    if boundaryWorkActive then Current.get.rejectNestedBoundaryElaboration()
     ConstructorCaptureRuntime.withSession:
       AnalogProceduralConstruction.withSession:
         val session = new ConstructionSession(options, stimulusOnly)
@@ -87,6 +94,13 @@ private[nodal] object ConstructionKernel:
 
   def constructorDepth: Int = active.map(_.constructorDepth).getOrElse(0)
 
+  def initializeGlobalInterface[A](initializer: () => A): A = active match
+    case Some(session) => session.initializeGlobalInterface(initializer)
+    case None => initializer()
+
+  def interfaceDefinitionContext(): Option[InterfaceDefinitionContext] =
+    active.flatMap(_.interfaceDefinitionContext())
+
   def bindConstructorParameters(
       module: Module,
       parameters: Vector[ConstructorCapturedParameter]
@@ -122,6 +136,84 @@ private[nodal] object ConstructionKernel:
       )
 
   def beginModule(module: Module): Unit = active.foreach(_.beginModule(module))
+  def declareExternalModule(module: Module, name: String): Unit =
+    active.foreach(_.declareExternalModule(module, name))
+
+  def externalInterfaceArray[I <: Interface, R <: RoleKind](
+      module: ExternalModule,
+      definition: InterfaceType[I],
+      role: Role[R],
+      count: Int,
+      name: String,
+      placement: InoutPlacement,
+      profile: ResolutionProfile
+  ): InterfaceArray[I, R] =
+    active.getOrElse(failConstructor(
+      "NODAL-EXTERNAL-058-001",
+      "external InterfaceArray requires an active exact ExternalModule construction",
+      name
+    ))
+      .externalInterfaceArray(module, definition, role, count, name, placement, profile)
+
+  private def areaSession: ConstructionSession = active.getOrElse(
+    failConstructor(
+      "NODAL-AREA-058-OWNER",
+      "Area requires an active enclosing Module construction",
+      "Area"
+    )
+  )
+
+  def allocateArea[A <: Area](source: SourceSpan)(body: () => A): A =
+    areaSession.allocateArea(source)(body)
+
+  def beginArea(value: Area): Unit = areaSession.beginArea(value)
+
+  def bindArea(name: String, priority: Int, value: Area): Unit =
+    areaSession.bindArea(name, priority, value)
+
+  def areaMember(owner: Area, name: String, value: Any, access: String): Unit =
+    areaSession.areaMember(owner, name, value, access)
+
+  def generatedAreas[A <: Area](
+      lower: Int | Expr[Integer],
+      upper: Int | Expr[Integer],
+      step: Int | Expr[Integer],
+      maximum: Option[Int]
+  )(body: Expr[Integer] => A): GeneratedAreas[A] =
+    areaSession.generatedAreas(lower, upper, step, maximum)(body)
+
+  def generatedAreaReference[A <: Area](
+      family: GeneratedAreas[A],
+      ordinal: Int | Expr[Integer]
+  ): GeneratedAreaRef[A] =
+    areaSession.generatedAreaReference(family, ordinal)
+
+  def generatedAreaNested[A <: Area](
+      value: GeneratedAreaRef[?],
+      name: String
+  ): GeneratedAreaRef[A] =
+    areaSession.generatedAreaNested(value, name)
+
+  def generatedAreaFamily[A <: Area](value: GeneratedAreaRef[?], name: String): GeneratedAreas[A] =
+    areaSession.generatedAreaFamily(value, name)
+
+  def generatedAreaInstance[M <: Module](value: GeneratedAreaRef[?], name: String)
+      : GeneratedInstanceRef[M] = areaSession.generatedAreaInstance[M](value, name)
+
+  def generatedAreaInterface(value: GeneratedAreaRef[?], name: String): InterfaceEndpoint =
+    areaSession.generatedAreaInterface(value, name)
+
+  def generatedAreaMember(value: GeneratedAreaRef[?], name: String, kind: String): Any =
+    areaSession.generatedAreaMember(value, name, kind)
+
+  def bindGeneratedAreas(name: String, priority: Int, value: GeneratedAreas[?]): Unit =
+    areaSession.bindGeneratedAreas(name, priority, value)
+
+  def bindGeneratedMemberAlias(value: AnyRef, expression: Expr[?]): Unit =
+    areaSession.bindGeneratedMemberAlias(value, expression)
+
+  def areaMemberValue(owner: Area, name: String): Any =
+    areaSession.areaMemberValue(owner, name)
 
   def currentModulePath: String = active
     .map(_.currentModulePath)
@@ -311,7 +403,8 @@ private[nodal] object ConstructionKernel:
       custom: Option[FsmLocalEncoding[S]],
       illegalState: IllegalStatePolicy,
       body: FsmBuilder[S] => Unit,
-      evidence: HwEnum[S]
+      evidence: HwEnum[S],
+      control: Option[FsmControl] = None
   ): Unit = flatFsmSession.captureFlatFsm(
     definition,
     initial,
@@ -319,8 +412,19 @@ private[nodal] object ConstructionKernel:
     custom,
     illegalState,
     body,
-    evidence
+    evidence,
+    control
   )
+
+  def fsmComposition[S](
+      spec: FsmInstanceSpec[S],
+      control: FsmControl,
+      observe: FsmRun[S] => Unit
+  ): Unit =
+    flatFsmSession.captureFsmComposition(spec, control, observe)
+
+  def fsmChild[P, C](builder: FsmBuilder[P], slot: FsmChild[P, C]): FsmChildRun[C] =
+    flatFsmSession.fsmChild(builder, slot)
 
   def flatFsmState[S](builder: FsmBuilder[S], value: S, body: StateBuilder[S] => Unit): Unit =
     flatFsmSession.captureFlatFsmState(builder, value, body)
@@ -349,6 +453,32 @@ private[nodal] object ConstructionKernel:
     body.foreach(checkedFsmAction)
     flatFsmSession.captureFlatFsmTransition(builder, condition, mode, to, body)
 
+  def fsmTransfer[A <: Data](carrier: Stream[A]): Expr[Bool] =
+    flatFsmSession.fsmTransfer(carrier)
+
+  def flatFsmStack[S](builder: FsmBuilder[S], config: FsmStackConfig[S]): Unit =
+    flatFsmSession.captureFlatFsmStack(builder, config)
+
+  def flatFsmProcedure[S](
+      builder: StateBuilder[S],
+      guard: Expr[Bool],
+      mode: TransitionMode,
+      entry: Option[S],
+      resume: Option[S]
+  ): Unit =
+    flatFsmSession.captureFlatFsmProcedure(builder, guard, mode, entry, resume)
+
+  def flatFsmTimer[S](builder: StateBuilder[S], cycles: Int, mode: TransitionMode, to: S): Unit =
+    flatFsmSession.captureFlatFsmTimer(builder, cycles, mode, to)
+
+  def flatFsmTransferTransition[S](
+      builder: StateBuilder[S],
+      condition: Expr[Bool],
+      mode: TransitionMode,
+      to: S
+  ): Unit =
+    flatFsmSession.captureFlatFsmTransferTransition(builder, condition, mode, to)
+
   def flatFsmStateView[S](builder: FsmBuilder[S], next: Boolean): DecodedEnum[Expr[EnumValue[S]]] =
     flatFsmSession.flatFsmStateView(builder, next)
 
@@ -359,6 +489,9 @@ private[nodal] object ConstructionKernel:
 
   def flatFsmCompleted[S](builder: FsmBuilder[S]): Expr[Bool] =
     flatFsmSession.flatFsmCompleted(builder)
+
+  def flatFsmStatus[S](builder: FsmBuilder[S]): DecodedEnum[Expr[EnumValue[FsmStatus]]] =
+    flatFsmSession.flatFsmStatus(builder)
 
   def enumSwitch[S](
       selector: Expr[EnumValue[S]],
@@ -516,10 +649,95 @@ private[nodal] object ConstructionKernel:
     case Some(session) => session.withWaveformForbidden(body)
     case None => body
 
+  def instanceInterfacePort[I <: Interface, R <: RoleKind](
+      value: InterfacePort[I, R]
+  ): InterfacePort[I, R] =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    ).instanceInterfacePort(value)
+
+  def instanceInterfaceArray[I <: Interface, R <: RoleKind](
+      value: InterfaceArray[I, R]
+  ): InterfaceArray[I, R] =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    ).instanceInterfaceArray(value)
+
   def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
     active.getOrElse(
       throw new IllegalStateException("instance selection requires active construction")
     ).instanceDigitalPort(value)
+
+  def instanceDigitalInout[A <: Bits, M <: DriveMode](value: DigitalInout[A, M])
+      : DigitalInout[A, M] =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    ).instanceDigitalInout(value)
+
+  def interfaceConservativeMember[D <: Discipline, A <: ConservativeAccess](
+      endpoint: InterfacePort[?, ?],
+      field: InterfaceMember.Conservative[D],
+      through: Vector[InterfaceMember.Nested[?]],
+      permission: String
+  ): ConservativeView[D, A] =
+    active.getOrElse(
+      throw new IllegalStateException("conservative member selection requires active construction")
+    ).interfaceConservativeMember[D, A](endpoint, field, through, permission)
+
+  def interfaceValueReference[A <: Data](
+      endpoint: InterfaceEndpoint,
+      field: InterfaceMember.Value[?],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): InterfaceValueRef[A] =
+    active.getOrElse(
+      throw new IllegalStateException("ordinary Interface member reference requires construction")
+    ).interfaceValueReference[A](endpoint, field, through)
+
+  def interfaceValueRefRead(value: InterfaceValueRef[?]): Expr[?] =
+    active.getOrElse(
+      throw new IllegalStateException("ordinary Interface read requires construction")
+    ).interfaceValueRefRead(value)
+
+  def instanceInterfaceValue[A <: Data](value: InterfaceValueRef[A]): InterfaceValueRef[A] =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    ).instanceInterfaceValue(value)
+
+  def generatedAreaValue[A <: Data](
+      value: GeneratedAreaRef[?],
+      name: String
+  ): InterfaceValueRef[A] =
+    areaSession.generatedAreaValue[A](value, name)
+
+  def interfaceValueRead(
+      endpoint: InterfaceEndpoint,
+      field: InterfaceMember.Value[?],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): Expr[?] =
+    active.getOrElse(
+      throw new IllegalStateException("ordinary Interface read requires construction")
+    ).interfaceValueRead(endpoint, field, through)
+
+  def interfaceResolvedMember[A <: Bits, M <: DriveMode](
+      endpoint: InterfacePort[?, ?],
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): ResolvedDigital[A, M] =
+    active.getOrElse(
+      throw new IllegalStateException("resolved member selection requires active construction")
+    ).interfaceResolvedMember(endpoint, field, through)
+
+  def interfaceResolvedArrayMember[A <: Bits, M <: DriveMode](
+      endpoint: InterfaceArray[?, ?],
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): ResolvedDigitalArray[A, M] =
+    active.getOrElse(
+      throw new IllegalStateException("resolved member selection requires active construction")
+    ).interfaceResolvedArrayMember(endpoint, field, through)
+
+  def withGeneratedInstanceSelection[A](view: GeneratedInstanceRef[?])(body: => A): A =
+    areaSession.withGeneratedInstanceSelection(view)(body)
 
   def withInstanceSelection[A](instance: Instance[?])(body: => A): A =
     active.getOrElse(
@@ -625,6 +843,9 @@ private[nodal] object ConstructionKernel:
   def shortAnalogContribution(target: Expr[Real], value: Expr[Real]): Unit =
     active.foreach(_.recordShortAnalogContribution(target, value))
 
+  def digitalLiteralWidthFacts(descriptor: KernelTypeDescriptor): Option[Option[(Long, Long)]] =
+    active.map(_.digitalLiteralWidthFacts(descriptor))
+
   def digitalWidthBounds(descriptor: KernelTypeDescriptor): Option[(Long, Long)] =
     active.map(_.digitalWidthBounds(descriptor))
 
@@ -660,3 +881,21 @@ private[nodal] object ConstructionKernel:
       ))).get
 
   def operation(kind: String, values: Any*): Unit = active.foreach(_.operation(kind, values*))
+
+  // Snapshot accounting is not a hardware effect and cannot create a Session/owner.
+  def chargeSnapshotWork(units: Long): Unit =
+    if Current.isBound then Current.get.chargeSnapshotWork(units)
+
+  // Read-only debit routing; never invokes active() or creates an owner.
+  def publicationAccountingEnabled: Boolean =
+    Current.isBound && Current.get.publicationAccountingEnabled
+  def chargePublicationWork(units: Long): Unit =
+    if Current.isBound then Current.get.chargePublicationWork(units)
+
+  // Read-only same-owner predicate; foreign builders and no-owner/C1 calls retain legacy capture.
+  def constructionCapturePrefixAllowed(builder: SemanticOriginBuilder): Boolean =
+    Current.isBound && Current.get.constructionCapturePrefixAllowed(builder)
+
+  // Read-only identity check for the fixed private diagnostic policy entry.
+  def ownsConstructionSession(session: ConstructionSession): Boolean =
+    Current.isBound && (Current.get eq session)

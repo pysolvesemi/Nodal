@@ -221,6 +221,7 @@ private[nodal] object DigitalEnumContract:
         literal(left).exists(value => literal(right).contains(value))
       )
     def same(a: Any, b: Any, depth: Int): Boolean =
+      ConstructionKernel.chargeBoundaryWork(1L)
       if depth >= 128 then fail(17, "enum selection result type exceeds the structural depth bound")
       val ar = a.asInstanceOf[AnyRef]
       val br = b.asInstanceOf[AnyRef]
@@ -255,8 +256,17 @@ private[nodal] object DigitalEnumContract:
               case (x: StructField[?], y: StructField[?]) =>
                 x.name == y.name && same(x.dataType, y.dataType, depth)
               case (x: Seq[?], y: Seq[?]) =>
-                x.size == y.size &&
-                x.iterator.zip(y.iterator).forall((x, y) => same(x, y, depth))
+                if !ConstructionKernel.boundaryWorkActive then
+                  x.size == y.size &&
+                  x.iterator.zip(y.iterator).forall((x, y) => same(x, y, depth))
+                else
+                  val left = x.iterator
+                  val right = y.iterator
+                  var equal = true
+                  while equal && left.hasNext && right.hasNext do
+                    ConstructionKernel.chargeBoundaryWork(2L)
+                    equal = same(left.next(), right.next(), depth)
+                  equal && !left.hasNext && !right.hasNext
               case _ =>
                 (dimension(a), dimension(b)) match
                   case (Some(x), Some(y)) => sameDimension(x, y)

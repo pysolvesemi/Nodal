@@ -5,6 +5,7 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/FsmCompositionModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
@@ -33,7 +34,44 @@ bool isDigitalRegionOwner(Operation *op) {
           op->getRegion(0).hasOneBlock() && op->getNumOperands() == 3 &&
           op->getRegion(0).front().getNumArguments() == 1);
 }
-FailureOr<DigitalRegionHeader> inspectDigitalRegion(Block *body) {
+namespace {
+bool spendRegionWork(unsigned *remaining, uint64_t amount = 1) {
+  if (!remaining)
+    return true;
+  if (amount > *remaining) {
+    *remaining = 0;
+    return false;
+  }
+  *remaining -= amount;
+  return true;
+}
+// Raw header owners inspect their actual operand/argument signatures and lexical
+// ancestry. Charge those scans before delegation, never a copied capture map.
+bool chargeRegionHeader(Block *body, unsigned *remaining) {
+  if (!spendRegionWork(remaining) || !body || !body->getParentOp())
+    return false;
+  if (!remaining)
+    return true;
+  Operation *operation = body->getParentOp();
+  for (Operation *scope = operation; scope && !isa<ModuleOp>(scope); scope = scope->getParentOp())
+    if (!spendRegionWork(remaining))
+      return false;
+  if (!spendRegionWork(remaining, operation->getNumOperands()))
+    return false;
+  for (Region &region : operation->getRegions()) {
+    if (!spendRegionWork(remaining))
+      return false;
+    for (Block &block : region)
+      if (!spendRegionWork(remaining, 1 + block.getNumArguments()))
+        return false;
+  }
+  return true;
+}
+} // namespace
+static FailureOr<DigitalRegionHeader> inspectDigitalRegionImpl(Block *body, unsigned *remaining) {
+  if (!chargeRegionHeader(body, remaining))
+    return failure();
+
   if (!body || !body->getParent())
     return failure();
   Operation *op = body->getParentOp();
@@ -82,26 +120,27 @@ FailureOr<DigitalRegionHeader> inspectDigitalRegion(Block *body) {
     return DigitalRegionHeader{op, module, body, DigitalRegionKind::Generate, 0, false};
   return failure();
 }
-LogicalResult verifyDigitalValueScope(Value value, Operation *use,
-                                      const ParameterIntegerEnvironment *) {
+static LogicalResult verifyDigitalValueScopeImpl(Value value, Operation *use, unsigned *remaining) {
+  if (!spendRegionWork(remaining))
+    return failure();
   if (!value || !use || !use->getBlock())
     return failure();
   Operation *module = owner(use);
   if (!module)
     return failure();
   if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
-    auto h = inspectDigitalRegion(argument.getOwner());
+    auto h = inspectDigitalRegionImpl(argument.getOwner(), remaining);
     if (failed(h))
       return failure();
     Operation *visible = use;
     unsigned depth = 0;
     while (visible && visible->getBlock() != argument.getOwner()) {
-      if (++depth > 128)
+      if (!spendRegionWork(remaining) || ++depth > 128)
         return failure();
       Operation *parent = visible->getParentOp();
       if (!parent || parent == module)
         return failure();
-      auto region = inspectDigitalRegion(visible->getBlock());
+      auto region = inspectDigitalRegionImpl(visible->getBlock(), remaining);
       if (failed(region) || region->isolated)
         return failure();
       visible = parent;
@@ -114,13 +153,13 @@ LogicalResult verifyDigitalValueScope(Value value, Operation *use,
   Operation *visible = use;
   unsigned depth = 0;
   while (visible && visible->getBlock() != definition->getBlock()) {
-    if (++depth > 128)
+    if (!spendRegionWork(remaining) || ++depth > 128)
       return failure();
     Operation *parent = visible->getParentOp();
     if (!parent || parent == module)
       return failure();
     if (isDigitalRegionOwner(parent)) {
-      auto region = inspectDigitalRegion(visible->getBlock());
+      auto region = inspectDigitalRegionImpl(visible->getBlock(), remaining);
       if (failed(region) || region->isolated)
         return failure();
     }
@@ -128,10 +167,12 @@ LogicalResult verifyDigitalValueScope(Value value, Operation *use,
   }
   return success(visible && definition != visible && definition->isBeforeInBlock(visible));
 }
-FailureOr<Value> digitalRegionCaptureSource(BlockArgument arg,
-                                            const ParameterIntegerEnvironment *) {
-  auto h = inspectDigitalRegion(arg.getOwner());
+static FailureOr<Value> digitalRegionCaptureSourceImpl(BlockArgument arg, unsigned *remaining) {
+  auto h = inspectDigitalRegionImpl(arg.getOwner(), remaining);
   if (failed(h))
+    return failure();
+  // Each delegated capture owner independently rechecks that same signature.
+  if (!chargeRegionHeader(arg.getOwner(), remaining))
     return failure();
   switch (h->kind) {
   case DigitalRegionKind::Collection:
@@ -150,6 +191,26 @@ FailureOr<Value> digitalRegionCaptureSource(BlockArgument arg,
     return Value();
   }
   return failure();
+}
+FailureOr<DigitalRegionHeader> inspectDigitalRegion(Block *body) {
+  return inspectDigitalRegionImpl(body, nullptr);
+}
+FailureOr<DigitalRegionHeader> inspectDigitalRegion(Block *body, unsigned &remaining) {
+  return inspectDigitalRegionImpl(body, &remaining);
+}
+LogicalResult verifyDigitalValueScope(Value value, Operation *use,
+                                      const ParameterIntegerEnvironment *) {
+  return verifyDigitalValueScopeImpl(value, use, nullptr);
+}
+LogicalResult verifyDigitalValueScope(Value value, Operation *use, unsigned &remaining) {
+  return verifyDigitalValueScopeImpl(value, use, &remaining);
+}
+FailureOr<Value> digitalRegionCaptureSource(BlockArgument value,
+                                            const ParameterIntegerEnvironment *) {
+  return digitalRegionCaptureSourceImpl(value, nullptr);
+}
+FailureOr<Value> digitalRegionCaptureSource(BlockArgument value, unsigned &remaining) {
+  return digitalRegionCaptureSourceImpl(value, &remaining);
 }
 LogicalResult digitalRegionArgumentDependencies(BlockArgument arg, SmallVectorImpl<Value> &deps) {
   auto h = inspectDigitalRegion(arg.getOwner());
@@ -195,8 +256,13 @@ std::string digitalValueSemanticPath(Value value) {
   }
   if (auto result = llvm::dyn_cast<OpResult>(value)) {
     Operation *definition = result.getOwner();
-    if (llvm::isa<FlatFSMOp>(definition) && succeeded(inspectFlatFSMHeader(definition)))
-      return (path(definition) + (result.getResultNumber() ? ".taken" : ".next")).str();
+    if (llvm::isa<FlatFSMOp>(definition)) {
+      StringRef role = flatFSMResultRole(value);
+      return role.empty() ? std::string() : (path(definition) + "." + role).str();
+    }
+    if (StringRef role = fsmCompositionResultRole(value); !role.empty())
+      return definition->getNumResults() == 1 ? path(definition).str()
+                                              : (path(definition) + "." + role).str();
     if (llvm::isa<AsyncFifoOp>(definition)) {
       auto endpoint = inspectExecutableCrossingResult(value);
       if (failed(endpoint))
@@ -214,6 +280,82 @@ std::string digitalValueSemanticPath(Value value) {
   }
   return {};
 }
+static FailureOr<Value> lookupDigitalRegionTokenImpl(Block *body, StringRef token, unsigned *work,
+                                                     unsigned *remaining) {
+  if (!spendRegionWork(remaining))
+    return failure();
+  if (!body || token.empty())
+    return failure();
+  Value result;
+  unsigned localWork = 0;
+  if (!work)
+    work = &localWork;
+  for (BlockArgument arg : body->getArguments()) {
+    if (!spendRegionWork(remaining) || ++*work > 65536)
+      return failure();
+    if (!chargeRegionHeader(body, remaining) || !chargeRegionHeader(body, remaining))
+      return failure();
+    if (digitalValueSemanticPath(arg) == token) {
+      if (result)
+        return failure();
+      result = arg;
+    }
+  }
+  for (Operation &op : *body) {
+    if (!spendRegionWork(remaining) || ++*work > 65536)
+      return failure();
+    if (path(&op) == token) {
+      if (result || op.getNumResults() != 1)
+        return failure();
+      result = op.getResult(0);
+    }
+  }
+  return result;
+}
+static bool isGeneratedTypeUseImpl(Operation *use, unsigned *remainingWork, bool chargeHeaders) {
+  if (chargeHeaders && !spendRegionWork(remainingWork))
+    return false;
+  bool generated = false;
+  unsigned depth = 0;
+  while (use && !isa_and_nonnull<ModuleOp>(use->getParentOp())) {
+    if (++depth > 128 || !spendRegionWork(remainingWork))
+      return false;
+    auto header =
+        inspectDigitalRegionImpl(use->getBlock(), chargeHeaders ? remainingWork : nullptr);
+    if (failed(header) || (header->kind != DigitalRegionKind::Generate &&
+                           header->kind != DigitalRegionKind::StructuralArm &&
+                           header->kind != DigitalRegionKind::Collection))
+      return false;
+    if (header->kind == DigitalRegionKind::Collection) {
+      // Actual captures may carry generated coordinates; ordinary reducer width
+      // formals keep their separately admitted ParameterIntegerEnvironment.
+      unsigned localWork = 65536;
+      auto applicable = inspectGeneratedCollectionTypeApplicability(
+          header->body, remainingWork ? *remainingWork : localWork);
+      if (failed(applicable) || !*applicable)
+        return false;
+    }
+    generated |= header->kind == DigitalRegionKind::Generate;
+    use = header->operation;
+  }
+  return use && generated;
+}
+
+bool isGeneratedTypeUse(Operation *use) {
+  unsigned remainingWork = 65536;
+  return isGeneratedTypeUseImpl(use, &remainingWork, false);
+}
+bool isGeneratedTypeUse(Operation *use, unsigned &remainingWork) {
+  return isGeneratedTypeUseImpl(use, &remainingWork, true);
+}
+FailureOr<Value> lookupDigitalRegionToken(Block *body, StringRef token, unsigned *work) {
+  return lookupDigitalRegionTokenImpl(body, token, work, nullptr);
+}
+FailureOr<Value> lookupDigitalRegionToken(Block *body, StringRef token, unsigned &remaining) {
+  unsigned work = 0;
+  return lookupDigitalRegionTokenImpl(body, token, &work, &remaining);
+}
+
 namespace detail {
 class DigitalGenerateIntegerEnvironmentAdmission {
 public:
@@ -223,7 +365,20 @@ public:
     if (failed(h) || h->kind != DigitalRegionKind::Generate ||
         failed(resolveGeneratedDomain(h->operation)))
       return failure();
-    // The induction is deliberately absent: generated indices cannot become widths.
+    // Retain the actual enclosing lexical context, but never bind the induction:
+    // generated indices remain Shape/iteration facts, not type-width atoms.
+    unsigned depth = 0;
+    for (Operation *scope = h->operation; scope != h->module; scope = scope->getParentOp())
+      if (!scope || !isDigitalRegionOwner(scope) || ++depth > 128)
+        return failure();
+    if (isDigitalRegionOwner(h->operation->getParentOp())) {
+      auto parents = digitalIntegerContextsAtUse(h->operation);
+      if (failed(parents) || parents->size() != 1)
+        return failure(); // A single context consumer cannot select a reduction case.
+      const auto &parent = parents->front();
+      return ParameterIntegerEnvironment::create(h->module, h->body, use, parent.instance(), {}, {},
+                                                 &parent);
+    }
     return ParameterIntegerEnvironment::create(h->module, h->body, use, nullptr, {}, {});
   }
 };

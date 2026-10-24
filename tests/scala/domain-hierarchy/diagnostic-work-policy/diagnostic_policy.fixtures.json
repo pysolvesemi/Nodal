@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "api_sha256": "790f927c6eb3e251737ad0d54eec613aeee7d8f9ca75bd53856b80376ee6832b",
+  "groups": {
+    "policy": {
+      "fixtures": [
+        {
+          "maintained_path": "PolicyAdmissionControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/diagnostic-policy/PolicyAdmissionControls.scala",
+          "sha256": "2dba884b72695fdeafa91d21746b472dcc76f3c5dc309e044afd3862ddcf7aec",
+          "bytes": 10982,
+          "compile": true
+        },
+        {
+          "maintained_path": "C2b2aBoundControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/diagnostic-policy/C2b2aBoundControls.scala",
+          "sha256": "96c3b73565d56d448eca18fc8a8c42f627da42f084c40100c4eed58769bd04e9",
+          "bytes": 24499,
+          "compile": true
+        },
+        {
+          "maintained_path": "C2b2aBoundRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/diagnostic-policy/C2b2aBoundRoot.scala",
+          "sha256": "a95c65241a050c8fb2162b3b0f6cd838b6c0d193d7953f8bf7aec2aadaf2bdd0",
+          "bytes": 906,
+          "compile": true
+        }
+      ]
+    }
+  },
+  "suites": {
+    "policy-admission": {
+      "group": "policy",
+      "main": "diagnosticpolicy.admission.PolicyAdmissionControls",
+      "arguments": [],
+      "success": [
+        "PASS donor full finish policy=registered-construction-diagnostic-131072",
+        "PASS diagnostic policy no_request",
+        "PASS diagnostic policy ordinary_carrier",
+        "PASS diagnostic policy stage_ab",
+        "PASS diagnostic policy copied_metadata",
+        "PASS diagnostic policy foreign_carrier",
+        "PASS diagnostic policy foreign_root_bind",
+        "PASS diagnostic policy duplicate_bind",
+        "PASS diagnostic policy late_bind",
+        "PASS diagnostic policy legacy_65537",
+        "PASS diagnostic policy legacy_mixing",
+        "PASS diagnostic policy repeat_activation",
+        "PASS diagnostic policy bind_after_spend",
+        "PASS diagnostic policy legacy_after_spend",
+        "PASS diagnostic policy descriptor_depth",
+        "PASS diagnostic policy preowner_cap",
+        "PASS diagnostic policy exact_debt",
+        "PASS diagnostic policy fresh-session recovery"
+      ]
+    },
+    "policy-publication": {
+      "group": "policy",
+      "main": "diagnosticpolicy.exportscan.C2b2aBoundControls",
+      "arguments": [
+        "publication"
+      ],
+      "success": [
+        "PASS bound publication actual traversal exhaustion, scope restoration, poison and no rollback",
+        "PASS bound publication fresh ordinary-session recovery"
+      ]
+    },
+    "policy-localdepth": {
+      "group": "policy",
+      "main": "diagnosticpolicy.exportscan.C2b2aBoundControls",
+      "arguments": [
+        "descriptor-depth"
+      ],
+      "success": [
+        "PASS diagnostic real descriptor exporter depth refusal with positive balance",
+        "PASS bound descriptor-depth fresh ordinary-session recovery"
+      ]
+    }
+  },
+  "default_suites": [
+    "policy-admission",
+    "policy-publication",
+    "policy-localdepth"
+  ]
+}

@@ -1,0 +1,23 @@
+# Prepared operation source: focused local controls
+
+This bundle covers the narrowly scoped prepared-source repair, not Foundation58 completion or default-capacity acceptance. Candidate API SHA256 is 4a3e63583768836d83827fb2eb4e2fe28bd2a2947696a2d59fce4a072c83a204; baseline is checkpoint65 a55f3114691b9d00df0e96105d67188d1647cce28ebf13c843466d2ad539ecb5. The fixed131072 policy remains diagnostic only; default65536 is unchanged and remains unaccepted.
+
+## Runner and exact inputs
+
+Use the shared single-assignment runner with python3 -I -B and explicit --manifest pointing to prepared_source.fixtures.json. Without --manifest, that runner retains its previous single_assignment.fixtures.json default and previous output labels/scope. The manifest's parent is the fixture-bundle root. Supply every existing required argument (repository, Java/compiler/runtime/bridge jars, both APIs, effective97 source map, new ignored output path, timeout), plus explicit source-root/source-pins arguments for every selected group. No API build or lookup synthesis is performed by the runner.
+
+Each group needs its own authoritative lookup with the exact97 candidate source projection, a hash-pinned regular build.mill and core/scala/docs directories. Copy fixtures into their exact manifest virtual suffixes. All bundled fixtures and all projected fixture files must have nlink1: never hardlink freshness/absence-control files into either immutable receipt trees or other groups. Production source projections may retain their existing immutable links. Groups compile independently with -Wunused:all -Werror; do not combine their intentionally overlapping package/class names. Baseline/candidate comparison suites use identical compiled fixture classes and the same source projection.
+
+The runner verifies manifest, tools, JARs, bundled fixtures and lookup contents before/after every execution, enforces the246,808,576-byte reserve, requires each completion marker, and compares paired output bytes. Fixture mutations must restore their original bytes before returning; source-file identity/mtime handling is implemented by the fixtures. Interrupted mutation runs require inspecting/restoring only that isolated lookup before reuse, not rewriting pinned receipts.
+
+## Scope and evidence
+
+The final v2 controls previously passed11 cases against the exact candidate: positive public assignment, first/second-phase budget exhaustion, wrong module/kind/vector, foreign-builder binding, consumed token, same-size/mtime-restored content change, missing source and nonregular replacement. Public budget cases check Session/origin append ordering, poisoning and recovery. The second-phase case requires exhaustion during the paid decoded-line comparison in the pinned source. Private token identity/freshness seams do not claim organic public-program behavior or a Session append. Source equality means decoded naming-input lines, not raw-byte identity.
+
+Long-name fallback fixtures previously produced equal baseline/candidate capture output at the listed passing depths and cache/source absence cases. Deeper long-name runs exhausted their unchanged diagnostic budget on both APIs; their failing receipts remain separate and are not converted into passing manifest suites. Recursion depth is not asserted to equal StackWalker frame count.
+
+The maintained bundle passed three fresh strict-warning compilations, all38 selected suites and12 exact-output comparisons. The shared runner also passed a fresh legacy fee-suite compile/run using its unchanged default manifest selection. Prior whole-output parity, real cost measurements, legacy fee controls and retained regressions remain separately scoped evidence; these tests do not replace those comparisons or promote a production capacity profile. No CI or full qualification is requested.
+
+## Compact stack-boundary subset
+
+The deep group retains actual ordinary depths0,75,96 plus cache/source absence, with paired byte comparisons, and separately labeled candidate-only reflective probes at0,75,96. All were previously successful in the full compact-fixture exploration; this maintained subset is intentionally smaller. Emitted non-tail recursive drive instructions and unwind assertions establish that depth96 has97 live root-drive frames alone, beyond the96-frame selector cap. Depth75 has76 root-drive frames plus at least six capture-path frames, beyond the80-frame reuse threshold. Reflective PROBE output is a private seam with a different stack, not the proof of actual assignment behavior. These fixtures deliberately stop after capture and do not claim normal-finish publication.

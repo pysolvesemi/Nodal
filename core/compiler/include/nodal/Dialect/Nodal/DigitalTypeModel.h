@@ -49,6 +49,16 @@ inferDigitalWidthBounds(mlir::Type type, mlir::Operation *module,
 mlir::FailureOr<InstantiatedIntegerExpression>
 inferDigitalWidthExpression(mlir::Type type, mlir::Operation *module,
                             const ParameterIntegerEnvironment *environment = nullptr);
+/// Exact child scalar width under a finalized immediate instance substitution.
+/// The child type retains its declaration owner; no parent token lookup or
+/// default/bounds-based identity is permitted.
+mlir::FailureOr<InstantiatedIntegerExpression>
+inferInstanceDigitalWidthExpression(mlir::Type type, mlir::Operation *instance);
+
+/// Exact original generated-template width, retaining actual induction identities
+/// and proving the full formal contract before target transport is considered.
+mlir::FailureOr<InstantiatedIntegerExpression>
+inferGeneratedInstanceDigitalWidthExpression(mlir::Type type, mlir::Operation *instance);
 
 /// Same complete storage type within one actual module: retain scalar kind,
 /// nominal enum/Struct identity, ordered fields and shape rank, while comparing
@@ -65,6 +75,37 @@ bool equivalentDigitalStorageTypesAcross(mlir::Type left,
                                          mlir::Type right,
                                          const ParameterIntegerEnvironment *rightContext,
                                          mlir::Operation *module);
+/// Complete child formal versus parent actual ABI under this exact direct
+/// instance's finalized parameter environment. Reuses the ordinary recursive
+/// type checker with independently validated owners, shapes and width DAGs.
+/// Generated lexical instances require their separately admitted family view.
+/// Exact selected structural views, independently inspected at this boundary.
+bool equivalentSelectedDigitalStorageTypes(mlir::Operation *selection, mlir::Operation *instance,
+                                           mlir::Type formal, mlir::Type actual);
+/// Compare types at their independently admitted original lexical uses. Equal
+/// token spellings do not imply equal DAGs across regional contexts.
+bool equivalentDigitalStorageTypesAt(mlir::Type left, mlir::Operation *leftUse, mlir::Type right,
+                                     mlir::Operation *rightUse);
+/// Direct exported Interface types retain their original definition/endpoint
+/// anchor. The anchor is checked against the selected original endpoint.
+bool equivalentSelectedDigitalStorageTypesAt(mlir::Operation *selection, mlir::Operation *formalUse,
+                                             mlir::Type formal, mlir::Type actual);
+bool equivalentSelectedDigitalStorageTypesAcross(mlir::Operation *leftSelection,
+                                                 mlir::Operation *leftInstance, mlir::Type left,
+                                                 mlir::Operation *rightSelection,
+                                                 mlir::Operation *rightInstance, mlir::Type right);
+/// Original all-lane formal substitution versus an actual type use in the same
+/// Generate body. Selection specialization and ordinary Module queries are separate.
+bool equivalentGeneratedInstanceDigitalStorageTypes(mlir::Operation *instance, mlir::Type formal,
+                                                    mlir::Type actual, mlir::Operation *use);
+bool equivalentInstanceDigitalStorageTypes(mlir::Operation *instance, mlir::Type formal,
+                                           mlir::Type actual);
+/// Compare two complete logical types in one actual parent context. A nonnull
+/// instance supplies its exact immediate child's declaration owner; null means
+/// a parent-owned type. Both substitutions use finalized canonical bindings.
+bool equivalentDigitalStorageTypesAcrossInstances(mlir::Operation *parent, mlir::Type left,
+                                                  mlir::Operation *leftInstance, mlir::Type right,
+                                                  mlir::Operation *rightInstance);
 
 /// Construction-only width-family relation. Both complete types are validated.
 /// Scalar width leaves may differ; scalar kind, enum ABI, Struct name/ordered
@@ -72,6 +113,22 @@ bool equivalentDigitalStorageTypesAcross(mlir::Type left,
 /// assignment or port/storage ABI substitution.
 bool sameDigitalStorageWidthFamily(mlir::Type base, mlir::Type instance, mlir::Operation *module,
                                    const ParameterIntegerEnvironment *environment = nullptr);
+
+/// Checked recursive storage validity, separate from attained numeric footprint.
+/// Absence means an independently checked empty generated occurrence, never zero
+/// bits. Every concrete sibling/schema/effect/domain obligation remains checked.
+struct DigitalStorageTypeFacts {
+  std::optional<int64_t> maximumBits;
+};
+mlir::FailureOr<DigitalStorageTypeFacts>
+inspectDigitalStorageType(mlir::Type type, mlir::Operation *use,
+                          const ParameterIntegerEnvironment *environment = nullptr);
+
+/// Complete original child storage type under its exact generated Instance.
+/// Absence preserves checked empty dependent attainment, never a numeric zero.
+/// Original declaration validity and independent concrete fields remain checked.
+mlir::FailureOr<DigitalStorageTypeFacts>
+inspectGeneratedInstanceDigitalStorageType(mlir::Type formal, mlir::Operation *instance);
 
 /// Prove one directionless storage type's worst-case recursive bit footprint.
 /// Without a context the use is the owning module or a direct child. An admitted

@@ -1,18 +1,23 @@
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "mlir/IR/Verifier.h"
+#include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
+#include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 
 #include <functional>
@@ -100,6 +105,35 @@ FailureOr<StructuralIfHeader> inspectStructuralIfHeader(Operation *op) {
   }
   return h;
 }
+bool areOppositeStructuralArms(Operation *left, Operation *right) {
+  if (!left || !right || left == right ||
+      left->getParentOfType<ModuleOp>() != right->getParentOfType<ModuleOp>())
+    return false;
+  llvm::DenseMap<Operation *, unsigned> arms;
+  unsigned depth = 0;
+  for (Operation *at = left; at && !llvm::isa<ModuleOp>(at); at = at->getParentOp()) {
+    if (++depth > 128)
+      return false;
+    Operation *parent = at->getParentOp();
+    if (!llvm::isa_and_nonnull<StructuralIfOp>(parent))
+      continue;
+    auto header = inspectStructuralIfHeader(parent);
+    if (failed(header))
+      return false;
+    arms.try_emplace(parent, at->getParentRegion()->getRegionNumber());
+  }
+  depth = 0;
+  for (Operation *at = right; at && !llvm::isa<ModuleOp>(at); at = at->getParentOp()) {
+    if (++depth > 128)
+      return false;
+    Operation *parent = at->getParentOp();
+    auto found = arms.find(parent);
+    if (found != arms.end() && found->second != at->getParentRegion()->getRegionNumber())
+      return true;
+  }
+  return false;
+}
+
 FailureOr<Value> structuralIfCaptureSource(BlockArgument arg) {
   auto h = inspectStructuralIfHeader(arg.getOwner()->getParentOp());
   if (failed(h))
@@ -108,6 +142,25 @@ FailureOr<Value> structuralIfCaptureSource(BlockArgument arg) {
     if (arg.getOwner() == h->bodies[arm] && arg.getArgNumber() < h->captureCounts[arm])
       return h->operation->getOperand(h->captureOffsets[arm] + arg.getArgNumber());
   return failure();
+}
+bool isStructuralIfFamilyCapture(OpOperand &operand) {
+  Operation *op = operand.getOwner();
+  Value source = operand.get();
+  if (!llvm::isa<GeneratedFamilyType>(source.getType()))
+    return false;
+  auto h = inspectStructuralIfHeader(op);
+  if (failed(h) || failed(verifyDigitalValueScope(source, op)))
+    return false;
+  unsigned depth = 0;
+  for (Operation *scope = op; scope != h->module; scope = scope->getParentOp())
+    if (!scope || ++depth > 128 || !llvm::isa<StructuralIfOp, GenerateOp>(scope))
+      return false;
+  unsigned index = operand.getOperandNumber();
+  for (unsigned arm = 0; arm < 2; ++arm)
+    if (index >= h->captureOffsets[arm] && index - h->captureOffsets[arm] < h->captureCounts[arm])
+      return h->bodies[arm]->getArgument(index - h->captureOffsets[arm]).getType() ==
+             source.getType();
+  return false;
 }
 namespace detail {
 class StructuralIfIntegerEnvironmentAdmission {
@@ -129,6 +182,10 @@ public:
       // static/type binding. Shape and iteration consumers recheck its actual
       // induction ancestry at each read; predicates never use this admission.
       if (succeeded(resolveDigitalIterationIndex(source, h.operation)))
+        continue;
+      // Finite ordinary constructor data can cross this exact capture, but
+      // induction-derived data never becomes a structural/type binding.
+      if (succeeded(verifyConstructorBindingIntegerCapture(source, h.operation)))
         continue;
       auto expression =
           outer ? resolveOwnedIntegerExpression(h.module, source, *outer,
@@ -198,9 +255,43 @@ namespace {
 struct Budget {
   unsigned work = 0;
 };
-LogicalResult verifyIf(Operation *, const ParameterIntegerEnvironment *, Budget &, unsigned);
+// A guarded legacy range has continuous effects, not generated-family authority.
+// Keep this restriction separate from collection purity and propagate it through
+// the same recursive verifier, including independent operation entry points.
+enum class EffectProfile { Existing, ContinuousOnly };
+FailureOr<EffectProfile> lexicalEffectProfile(Operation *op, Budget &budget) {
+  EffectProfile profile = EffectProfile::Existing;
+  unsigned depth = 0;
+  for (Operation *scope = op; scope && !llvm::isa<ModuleOp>(scope); scope = scope->getParentOp()) {
+    if (++depth > 128 || ++budget.work > 65536) {
+      (void)reject(op, "effect ancestry exceeds its finite proof budget");
+      return failure();
+    }
+    // Once the guarded range has been encountered, restrictions apply only
+    // above it. Value choices inside its continuous body remain supported.
+    if (profile == EffectProfile::ContinuousOnly &&
+        (!llvm::isa<StructuralIfOp>(scope) || scope->getNumResults() != 0)) {
+      (void)reject(op, "guarded continuous generation requires statement-only non-generated ancestry");
+      return failure();
+    }
+    if (!llvm::isa<GenerateOp>(scope) || scope->getNumResults() != 0)
+      continue;
+    Operation *parent = scope->getParentOp();
+    if (!llvm::isa_and_nonnull<StructuralIfOp>(parent))
+      continue;
+    if (parent->getNumResults() != 0) {
+      (void)reject(scope, "guarded continuous generation requires a structural statement arm");
+      return failure();
+    }
+    profile = EffectProfile::ContinuousOnly;
+  }
+  return profile;
+}
+LogicalResult verifyIf(Operation *, const ParameterIntegerEnvironment *, Budget &, unsigned,
+                       EffectProfile);
+LogicalResult verifyGenerateBody(Operation *, Budget &, unsigned, EffectProfile);
 LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &environment, bool pure,
-                         Budget &budget, unsigned depth) {
+                         Budget &budget, unsigned depth, EffectProfile effects) {
   if (depth >= 128 || ++budget.work > 65536)
     return reject(op, "structural body exceeds its finite proof budget");
   auto at = environment.atUse(op);
@@ -210,10 +301,101 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
   for (Value operand : op->getOperands())
     if (failed(verifyDigitalValueScope(operand, op)))
       return reject(op, "body operands require actual local SSA or explicit captures");
+  auto family = op->getParentOfType<GenerateOp>();
+  const bool generatedStorage = family && family->getNumResults() == 1;
+  if (!pure && effects == EffectProfile::Existing && !op->getParentOfType<HardwareLoopOp>()) {
+    if (llvm::isa<BehavioralIfOp>(op))
+      return verifyBehavioralIfOperation(op);
+    if (llvm::isa<SequentialUpdateOp>(op))
+      return verifySequentialUpdate(op);
+    if (llvm::isa<SequentialSelectOp>(op))
+      return verifySequentialSelect(op);
+  }
+  if (llvm::isa<GenerateOp>(op) && effects == EffectProfile::ContinuousOnly)
+    return reject(op, "guarded continuous generation does not admit further generation");
+  if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<GenerateOp>(op) &&
+      op->getNumResults() == 0 && llvm::isa_and_nonnull<StructuralIfOp>(op->getParentOp()) &&
+      op->getParentOp()->getNumResults() == 0)
+    return verifyGenerateBody(op, budget, depth + 1, EffectProfile::ContinuousOnly);
+  if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<GenerateOp>(op) &&
+      op->getNumResults() == 1 &&
+      ((generatedStorage && op->getParentOp() == family) ||
+       llvm::isa_and_nonnull<StructuralIfOp>(op->getParentOp())))
+    return verifyGenerateBody(op, budget, depth + 1, effects);
+  if (!pure && effects == EffectProfile::Existing && !op->getParentOfType<HardwareLoopOp>() &&
+      llvm::isa<GeneratedMemberOp>(op))
+    return success(succeeded(inspectGeneratedMember(op)));
+  if (!pure && effects == EffectProfile::Existing && !op->getParentOfType<HardwareLoopOp>() &&
+      llvm::isa<InstancePortOp>(op) && op->getNumOperands() == 2)
+    // Only an actual selected carrier may cross this lexical seam. The shared
+    // inspector retains the exact family/ordinal capture chain and child owner.
+    return success(succeeded(inspectInstancePort(op)));
+  if (!pure && effects == EffectProfile::Existing && !op->getParentOfType<HardwareLoopOp>() &&
+      llvm::isa<InterfaceOp, InterfaceInstanceOp, InterfaceAbiOp, InterfaceBoundaryOp,
+                MemberAccessOp, InterfaceConnectOp, InterfaceDriveOp, InterfaceObserveOp>(op)) {
+    // Structural admission never supplies role, type, domain or driver authority.
+    // The canonical Interface model independently checks the complete owning
+    // module; this path only admits its exact lexical declaration/use carrier.
+    if (failed(verifyDigitalInterfaceOperation(op)))
+      return failure();
+    return llvm::isa<InterfaceBoundaryOp>(op)
+               ? success(succeeded(inspectDigitalInterfaceBoundary(op)))
+               : success();
+  }
+  if (!pure && effects == EffectProfile::Existing && generatedStorage && op->getParentOp() == family) {
+    if (llvm::isa<NodeOp, InstanceTerminalOp, ConnectOp>(op)) {
+      // This admits only the exact scalar lexical carrier. Complete topology,
+      // actual Interface permissions and child incidence remain conservative-
+      // owner checks, performed once for the whole body below.
+      if (failed(verifyGeneratedStructuralOwnership(op)))
+        return failure();
+      return mlir::verify(op, false);
+    }
+    if (llvm::isa<InstanceOp>(op))
+      return verifyHierarchyInstanceOperation(op);
+    if (llvm::isa<ParameterOverrideOp>(op)) {
+      auto boundary = resolveHierarchyInstance(op, op->getAttr("instance"));
+      auto reference = op->getAttrOfType<FlatSymbolRefAttr>("parameter");
+      Operation *parameter = nullptr;
+      if (succeeded(boundary) && reference)
+        for (Operation &candidate : boundary->module->getRegion(0).front())
+          if (llvm::isa<ParameterOp>(candidate) &&
+              text(&candidate, "sym_name") == reference.getValue())
+            parameter = &candidate;
+      auto declared = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+      for (NamedAttribute attribute : op->getAttrs())
+        if (!llvm::is_contained(ArrayRef<StringRef>{"instance", "parameter", "generated_owner",
+                                                    "generated_induction", "metadata"},
+                                attribute.getName().getValue()))
+          return reject(op, "generated parameter override carries an unsupported field");
+      // One ParameterModel admission proof owns parent Real expression DAGs.
+      if (failed(boundary) || boundary->instance->getParentOp() != family || !parameter ||
+          !declared || op->getNumOperands() != 1 ||
+          op->getOperand(0).getType() != declared.getValue() || failed(mlir::verify(op, false)) ||
+          (!isGeneratedParentRealParameterOverride(op, boundary->instance, parameter) &&
+           (!declared.getValue().isSignlessInteger(64) ||
+            failed(resolveGeneratedInstanceIntegerParameterFacts(
+                boundary->instance, parameter,
+                isStructuralParameter(parameter) ? ParameterIntegerMode::Storage
+                                                 : ParameterIntegerMode::MathematicalSigned64)))))
+        return reject(op, "generated child parameter override requires exact all-lane Integer "
+                          "formal/actual proof or a bounded parent ordinary dimensionless "
+                          "Real expression");
+      return success();
+    }
+    if (llvm::isa<InstanceDomainBindingOp>(op))
+      return verifyInstanceDomainBinding(op);
+    if (llvm::isa<InstancePortOp>(op))
+      return success(succeeded(inspectInstancePort(op)));
+    if (llvm::isa<DigitalStorageOp>(op))
+      return verifyDigitalStorageOperation(op);
+    if (op->getName().getStringRef() == "nodal.generated_export")
+      return verifyGeneratedExportOperation(op);
+  }
   if (llvm::isa<StructuralIfOp>(op)) {
     if (pure && op->getNumResults() != 1)
       return reject(op, "pure callbacks require value-only structural choices");
-    return verifyIf(op, &*at, budget, depth + 1);
+    return verifyIf(op, &*at, budget, depth + 1, effects);
   }
   if (llvm::isa<CollectionOp>(op))
     return verifyDigitalCollectionOperation(op, &*at);
@@ -222,7 +404,9 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
   if (llvm::isa<StaticCompareOp, StaticLogicOp>(op))
     return verifyStaticPredicateOperation(op);
   if (llvm::isa<DigitalAssignOp>(op)) {
-    if (pure || text(op, "kind") != "continuous")
+    if (pure || (text(op, "kind") != "continuous" &&
+                 !(effects == EffectProfile::Existing && !op->getParentOfType<HardwareLoopOp>() &&
+                   text(op, "kind") == "register_next")))
       return reject(op, "this body admits no state or procedural effects");
     return verifyDigitalAssignmentOperation(op);
   }
@@ -243,7 +427,8 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
     return verifyShapeViewMapping(op, &*at);
   if (llvm::isa<ConstantOp, ConstLiteralOp, ConstExprOp, ConstParameterRefOp>(op)) {
     Type type = op->getResult(0).getType();
-    if (isDigitalCombinationalValueType(type, environment.module(), &*at)) {
+    if ((isDigitalScalarType(type) && succeeded(inspectDigitalStorageType(type, op, &*at))) ||
+        isDigitalCombinationalValueType(type, environment.module(), &*at)) {
       if (llvm::isa<ConstExprOp, ConstParameterRefOp>(op))
         return reject(op, "runtime values require closed digital producers");
       if (llvm::isa<EnumType>(type))
@@ -251,8 +436,16 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
                                                                : failure();
       return verifyDigitalLiteralOperation(op, &*at);
     }
+    // Shape selectors retain the existing closed index-literal carrier. This
+    // does not grant index arithmetic or runtime Integer producers static proof.
+    if (llvm::isa<ConstantOp>(op) && type.isIndex())
+      return mlir::verify(op, false);
     if (!type.isSignlessInteger(64))
       return reject(op, "static producers require dimensionless i64");
+    // Ordinary constructor data is static but not structurally eligible. The
+    // Parameter owner checks every actual use/sink before this narrow admission.
+    if (succeeded(verifyConstructorBindingIntegerOperation(op)))
+      return mlir::verify(op, false);
     Operation *next = op->getNextNode();
     if (!next)
       return succeeded(verifyStructuralIntegerOperation(op))
@@ -271,8 +464,91 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
   }
   return reject(op, "unsupported effect or value producer in structural body");
 }
+// One authored-use inventory for admission and private-candidate rewriting.
+// Type-only dependencies are real captures, in the same order as SSA uses.
+FailureOr<SmallVector<BlockArgument, 8>> captureUseOrder(Block *body, unsigned &work,
+                                                         unsigned maximumWork) {
+  SmallVector<BlockArgument, 8> result;
+  llvm::DenseSet<Value> seen;
+  llvm::StringMap<BlockArgument> tokens;
+  for (BlockArgument argument : body->getArguments()) {
+    std::string identity = digitalValueSemanticPath(argument);
+    if (!identity.empty())
+      tokens.try_emplace(identity, argument);
+  }
+  bool valid = true;
+  auto mark = [&](Value value) {
+    auto argument = dyn_cast<BlockArgument>(value);
+    if (argument && argument.getOwner() == body && seen.insert(argument).second)
+      result.push_back(argument);
+  };
+  auto token = [&](StringRef identity) {
+    auto found = tokens.find(identity);
+    if (found != tokens.end())
+      mark(found->second);
+  };
+  std::function<void(Type, unsigned)> visitType;
+  std::function<void(Attribute, unsigned)> visitAttribute;
+  visitType = [&](Type type, unsigned depth) {
+    if (depth >= 128 || ++work > maximumWork) {
+      valid = false;
+      return;
+    }
+    if (auto scalar = dyn_cast<ParametricIntegerType>(type))
+      token(scalar.getWidth());
+    if (auto shaped = dyn_cast<ShapedType>(type)) {
+      SmallVector<StringRef, 4> dimensions;
+      shaped.getDimensions().split(dimensions, ',');
+      for (StringRef dimension : dimensions)
+        token(dimension);
+    }
+    type.walkImmediateSubElements([&](Attribute a) { visitAttribute(a, depth + 1); },
+                                  [&](Type t) { visitType(t, depth + 1); });
+  };
+  visitAttribute = [&](Attribute attribute, unsigned depth) {
+    if (depth >= 128 || ++work > maximumWork) {
+      valid = false;
+      return;
+    }
+    attribute.walkImmediateSubElements([&](Attribute a) { visitAttribute(a, depth + 1); },
+                                       [&](Type t) { visitType(t, depth + 1); });
+  };
+  std::function<LogicalResult(Block *, unsigned)> visitBlock =
+      [&](Block *current, unsigned depth) -> LogicalResult {
+    if (depth >= 128)
+      return failure();
+    for (Operation &child : *current) {
+      if (++work > maximumWork)
+        return failure();
+      for (Value operand : child.getOperands()) {
+        if (++work > maximumWork)
+          return failure();
+        mark(operand);
+      }
+      for (NamedAttribute attribute : child.getAttrs())
+        visitAttribute(attribute.getValue(), 0);
+      for (Type type : child.getOperandTypes())
+        visitType(type, 0);
+      for (Type type : child.getResultTypes())
+        visitType(type, 0);
+      if (!valid)
+        return failure();
+      // Generate is deliberately non-isolated. Its actual nested body can use
+      // this arm's arguments directly; other regions expose explicit captures.
+      if (llvm::isa<GenerateOp>(child)) {
+        if (child.getNumRegions() != 1 || !llvm::hasSingleElement(child.getRegion(0)) ||
+            failed(visitBlock(&child.getRegion(0).front(), depth + 1)))
+          return failure();
+      }
+    }
+    return success();
+  };
+  if (failed(visitBlock(body, 0)))
+    return failure();
+  return result;
+}
 LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, Budget &budget,
-                       unsigned depth) {
+                       unsigned depth, EffectProfile effects) {
   if (depth >= 128 || ++budget.work > 65536)
     return reject(op, "conditional nesting/work budget exhausted");
   auto h = inspectStructuralIfHeader(op);
@@ -304,6 +580,12 @@ LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, 
       } else if (llvm::isa<StaticPredicateType>(arg.getType())) {
         if (source.getType() != arg.getType() || failed(analyzeStaticPredicate(source, op, outer)))
           return reject(op, "predicate capture must retain its verified actual DAG");
+      } else if (llvm::isa<GeneratedFamilyType>(arg.getType())) {
+        if (!isStructuralIfFamilyCapture(op->getOpOperand(h->captureOffsets[arm] + i)))
+          return reject(op, "family capture requires an exact typed ordinary structural slot");
+      } else if (!pure && isDigitalControlBoundaryType(arg.getType())) {
+        if (source.getType() != arg.getType())
+          return reject(op, "control capture must preserve its exact Clock/Reset capability");
       } else if (!isDigitalCombinationalValueType(source.getType(), h->module, outer) ||
                  !isDigitalCombinationalValueType(arg.getType(), h->module, &*context) ||
                  !equivalentDigitalStorageTypesAcross(source.getType(), outer, arg.getType(),
@@ -313,69 +595,22 @@ LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, 
         if (!body->getParent()->isAncestor(user->getParentRegion()))
           return reject(op, "arm arguments cannot escape their actual branch");
     }
-    llvm::DenseSet<Value> used;
-    unsigned expected = 0;
+    unsigned captureWork = 0;
+    auto order = captureUseOrder(body, captureWork, 65536);
+    if (failed(order))
+      return reject(op, "arm type captures exceed finite first-use inventory budget");
+    for (auto [index, argument] : llvm::enumerate(*order))
+      if (argument.getArgNumber() != index)
+        return reject(op, "arm captures must retain deterministic first actual use order");
     for (Operation &child : *body) {
-      auto mark = [&](Value value) {
-        auto arg = llvm::dyn_cast<BlockArgument>(value);
-        return !arg || arg.getOwner() != body || !used.insert(arg).second ||
-               arg.getArgNumber() == expected++;
-      };
-      for (Value operand : child.getOperands())
-        if (!mark(operand))
-          return reject(&child, "arm captures must retain deterministic first actual use order");
-      // Type-token dependencies are real uses too. Match the canonical transport
-      // order: operands, attributes, operand/result signature. Type validity and
-      // exact substitution remain with DigitalTypeModel, not this use inventory.
-      bool ordered = true;
-      unsigned typeWork = 0;
-      std::function<void(Type, unsigned)> visitType;
-      std::function<void(Attribute, unsigned)> visitAttribute;
-      auto token = [&](StringRef id) {
-        for (BlockArgument arg : body->getArguments())
-          if (digitalValueSemanticPath(arg) == id && !mark(arg))
-            ordered = false;
-      };
-      visitType = [&](Type type, unsigned level) {
-        if (level >= 128 || ++typeWork > 65536) {
-          ordered = false;
-          return;
-        }
-        if (auto scalar = llvm::dyn_cast<ParametricIntegerType>(type))
-          token(scalar.getWidth());
-        if (auto shaped = llvm::dyn_cast<ShapedType>(type)) {
-          SmallVector<StringRef, 4> dimensions;
-          shaped.getDimensions().split(dimensions, ',');
-          for (StringRef dimension : dimensions)
-            token(dimension);
-        }
-        type.walkImmediateSubElements([&](Attribute a) { visitAttribute(a, level + 1); },
-                                      [&](Type t) { visitType(t, level + 1); });
-      };
-      visitAttribute = [&](Attribute attribute, unsigned level) {
-        if (level >= 128 || ++typeWork > 65536) {
-          ordered = false;
-          return;
-        }
-        attribute.walkImmediateSubElements([&](Attribute a) { visitAttribute(a, level + 1); },
-                                           [&](Type t) { visitType(t, level + 1); });
-      };
-      for (NamedAttribute attribute : child.getAttrs())
-        visitAttribute(attribute.getValue(), 0);
-      for (Type type : child.getOperandTypes())
-        visitType(type, 0);
-      for (Type type : child.getResultTypes())
-        visitType(type, 0);
-      if (!ordered)
-        return reject(&child, "arm type captures exceed budget or violate first-use order");
-      if (failed(verifyBody(&child, *context, pure, budget, depth + 1)))
+      if (failed(verifyBody(&child, *context, pure, budget, depth + 1, effects)))
         return failure();
       for (Value value : child.getResults())
         for (Operation *user : value.getUsers())
           if (!body->getParent()->isAncestor(user->getParentRegion()))
             return reject(&child, "branch-local values cannot escape or cross alternatives");
     }
-    if (expected != h->captureCounts[arm])
+    if (order->size() != h->captureCounts[arm])
       return reject(op, "unused or forged arm capture");
     if (op->getNumResults() &&
         !equivalentDigitalStorageTypesAcross(body->back().getOperand(0).getType(), &*context,
@@ -385,19 +620,58 @@ LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, 
   return success();
 }
 } // namespace
+LogicalResult canonicalizeStructuralIfCaptures(Operation *op, unsigned &work,
+                                               unsigned maximumWork) {
+  auto header = inspectStructuralIfHeader(op);
+  if (failed(header))
+    return failure();
+  SmallVector<BlockArgument, 8> orders[2];
+  SmallVector<Value, 8> operands{op->getOperand(0)};
+  bool changed = false;
+  for (unsigned arm = 0; arm != 2; ++arm) {
+    auto order = captureUseOrder(header->bodies[arm], work, maximumWork);
+    if (failed(order))
+      return reject(op, "normalized capture inventory exceeds finite work budget");
+    orders[arm] = std::move(*order);
+    changed |= orders[arm].size() != header->captureCounts[arm];
+    for (auto [index, argument] : llvm::enumerate(orders[arm])) {
+      changed |= argument.getArgNumber() != index;
+      operands.push_back(op->getOperand(header->captureOffsets[arm] + argument.getArgNumber()));
+    }
+  }
+  if (!changed)
+    return success();
+  // All facts are collected before changing either arm. The caller retains the
+  // encompassing private transaction and re-verifies before publication.
+  for (unsigned arm = 0; arm != 2; ++arm) {
+    Block *body = header->bodies[arm];
+    for (BlockArgument old : orders[arm]) {
+      BlockArgument replacement = body->addArgument(old.getType(), old.getLoc());
+      old.replaceAllUsesWith(replacement);
+    }
+    body->eraseArguments(0, header->captureCounts[arm]);
+  }
+  op->setOperands(operands);
+  op->setAttr("operandSegmentSizes",
+              DenseI32ArrayAttr::get(op->getContext(), {1, static_cast<int32_t>(orders[0].size()),
+                                                        static_cast<int32_t>(orders[1].size())}));
+  return success();
+}
 LogicalResult verifyStructuralIfOperation(Operation *op, const ParameterIntegerEnvironment *outer) {
+  Budget budget;
+  auto effects = lexicalEffectProfile(op, budget);
+  if (failed(effects))
+    return failure();
   if (!outer && op && isDigitalRegionOwner(op->getParentOp())) {
     auto contexts = digitalIntegerContextsAtUse(op);
     if (failed(contexts))
       return failure();
-    Budget budget;
     for (const auto &context : *contexts)
-      if (failed(verifyIf(op, &context, budget, 0)))
+      if (failed(verifyIf(op, &context, budget, 0, *effects)))
         return failure();
     return success();
   }
-  Budget budget;
-  return verifyIf(op, outer, budget, 0);
+  return verifyIf(op, outer, budget, 0, *effects);
 }
 LogicalResult verifyStructuralIfModel(Operation *module) {
   if (!llvm::isa_and_nonnull<ModuleOp>(module))
@@ -426,28 +700,58 @@ LogicalResult verifyStructuralIfModel(Operation *module) {
   }
   return success();
 }
-LogicalResult verifyDigitalGenerateBody(Operation *op) {
+namespace {
+LogicalResult verifyGenerateBody(Operation *op, Budget &budget, unsigned depth,
+                                 EffectProfile effects) {
+  if (depth >= 128 || ++budget.work > 65536)
+    return reject(op, "structural body exceeds its finite proof budget");
   if (!llvm::isa_and_nonnull<GenerateOp>(op))
+    return failure();
+  if (effects == EffectProfile::ContinuousOnly && failed(lexicalEffectProfile(op, budget)))
     return failure();
   // Legacy attribute-bound Generate has its existing target-neutral contract.
   // Only the real SSA-domain form participates in this new digital admission.
+  if (effects == EffectProfile::ContinuousOnly &&
+      (!isDigitalRegionOwner(op) || op->getNumResults() != 0 ||
+       op->getParentOfType<CollectionOp>() || op->getParentOfType<HardwareLoopOp>() ||
+       op->getNumRegions() != 1 ||
+       !llvm::hasSingleElement(op->getRegion(0))))
+    return reject(op, "guarded continuous generation requires an actual zero-result SSA domain");
   if (!isDigitalRegionOwner(op))
     return success();
-  bool digital = false;
+  bool digital = op->getNumResults() == 1;
   for (Operation &child : op->getRegion(0).front())
     digital |= llvm::isa<StructuralIfOp, StaticCompareOp, StaticLogicOp, DigitalAssignOp,
                          DigitalExprOp, CollectionOp>(child);
-  if (!digital)
+  if (!digital && effects == EffectProfile::Existing)
     return success(); // Preserve the separately owned analog/conservative profile.
   auto domain = resolveGeneratedDomain(op);
   if (failed(domain))
     return failure();
-  Budget budget;
   for (Operation &child : op->getRegion(0).front()) {
     auto context = digitalGenerateIntegerContextAtUse(&child);
-    if (failed(context) || failed(verifyBody(&child, *context, false, budget, 0)))
+    if (failed(context) || failed(verifyBody(&child, *context, false, budget, depth, effects)))
       return failure();
   }
+  if (llvm::any_of(op->getRegion(0).front(),
+                   [](Operation &child) {
+                     return llvm::isa<NodeOp, InstanceTerminalOp, ConnectOp>(child);
+                   }) &&
+      failed(resolveConservativeStructuralScope(op)))
+    return failure();
   return success();
+}
+} // namespace
+LogicalResult verifyDigitalGenerateBody(Operation *op) {
+  Budget budget;
+  auto parentEffects = lexicalEffectProfile(op ? op->getParentOp() : nullptr, budget);
+  if (failed(parentEffects))
+    return failure();
+  if (*parentEffects == EffectProfile::ContinuousOnly)
+    return reject(op, "guarded continuous generation does not admit further generation");
+  auto effects = lexicalEffectProfile(op, budget);
+  if (failed(effects))
+    return failure();
+  return verifyGenerateBody(op, budget, 0, *effects);
 }
 } // namespace nodal

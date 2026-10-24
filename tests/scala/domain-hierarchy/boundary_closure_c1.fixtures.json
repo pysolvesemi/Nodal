@@ -1,0 +1,195 @@
+{
+  "schema": 1,
+  "default_suites": [
+    "epoch",
+    "interface",
+    "guard",
+    "descriptor"
+  ],
+  "fixtures": [
+    {
+      "name": "EpochControls.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/EpochControls.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/EpochControls.scala",
+      "sha256": "f695358b9eced8354c8e752f0bd460756515634e59d46c89355884d2c5dea4ae"
+    },
+    {
+      "name": "EpochFactories.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/EpochFactories.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/EpochFactories.scala",
+      "sha256": "307321c8cc2eae31c02b53be3244185fc221c0389966f77436e9bc631025869c"
+    },
+    {
+      "name": "EpochFixture.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/EpochFixture.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/EpochFixture.scala",
+      "sha256": "5afb003a789e6d95115b180b1edac47fcaf0240121b82d9f21f6fef80417a74c"
+    },
+    {
+      "name": "EpochMapFixture.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/EpochMapFixture.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/EpochMapFixture.scala",
+      "sha256": "e286555954e9bff5b77f9981976ead2769ce31fdd0029e08fdf538882d909abf"
+    },
+    {
+      "name": "InterfaceEpochControls.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/InterfaceEpochControls.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/InterfaceEpochControls.scala",
+      "sha256": "f9a85c7f92c0a07b021346c6591e5f5c2644df99e7e97c5726cc8f5b2786c247"
+    },
+    {
+      "name": "InterfaceEpochFactory.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/InterfaceEpochFactory.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/InterfaceEpochFactory.scala",
+      "sha256": "0a68414dd9dfa7ccd5985f878c344fcaa1f632551c311edabdc975dd01cbda60"
+    },
+    {
+      "name": "InterfaceEpochLeaf.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/InterfaceEpochLeaf.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/InterfaceEpochLeaf.scala",
+      "sha256": "a6354f66af774e1ca8e1b2bb3790d40b04a9be1909afb29cca96625a623deda6"
+    },
+    {
+      "name": "InterfaceEpochRoot.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/InterfaceEpochRoot.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/InterfaceEpochRoot.scala",
+      "sha256": "83ddca1f35a7d49fca056d516bf4e7821df9678662a579c3b983b0d1d2425082"
+    },
+    {
+      "name": "InterfaceEpochSchema.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/InterfaceEpochSchema.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/InterfaceEpochSchema.scala",
+      "sha256": "fdabf60bb07bbb78a9d3a92d0b4fa88d8a82f6a283b4b1ca227159571e2b405b"
+    },
+    {
+      "name": "FinalNameGuardControls.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/FinalNameGuardControls.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/FinalNameGuardControls.scala",
+      "sha256": "738bbc0b269e637db1971ed18c34e0a786bb7fa0ffc7272076632ee90b44973e"
+    },
+    {
+      "name": "FinalNameGuardFixture.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/FinalNameGuardFixture.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/FinalNameGuardFixture.scala",
+      "sha256": "795fa088b1e833f53d40c2637c6bea4c2908700e85e50eda3f8e9b66f01af514"
+    },
+    {
+      "name": "DescriptorBudgetControls.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/DescriptorBudgetControls.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/DescriptorBudgetControls.scala",
+      "sha256": "eb36ca3419fd17c10ca52fd31f6c61eee1dc891bcb04526e2bfb53beb16ebfc5"
+    },
+    {
+      "name": "DescriptorBudgetFactory.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/DescriptorBudgetFactory.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/DescriptorBudgetFactory.scala",
+      "sha256": "1d176ff4410eeed80efcab66111b3c910c031f861aa1f2666e8b0460d1e54482"
+    },
+    {
+      "name": "DescriptorBudgetRoot.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/DescriptorBudgetRoot.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/DescriptorBudgetRoot.scala",
+      "sha256": "6a7bd4d7d849864cedfbc7d4f9bd12b0625ab881951c23c34e0e96e122c80b4c"
+    },
+    {
+      "name": "StructuralQueryMeterControls.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/StructuralQueryMeterControls.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/StructuralQueryMeterControls.scala",
+      "sha256": "4e175d477538f624411f84ae10f530b63fe99c742e0e362e900798d3b8911a2e"
+    },
+    {
+      "name": "SemanticResolutionWorkControls.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/SemanticResolutionWorkControls.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/SemanticResolutionWorkControls.scala",
+      "sha256": "3822ec4d20f30c7d8e2360ba9b39dca7763a6d9642c08c649d81a8c2be833d4a"
+    },
+    {
+      "name": "SemanticResolutionSourceCacheControls.scala",
+      "maintained_path": "fixtures/boundary-closure-c1/SemanticResolutionSourceCacheControls.scala",
+      "source_path": "core/scala/api/test/src/nodal/internal/testkit/SemanticResolutionSourceCacheControls.scala",
+      "sha256": "efb7ce5fa4252a85fc017bd92b5c4787d4f325e79bfc24313e13887a12112951"
+    }
+  ],
+  "suites": {
+    "epoch": {
+      "main": "nodal.internal.testkit.EpochControls",
+      "fixtures": [
+        "EpochControls.scala",
+        "EpochFactories.scala",
+        "EpochFixture.scala",
+        "EpochMapFixture.scala"
+      ],
+      "success": [
+        "PASS 12 Session epoch controls"
+      ]
+    },
+    "interface": {
+      "main": "nodal.internal.testkit.InterfaceEpochControls",
+      "fixtures": [
+        "InterfaceEpochControls.scala",
+        "InterfaceEpochFactory.scala",
+        "InterfaceEpochLeaf.scala",
+        "InterfaceEpochRoot.scala",
+        "InterfaceEpochSchema.scala"
+      ],
+      "success": [
+        "PASS InterfaceArray second-batch counts, exact dimensions and empty-drain idempotence"
+      ]
+    },
+    "guard": {
+      "main": "nodal.internal.testkit.FinalNameGuardControls",
+      "fixtures": [
+        "FinalNameGuardControls.scala",
+        "FinalNameGuardFixture.scala",
+        "EpochControls.scala",
+        "EpochFactories.scala",
+        "EpochFixture.scala",
+        "EpochMapFixture.scala"
+      ],
+      "success": [
+        "PASS post-name canonical validation failure retires owner/ticket and prevents publication",
+        "PASS fresh incremental Session recovery"
+      ]
+    },
+    "descriptor": {
+      "main": "nodal.internal.testkit.DescriptorBudgetControls",
+      "fixtures": [
+        "DescriptorBudgetControls.scala",
+        "DescriptorBudgetFactory.scala",
+        "DescriptorBudgetRoot.scala",
+        "EpochControls.scala",
+        "EpochFactories.scala",
+        "EpochFixture.scala",
+        "EpochMapFixture.scala"
+      ],
+      "success": [
+        "PASS 20 descriptor owner budget/inert/recovery controls"
+      ]
+    },
+    "query-meter": {
+      "main": "nodal.StructuralQueryMeterControls",
+      "fixtures": [
+        "StructuralQueryMeterControls.scala"
+      ],
+      "success": [
+        "StructuralQueryMeterControls: passed"
+      ]
+    },
+    "semantic-work": {
+      "main": "nodal.SemanticResolutionWorkControls",
+      "fixtures": [
+        "SemanticResolutionWorkControls.scala"
+      ],
+      "success": []
+    },
+    "semantic-cache": {
+      "main": "nodal.SemanticResolutionSourceCacheControls",
+      "fixtures": [
+        "SemanticResolutionSourceCacheControls.scala"
+      ],
+      "success": [
+        "PASS: 7 semantic source-cache control groups"
+      ]
+    }
+  }
+}

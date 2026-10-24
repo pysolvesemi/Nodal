@@ -782,6 +782,12 @@
         "admission": "guarded"
       },
       {
+        "operation": "nodal.async_fifo",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.behavioral_if",
         "feature": "digital-behavior",
         "domain": "digital",
@@ -806,7 +812,25 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.clock_gate",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.clock_mux",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.clock_relation",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.clock_relationship",
         "feature": "digital-behavior",
         "domain": "digital",
         "admission": "unsupported"
@@ -962,6 +986,12 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.event_process",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.flat_fsm",
         "feature": "digital-behavior",
         "domain": "digital",
@@ -986,7 +1016,31 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.fsm_activation",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.fsm_completion",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.fsm_elapsed",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.fsm_transfer",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.fsm_join",
         "feature": "digital-behavior",
         "domain": "digital",
         "admission": "unsupported"
@@ -1010,6 +1064,18 @@
         "admission": "direct"
       },
       {
+        "operation": "nodal.generated_export",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.generated_member",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.hardware_loop",
         "feature": "digital-behavior",
         "domain": "digital",
@@ -1026,6 +1092,18 @@
         "feature": "structural-hierarchy",
         "domain": "neutral",
         "admission": "direct"
+      },
+      {
+        "operation": "nodal.instance_domain_binding",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.instance_port",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
       },
       {
         "operation": "nodal.instance_terminal",
@@ -1047,6 +1125,12 @@
       },
       {
         "operation": "nodal.interface_abi",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.interface_boundary",
         "feature": "unlowered-shared-forms",
         "domain": "neutral",
         "admission": "unsupported"
@@ -1146,6 +1230,12 @@
         "feature": "natures-disciplines",
         "domain": "analog",
         "admission": "direct"
+      },
+      {
+        "operation": "nodal.net_boundary",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
       },
       {
         "operation": "nodal.net_drive",
@@ -1292,13 +1382,43 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.requirement_clock",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.requirement_reset",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.reset_asserted",
         "feature": "digital-behavior",
         "domain": "digital",
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.reset_boundary",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.reset_combine",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.reset_relation",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.reset_sync",
         "feature": "digital-behavior",
         "domain": "digital",
         "admission": "unsupported"
@@ -1410,6 +1530,12 @@
         "feature": "structural-hierarchy",
         "domain": "neutral",
         "admission": "direct"
+      },
+      {
+        "operation": "nodal.waiver",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
       }
     ],
     "language_profiles": [

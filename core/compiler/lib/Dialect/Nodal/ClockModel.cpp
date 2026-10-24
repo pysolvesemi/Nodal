@@ -133,9 +133,18 @@ public:
       return failure();
     }
     auto *op = value ? value.getDefiningOp() : nullptr;
-    if (!value || !capability(value.getType(), "clock") || !op ||
-        op->getParentOp() != use->getParentOp() ||
+    if (!value || !use || !capability(value.getType(), "clock") ||
         (op != use && failed(verifyDigitalValueScope(value, use))))
+      return failure();
+    if (auto argument = dyn_cast<BlockArgument>(value)) {
+      auto source = digitalRegionCaptureSource(argument);
+      if (failed(source) || !*source)
+        return failure();
+      // Each hop keeps the real capture operation as its use, so isolated arms
+      // cannot acquire a raw outer control or a forged representative alias.
+      return resolve(*source, argument.getOwner()->getParentOp(), depth + 1);
+    }
+    if (!op || op->getParentOp() != use->getParentOfType<ModuleOp>())
       return failure();
     if (auto found = cache.find(value); found != cache.end())
       return found->second;

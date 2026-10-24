@@ -11,6 +11,7 @@
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -756,6 +757,40 @@ FailureOr<TargetShapeExpression> renderScopedShapeIndex(ModuleRenderState &state
     if (value < std::numeric_limits<int32_t>::min() || value > std::numeric_limits<int32_t>::max())
       return failure();
     return TargetShapeExpression{std::to_string(value), {value, value}};
+  }
+  if (proof->identity.kind == StaticShapeIndexIdentity::Expression &&
+      index.getDefiningOp() && isa<GenerateOp>(index.getDefiningOp()->getParentOp())) {
+    unsigned remaining = 16384;
+    auto facts = resolveStructuralIntegerExpression(index, use, remaining);
+    if (failed(facts) || !facts->expression ||
+        failed(verifyTargetStructuralIntegerExpression(*facts->expression)))
+      return failure();
+    SmallVector<std::pair<Value, std::string>> bindings;
+    SmallVector<std::shared_ptr<const InstantiatedIntegerNode>> pending{facts->expression->root};
+    llvm::SmallPtrSet<const InstantiatedIntegerNode *, 16> visited;
+    llvm::DenseSet<Value> bound;
+    while (!pending.empty()) {
+      auto node = pending.pop_back_val();
+      if (!remaining-- || !node)
+        return failure();
+      if (!visited.insert(node.get()).second)
+        continue;
+      if (node->kind == InstantiatedIntegerNode::Kind::OpaqueValue &&
+          bound.insert(node->identity).second) {
+        auto spelling = state.structuralIndices.find(node->identity);
+        if (spelling == state.structuralIndices.end())
+          return failure();
+        bindings.emplace_back(node->identity, spelling->second.text);
+      }
+      for (const auto &operand : llvm::reverse(node->operands))
+        pending.push_back(operand);
+    }
+    std::string rendered;
+    if (renderStructuralIntegerExpression(*facts->expression, use, bindings,
+                                          rendered, remaining) !=
+        IntegerExpressionEmissionStatus::Proved)
+      return failure();
+    return TargetShapeExpression{std::move(rendered), facts->expression->bounds};
   }
   return renderShapeStaticIndex(use->getParentOfType<nodal::ModuleOp>(), index);
 }
@@ -1877,83 +1912,22 @@ FailureOr<GeneratedTargetBound> generatedTargetBound(Operation *generate, llvm::
   return GeneratedTargetBound{reference.getValue().str(), *range};
 }
 
-LogicalResult verifyGeneratedTargetBoundDependency(Value value, Operation *owner,
-                                                   Operation *diagnostic,
-                                                   llvm::DenseSet<Operation *> &active,
-                                                   llvm::DenseSet<Operation *> &visited) {
-  auto type = llvm::dyn_cast<IntegerType>(value.getType());
-  Operation *definition = value.getDefiningOp();
-  if (!type || !type.isSignless() || type.getWidth() != 64 || !definition ||
-      definition->getParentOp() != owner || definition->hasAttr("unit"))
-    return emitMappedFailure(diagnostic, "NODAL-BACKEND-CAPABILITY-001",
-                             "compound generated bound escapes its signed-64 module scope");
-  if (visited.contains(definition))
-    return success();
-  if (active.size() >= 512 || !active.insert(definition).second)
-    return emitMappedFailure(diagnostic, "NODAL-BACKEND-CAPABILITY-001",
-                             "compound generated bound is cyclic or exceeds the depth limit");
-
-  auto finish = [&](LogicalResult result) {
-    active.erase(definition);
-    if (succeeded(result))
-      visited.insert(definition);
-    return result;
-  };
-  llvm::StringRef operationName = definition->getName().getStringRef();
-  if (operationName == "nodal.const_literal" || operationName == "nodal.constant")
-    return finish(success());
-  if (operationName == "nodal.const_parameter_ref") {
-    auto reference = definition->getAttrOfType<FlatSymbolRefAttr>("parameter");
-    Operation *parameter = reference ? findDirectParameter(owner, reference.getValue()) : nullptr;
-    auto declaredType = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
-    if (!parameter || nodal::getParameterKind(parameter) != "integer" ||
-        !nodal::isStructuralParameter(parameter) || !declaredType ||
-        declaredType.getValue() != value.getType() || parameter->hasAttr("unit"))
-      return finish(emitMappedFailure(
-          diagnostic, "NODAL-BACKEND-CAPABILITY-001",
-          "compound generated bound requires same-module structural Integer dependencies"));
-    return finish(success());
-  }
-  if (operationName != "nodal.const_expr")
-    return finish(emitMappedFailure(diagnostic, "NODAL-BACKEND-CAPABILITY-001",
-                                    "compound generated bound contains a non-static value"));
-
-  auto operatorName = definition->getAttrOfType<StringAttr>("operator_name");
-  const unsigned arity = operatorName && operatorName.getValue() == "neg" ? 1 : 2;
-  const bool supported =
-      operatorName && (operatorName.getValue() == "add" || operatorName.getValue() == "sub" ||
-                       operatorName.getValue() == "mul" || operatorName.getValue() == "div" ||
-                       operatorName.getValue() == "mod" || operatorName.getValue() == "neg");
-  if (!supported || definition->getNumOperands() != arity)
-    return finish(
-        emitMappedFailure(diagnostic, "NODAL-BACKEND-CAPABILITY-001",
-                          "compound generated bound contains unsupported integer arithmetic"));
-  for (Value operand : definition->getOperands()) {
-    if (operand.getType() != value.getType() ||
-        failed(verifyGeneratedTargetBoundDependency(operand, owner, diagnostic, active, visited)))
-      return finish(failure());
-  }
-  return finish(success());
-}
-
 FailureOr<GeneratedTargetBound> generatedTargetBound(Value value, Operation *generate,
                                                      llvm::StringRef name) {
-  auto module = generate->getParentOfType<nodal::ModuleOp>();
-  Operation *owner = module ? module.getOperation() : nullptr;
-  llvm::DenseSet<Operation *> active;
-  llvm::DenseSet<Operation *> visited;
-  if (!owner ||
-      failed(verifyGeneratedTargetBoundDependency(value, owner, generate, active, visited)))
+  // The Parameter owner proves the original exact lexical use and its complete
+  // all-lane domain. Rendering does not grant scope or specialize an occurrence.
+  auto facts = resolveStructuralIntegerExpression(value, generate,
+                                                  ParameterIntegerMode::MathematicalSigned64);
+  if (failed(facts) || !facts->expression)
     return failure();
-  auto range = nodal::inferParameterIntegerBounds(value);
   auto rendered = nodal::renderParameterConstantExpression(value);
-  if (failed(range) || failed(rendered)) {
+  if (failed(rendered)) {
     (void)emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
                             llvm::Twine("generated contribution cannot prove finite '") + name +
                                 "' expression bounds");
     return failure();
   }
-  return GeneratedTargetBound{*rendered, *range};
+  return GeneratedTargetBound{*rendered, facts->expression->bounds};
 }
 
 bool generatedValueFeedsContribution(Value value, Block &body,
@@ -3002,6 +2976,79 @@ LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &o
 
 // A lexical structural scope carries declarations and template statements, not
 // one module-global net for every generated occurrence.
+// An unselected instance export is an authored proof record for the same
+// retained physical child. It emits no additional child, net, or equation.
+LogicalResult verifyUnselectedStructuralInstanceExport(Operation *operation) {
+  auto exported = llvm::dyn_cast_or_null<GeneratedExportOp>(operation);
+  Operation *family = operation ? operation->getParentOp() : nullptr;
+  auto kind = operation ? operation->getAttrOfType<StringAttr>("kind") : StringAttr();
+  if (!exported || !kind || kind.getValue() != "instance" ||
+      !llvm::isa_and_nonnull<GenerateOp>(family) || failed(exported.verify()))
+    return failure();
+  Operation *parent = family->getParentOp();
+  const bool nested = llvm::isa_and_nonnull<GenerateOp>(parent);
+  if (!llvm::isa_and_nonnull<ModuleOp>(parent)) {
+    if (!nested || !llvm::isa<ModuleOp>(parent->getParentOp()))
+      return failure();
+    auto literal = [](Value value) -> std::optional<int64_t> {
+      auto op = value.getDefiningOp<ConstLiteralOp>();
+      auto attr = op ? op->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+      if (!attr || !value.getType().isInteger(64) || !attr.getValue().isSignedIntN(64))
+        return std::nullopt;
+      return attr.getValue().getSExtValue();
+    };
+    for (Operation *axis : {parent, family}) {
+      if (axis->getNumOperands() != 3 || literal(axis->getOperand(0)) != 0 ||
+          literal(axis->getOperand(2)) != 1)
+        return failure();
+      auto upper = literal(axis->getOperand(1));
+      if (!upper || *upper <= 0 || *upper > std::numeric_limits<int32_t>::max())
+        return failure();
+    }
+  }
+  auto target = inspectGeneratedExportSymbol(operation);
+  if (failed(target) || !llvm::isa<InstanceOp>(*target) ||
+      (*target)->getParentOp() != family ||
+      llvm::any_of(family->getResults(), [](Value result) { return !result.use_empty(); }))
+    return failure();
+  if (nested) {
+    auto bindings = (*target)->getAttrOfType<DictionaryAttr>("parameter_bindings");
+    Operation *child = resolveInstanceModuleDefinition(*target);
+    if (!bindings || !child || child->hasAttr("external_name") ||
+        child->getNumRegions() != 1 || !llvm::hasSingleElement(child->getRegion(0)))
+      return failure();
+    for (NamedAttribute binding : bindings) {
+      auto value = llvm::dyn_cast<FloatAttr>(binding.getValue());
+      if (!value || !value.getType().isF64() || !value.getValue().isFinite())
+        return failure();
+    }
+    for (Operation &candidate : family->getRegion(0).front())
+      if (llvm::isa<ParameterOverrideOp>(candidate) &&
+          candidate.getAttrOfType<FlatSymbolRefAttr>("instance") ==
+              FlatSymbolRefAttr::get(operation->getContext(), symbolName(*target)))
+        return failure();
+    for (Operation &parameter : child->getRegion(0).front()) {
+      if (llvm::isa<ParameterValueOp>(parameter)) {
+        if (parameter.getNumOperands() != 1) return failure();
+        auto literal = parameter.getOperand(0).getDefiningOp<ConstLiteralOp>();
+        auto value = literal ? literal->getAttrOfType<FloatAttr>("value") : FloatAttr();
+        if (!literal || literal->hasAttr("unit") || !value || !value.getType().isF64() ||
+            !value.getValue().isFinite())
+          return failure();
+      }
+      if (!llvm::isa<ParameterOp>(parameter)) continue;
+      auto type = parameter.getAttrOfType<TypeAttr>("type");
+      auto value = parameter.getAttrOfType<FloatAttr>("default_value");
+      if (!type || !type.getValue().isF64() || !value || !value.getValue().isFinite() ||
+          parameter.hasAttr("unit") || getParameterKind(&parameter) != "real" ||
+          getParameterClassification(&parameter) != "ordinary")
+        return failure();
+    }
+  }
+  auto scope = resolveConservativeStructuralScope(family);
+  return success(succeeded(scope) && llvm::is_contained(scope->instances, *target));
+}
+
 LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &parentState,
                                        llvm::StringRef aliasHelper, llvm::raw_ostream &output,
                                        bool outermost = true) {
@@ -3143,6 +3190,10 @@ LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &p
       }
     } else if (llvm::isa<AnalogOp>(operation)) {
       analogs.push_back(&operation);
+    } else if (llvm::isa<GeneratedExportOp>(operation)) {
+      if (failed(verifyUnselectedStructuralInstanceExport(&operation)))
+        return emitMappedFailure(&operation, "NODAL-BACKEND-TOPOLOGY-004",
+                                 "generated export lacks an unselected exact physical child proof");
     } else if (llvm::isa<ProbeOp>(operation)) {
       // The complete native access/probe model is verified at the candidate
       // boundary. Intent records add neither an equation nor a physical branch.
@@ -3734,6 +3785,12 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
       return;
     if (llvm::isa<ProbeOp>(operation)) {
       result = verifyPotentialFlowAccessOperation(operation);
+      return;
+    }
+    if (llvm::isa<GeneratedExportOp>(operation)) {
+      if (failed(verifyUnselectedStructuralInstanceExport(operation)))
+        result = emitMappedFailure(operation, "NODAL-BACKEND-CAPABILITY-001",
+                                   "generated export lacks an unselected exact physical child proof");
       return;
     }
     if (isDirectBackendOperation(name))

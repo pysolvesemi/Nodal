@@ -14,6 +14,7 @@ add_mlir_dialect_library(NodalDialect
   DigitalTypeModel.cpp
   DigitalStorageModel.cpp
   HierarchyModel.cpp
+  HierarchyBoundaryModel.cpp
   DomainModel.cpp
   DomainRelationshipModel.cpp
   ClockModel.cpp
@@ -25,6 +26,7 @@ add_mlir_dialect_library(NodalDialect
   MemoryModel.cpp
   SequentialModel.cpp
   FlatFSMModel.cpp
+  FsmCompositionModel.cpp
   EnumSwitchModel.cpp
   DigitalLoopModel.cpp
   DigitalLoopPlanningModel.cpp
@@ -53,6 +55,7 @@ add_mlir_dialect_library(NodalDialect
 
   LINK_LIBS PUBLIC
     NodalSupport
+    MLIRAnalysis
     MLIRBytecodeOpInterface
     MLIRIR
     MLIRPass

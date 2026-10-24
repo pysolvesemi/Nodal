@@ -76,6 +76,48 @@ std::string model(int64_t count, int64_t step, const std::string &dimension, boo
   return "module { \"nodal.module\"() <{sym_name = \"Fixture\", metadata = {}}> ({" + prefix +
          literal("marker", 99) + "}) : () -> () }";
 }
+std::string generatedMatrix(int64_t rows, int64_t columns, int64_t step = 1,
+                            bool nestedType = false, bool symbolic = false, bool repeated = false,
+                            bool missing = false, bool swapped = false) {
+  std::string r = symbolic ? "R" : std::to_string(rows);
+  std::string c = symbolic ? "C" : std::to_string(columns);
+  const std::string rowType = shaped(c);
+  const std::string rootType =
+      nestedType ? "!nodal.shaped<\"" + r + "\", " + rowType + ">" : shaped(r + "," + c);
+  std::string body = literal("zero", 0) + literal("one", 1) + literal("step", step);
+  if (symbolic) {
+    for (auto name : {"R", "C"}) {
+      std::string declaration = parameter(name);
+      auto at = declaration.find(literal(std::string(name) + "low", 0));
+      declaration.replace(at, literal(std::string(name) + "low", 0).size(),
+                          literal(std::string(name) + "low", 2));
+      body += declaration;
+    }
+  } else {
+    body += literal("R", rows) + literal("C", columns);
+  }
+  body += "%cells = \"nodal.digital_storage\"() <{name = \"cells\", kind = \"wire\", "
+          "metadata = {test_name = \"root\"}}> : () -> " +
+          rootType + "\n";
+  auto begin = [&](std::string name, std::string upper, std::string stepName) {
+    int64_t maximum = symbolic ? 1000000 : upper == "R" ? rows : columns;
+    int64_t stride = stepName == "step" ? step : 1;
+    maximum = (maximum + stride - 1) / stride;
+    return "\"nodal.generate\"(%zero, %" + upper + ", %" + stepName + ") <{induction = \"" + name +
+           "\", region_id = \"Fixture." + name + "\", induction_path = \"Fixture." + name +
+           ".index\", metadata = {maximum_trip_count = " + std::to_string(maximum) +
+           " : i64}}> ({^bb0(%" + name + ": i64):\n";
+  };
+  body += begin("i", swapped ? "C" : "R", "one");
+  body += "%row = \"nodal.shape_index\"(%cells, %" + std::string(missing ? "zero" : "i") +
+          ") <{metadata = {test_name = \"row\"}}> : (" + rootType + ", i64) -> " + rowType + "\n";
+  body += begin("j", swapped ? "R" : "C", "step");
+  body += index("leaf", "row", repeated ? "i" : "j", rowType);
+  body += index("leaf2", "row", repeated ? "i" : "j", rowType);
+  body += "}) : (i64, i64, i64) -> ()\n}) : (i64, i64, i64) -> ()\n";
+  return "module { \"nodal.module\"() <{sym_name = \"Fixture\", metadata = {}}> ({" + body +
+         literal("marker", 99) + "}) : () -> () }";
+}
 Value value(mlir::ModuleOp module, StringRef name) {
   Value found;
   module.walk([&](Operation *operation) {
@@ -189,6 +231,239 @@ int main() {
   exercise(7, 1, "8", false, true);
   exercise(8, 2, "8");
   exercise(8, 2, "8", false, true);
+  {
+    struct Case {
+      const char *name;
+      int64_t upper, stride, extent, parameterLower, parameterUpper, tripsLower, tripsUpper;
+    };
+    for (const auto &test :
+         {Case{"singleton-Vec1", 1, 2, 1, -1, -1, 1, 1},
+          Case{"singleton-wide-bound-Vec2", 2, 3, 2, -1, -1, 1, 1},
+          Case{"singleton-symbolic-count", 0, 3, 2, 1, 2, 1, 1},
+          Case{"singleton-empty-control", 0, 2, 1, -1, -1, 0, 0},
+          Case{"singleton-maybe-empty-control", 0, 3, 1, 0, 1, 0, 1},
+          Case{"singleton-default-one-variable-count", 0, 3, 4, 1, 4, 1, 2},
+          Case{"singleton-multiple-trip-control", 4, 2, 4, -1, -1, 2, 2}}) {
+      const bool symbolic = test.parameterLower >= 0;
+      const bool singleton = test.tripsLower == 1 && test.tripsUpper == 1;
+      const std::string name = test.name, type = shaped(std::to_string(test.extent));
+      auto source = model(test.upper, test.stride, std::to_string(test.extent), symbolic);
+      auto replace = [&](const std::string &from, const std::string &to) {
+        source.replace(source.find(from), from.size(), to);
+      };
+      // Keep every selector valid even for Vec1: the second projection is an
+      // actual duplicate occurrence, not the model's usual predecessor write.
+      replace(index("write", "target", "next", type), index("write", "target", "iv", type));
+      if (symbolic) {
+        replace(literal("Nlow", 0), literal("Nlow", test.parameterLower));
+        replace(literal("Nhigh", 1000000), literal("Nhigh", test.parameterUpper));
+        replace("default_value = 2 : i64", "default_value = 1 : i64");
+      }
+      if (singleton && test.extent == 2)
+        source.insert(source.find("\"nodal.hardware_loop\""),
+                      index("lane1", "cells", "one", type));
+      if (!symbolic && test.tripsLower == 2)
+        source.insert(source.find("\"nodal.hardware_loop\""),
+                      literal("two", 2) + literal("three", 3) +
+                          index("tail1", "cells", "one", type) +
+                          index("tail2", "cells", "two", type) +
+                          index("tail3", "cells", "three", type));
+      auto module = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+      check(bool(module), name + "-parse");
+      if (!module)
+        continue;
+      auto use = value(*module, "marker").getDefiningOp();
+      auto project = [&](StringRef label) {
+        auto selected = value(*module, label);
+        return nodal::resolveStaticShapeProjection(selected, selected.getDefiningOp());
+      };
+      auto root = project("root"), read = project("read"), duplicate = project("write"),
+           seed = project("seed");
+      check(succeeded(root) && succeeded(read) && succeeded(duplicate) && succeeded(seed),
+            name + "-projections");
+      if (failed(root) || failed(read) || failed(duplicate) || failed(seed))
+        continue;
+      nodal::StaticShapeRegion image;
+      auto status = nodal::resolveStaticShapeIterationImage(*read, use, image);
+      check(status == Status::Proved && image.iterationCount() == 1 && image.projection &&
+                image.iteration->stride == test.stride &&
+                image.iteration->tripCount.bounds.lower == test.tripsLower &&
+                image.iteration->tripCount.bounds.upper == test.tripsUpper,
+            name + "-actual-count-and-stride");
+      if (status != Status::Proved || image.iterationCount() != 1)
+        continue;
+      if (symbolic && singleton)
+        check(image.iteration->tripCount.root &&
+                  image.iteration->tripCount.root->kind !=
+                      nodal::InstantiatedIntegerNode::Kind::Literal,
+              name + "-canonical-symbolic-count-not-default");
+      if (test.tripsUpper == 0)
+        check(image.kind == nodal::StaticShapeRegion::Kind::Empty, name + "-actual-empty-image");
+      const bool whole = singleton && test.extent == 1;
+      check((nodal::verifyStaticShapeProjectionCoverage(*root, {*read}, use) == Status::Proved) ==
+                whole,
+            name + "-root-coverage");
+      check((nodal::verifyStaticShapeRegionPartition(root->root, {image}, use) == Status::Proved) ==
+                whole,
+            name + "-root-partition");
+      check(nodal::verifyStaticShapeProjectionCoverage(*read, {*read}, use) == Status::Proved,
+            name + "-exact-family-read-preserved");
+      if (singleton) {
+        check(nodal::verifyStaticShapeProjectionCoverage(*read, {*seed}, use) == Status::Proved &&
+                  nodal::verifyStaticShapeProjectionCoverage(*seed, {*read}, use) == Status::Proved,
+              name + "-ordinary-lane-and-singleton-cover-each-other");
+        check(nodal::verifyStaticShapeProjectionCoverage(*read, {*read, *duplicate}, use) !=
+                  Status::Proved,
+              name + "-duplicate-writer-rejected");
+        check(nodal::verifyStaticShapeRegionPartition(root->root, {image, image}, use) !=
+                  Status::Proved,
+              name + "-duplicate-partition-rejected");
+        auto overlap = nodal::compareStaticShapeProjections(*read, *duplicate, use);
+        auto order = nodal::compareStaticShapeIterationPositions(*read, *duplicate, use);
+        check(overlap.status == Status::Proved &&
+                  overlap.overlap == nodal::ShapeRegionOverlap::Overlapping &&
+                  nodal::proveStaticShapeSameOccurrence(*read, *duplicate, use) == Status::Proved &&
+                  succeeded(order) && *order == 0,
+              name + "-occurrence-overlap-and-order-preserved");
+        if (test.extent == 2) {
+          auto lane1 = project("lane1");
+          nodal::StaticShapeRegion other;
+          const bool resolved = succeeded(lane1) &&
+                                nodal::resolveStaticShapeRegion(*lane1, use, other) == Status::Proved;
+          check(resolved, name + "-ordinary-complement-resolved");
+          if (resolved) {
+            check(nodal::verifyStaticShapeProjectionCoverage(*root, {*read, *lane1}, use) ==
+                      Status::Proved &&
+                      nodal::verifyStaticShapeProjectionCoverage(*root, {*lane1, *read}, use) ==
+                          Status::Proved,
+                  name + "-complement-completes-root-in-either-order");
+            check(nodal::verifyStaticShapeRegionPartition(root->root, {image, other}, use) ==
+                      Status::Proved &&
+                      nodal::verifyStaticShapeRegionPartition(root->root, {other, image}, use) ==
+                          Status::Proved,
+                  name + "-complement-completes-partition-in-either-order");
+            check(nodal::verifyStaticShapeRegionPartition(root->root, {image, other, image}, use) !=
+                      Status::Proved,
+                  name + "-complete-but-duplicate-partition-rejected");
+          }
+        }
+        check(nodal::verifyStaticShapeProjectionCoverage(*root, {*read}, use, {1, 1}) ==
+                  Status::ResourceLimit &&
+                  nodal::verifyStaticShapeRegionPartition(root->root, {image}, use, {1, 1}) ==
+                      Status::ResourceLimit,
+              name + "-coverage-and-partition-budget");
+      }
+      if (!symbolic && test.tripsLower == 2) {
+        auto forged = image;
+        forged.iteration->tripCount = nodal::makeLiteralIntegerExpression(1);
+        llvm::SmallVector<nodal::StaticShapeRegion, 4> regions{forged};
+        bool resolved = true;
+        for (auto label : {"tail1", "tail2", "tail3"}) {
+          auto projection = project(label);
+          nodal::StaticShapeRegion region;
+          resolved &= succeeded(projection) &&
+                      nodal::resolveStaticShapeRegion(*projection, use, region) == Status::Proved;
+          regions.push_back(std::move(region));
+        }
+        check(resolved, name + "-forged-count-complement-resolved");
+        if (resolved)
+          // Trusting the forged count would turn lanes {0,2} into {0}, making
+          // the ordinary {1,2,3} complement appear to be an exact partition.
+          check(nodal::verifyStaticShapeRegionPartition(root->root, regions, use) != Status::Proved,
+                name + "-forged-count-rederived-from-actual-SSA");
+      }
+      check(image.projection && image.iteration && image.iteration->stride == test.stride &&
+                image.iteration->tripCount.bounds.lower == test.tripsLower &&
+                image.iteration->tripCount.bounds.upper == test.tripsUpper &&
+                image.iteration->domain.upperExclusive.bounds.upper ==
+                    (symbolic ? test.parameterUpper : test.upper),
+            name + "-original-map-retained-after-coverage");
+    }
+  }
+  for (bool nested : {false, true}) {
+    auto source = generatedMatrix(1, 1, 2);
+    if (!nested) {
+      // Reuse the checked Generate fixture, selecting its only row outside
+      // the inner family instead of retaining a second occurrence map.
+      auto begin = source.find("\"nodal.generate\"");
+      source.erase(begin, source.find("%row =", begin) - begin);
+      const std::string from = "(%cells, %i)", to = "(%cells, %zero)";
+      source.replace(source.find(from), from.size(), to);
+      const std::string end = "}) : (i64, i64, i64) -> ()\n";
+      source.erase(source.find(end), end.size());
+    }
+    const std::string name = nested ? "singleton-nested-Generate" : "singleton-direct-Generate";
+    auto module = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    check(bool(module), name + "-parse");
+    if (!module)
+      continue;
+    auto use = value(*module, "marker").getDefiningOp();
+    auto leaf = value(*module, "leaf"), other = value(*module, "leaf2");
+    auto read = nodal::resolveStaticShapeProjection(leaf, leaf.getDefiningOp());
+    auto duplicate = nodal::resolveStaticShapeProjection(other, other.getDefiningOp());
+    auto root = nodal::resolveStaticShapeProjection(value(*module, "root"), use);
+    check(succeeded(read) && succeeded(duplicate) && succeeded(root), name + "-projections");
+    if (failed(read) || failed(duplicate) || failed(root))
+      continue;
+    nodal::StaticShapeRegion image;
+    auto status = nodal::resolveStaticShapeIterationImage(*read, use, image);
+    check(status == Status::Proved && image.iterationCount() == (nested ? 2u : 1u) &&
+              isa<nodal::GenerateOp>(image.iteration->loop) && image.iteration->stride == 2,
+          name + "-actual-occurrence-maps");
+    if (status != Status::Proved)
+      continue;
+    check((nodal::verifyStaticShapeProjectionCoverage(*root, {*read}, use) == Status::Proved) ==
+              !nested &&
+              (nodal::verifyStaticShapeRegionPartition(root->root, {image}, use) == Status::Proved) ==
+                  !nested,
+          name + "-only-single-map-normalized");
+    check(nodal::verifyStaticShapeProjectionCoverage(*read, {*duplicate}, use) == Status::Proved &&
+              failed(nodal::compareStaticShapeIterationPositions(*read, *duplicate, use)),
+          name + "-exact-family-read-without-loop-ordering");
+  }
+  {
+    auto source = model(1, 2, "8", false, true);
+    auto begin = source.find("%cells ="), end = source.find('\n', begin);
+    source.replace(begin, end - begin + 1,
+                   "%parent = \"nodal.digital_storage\"() <{name = \"parent\", kind = \"wire\", "
+                   "metadata = {test_name = \"root\"}}> : () -> " + shaped("2,2,4") + "\n" +
+                       "%cells = \"nodal.shape_index\"(%parent, %one) <{metadata = {}}> : (" +
+                       shaped("2,2,4") + ", i64) -> " + shaped("2,4") + "\n");
+    source.insert(source.find("\"nodal.hardware_loop\""),
+                  "%physicalZero = \"nodal.shape_index\"(%parent, %lo, %lo, %lo) "
+                  "<{metadata = {test_name = \"physicalZero\"}}> : (" +
+                      shaped("2,2,4") + ", i64, i64, i64) -> !nodal.uint<8>\n");
+    auto module = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    check(bool(module), "singleton-shifted-flat-image-parse");
+    if (module) {
+      auto use = value(*module, "marker").getDefiningOp();
+      auto project = [&](StringRef label) {
+        auto selected = value(*module, label);
+        return nodal::resolveStaticShapeProjection(selected, selected.getDefiningOp());
+      };
+      auto read = project("read"), seed = project("seed"), zero = project("physicalZero");
+      check(succeeded(read) && succeeded(seed) && succeeded(zero),
+            "singleton-shifted-flat-image-projections");
+      if (succeeded(read) && succeeded(seed) && succeeded(zero)) {
+        nodal::StaticShapeRegion image;
+        auto status = nodal::resolveStaticShapeIterationImage(*read, use, image);
+        check(status == Status::Proved && image.kind == nodal::StaticShapeRegion::Kind::Interval &&
+                  image.iteration && !image.iteration->varyingAxis &&
+                  image.iteration->stride == 2 && image.interval.lower.bounds.lower == 8 &&
+                  image.interval.upperExclusive.bounds.upper == 9 &&
+                  image.iteration->offset.bounds.lower == 0,
+              "singleton-shifted-flat-image-exact-physical-map");
+        if (status == Status::Proved) {
+          check(nodal::verifyStaticShapeProjectionCoverage(*read, {*seed}, use) == Status::Proved &&
+                    nodal::verifyStaticShapeProjectionCoverage(*seed, {*read}, use) == Status::Proved,
+                "singleton-shifted-flat-image-covers-actual-physical-lane");
+          check(nodal::verifyStaticShapeProjectionCoverage(*read, {*zero}, use) != Status::Proved &&
+                    nodal::verifyStaticShapeProjectionCoverage(*zero, {*read}, use) != Status::Proved,
+                "singleton-shifted-flat-image-does-not-rebase-to-domain-lower");
+        }
+      }
+    }
+  }
   {
     auto source = model(2, 1, "3");
     auto first = source.find("\"nodal.hardware_loop\"");
@@ -349,6 +624,65 @@ int main() {
       check(failed(nodal::resolveStaticShapeProjection(value(*module, "root"),
                                                        value(*module, "marker").getDefiningOp())),
             "nested-total-cardinality-overflow-rejected");
+  }
+  for (auto [name, source] :
+       {std::make_pair("matrix", generatedMatrix(3, 4)),
+        std::make_pair("matrix-nested-Vec", generatedMatrix(3, 4, 1, true)),
+        std::make_pair("matrix-trillion-lanes", generatedMatrix(1000000, 1000000)),
+        std::make_pair("matrix-independent-parameters", generatedMatrix(2, 2, 1, false, true)),
+        std::make_pair("matrix-nonunit-stride", generatedMatrix(4, 4, 2))}) {
+    auto module = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    check(bool(module), std::string(name) + "-parse");
+    if (!module)
+      continue;
+    auto leaf = value(*module, "leaf"), leaf2 = value(*module, "leaf2");
+    auto use = leaf2.getDefiningOp();
+    auto selected = nodal::resolveStaticShapeProjection(leaf, use);
+    auto other = nodal::resolveStaticShapeProjection(leaf2, use);
+    auto root = nodal::resolveStaticShapeProjection(value(*module, "root"), use);
+    check(succeeded(selected) && succeeded(other) && succeeded(root),
+          std::string(name) + "-projection");
+    if (failed(selected) || failed(other) || failed(root))
+      continue;
+    nodal::StaticShapeRegion image;
+    check(nodal::resolveStaticShapeIterationImage(*selected, use, image) == Status::Proved &&
+              image.iterationCount() == 2 && image.iterationAt(0).varyingAxis == 0 &&
+              image.iterationAt(1).varyingAxis == 1 &&
+              image.iterationAt(0).loop->isProperAncestor(image.iterationAt(1).loop),
+          std::string(name) + "-ordered-Cartesian-image");
+    check(nodal::proveStaticShapeSameOccurrence(*selected, *other, use) == Status::Proved,
+          std::string(name) + "-exact-occurrence-vector");
+    const bool strided = std::string(name) == "matrix-nonunit-stride";
+    auto marker = value(*module, "marker").getDefiningOp();
+    check((nodal::verifyStaticShapeProjectionCoverage(*root, {*selected}, marker) ==
+           Status::Proved) == !strided,
+          std::string(name) + "-complete-or-strided-holes");
+    check(nodal::verifyStaticShapeProjectionCoverage(*selected, {*other}, marker) == Status::Proved,
+          std::string(name) + "-exact-family-read");
+    auto overlap = nodal::compareStaticShapeProjections(*selected, *other, marker);
+    check(overlap.status == Status::Proved &&
+              overlap.overlap == nodal::ShapeRegionOverlap::Overlapping,
+          std::string(name) + "-duplicate-writer-overlap");
+    check(nodal::resolveStaticShapeIterationImage(*selected, use, image, {200000, 1}) ==
+              Status::ResourceLimit,
+          std::string(name) + "-axis-state-budget");
+  }
+  for (auto [name, source] :
+       {std::make_pair("repeated-outer-axis", generatedMatrix(4, 4, 1, false, false, true)),
+        std::make_pair("missing-outer-axis", generatedMatrix(4, 4, 1, false, false, false, true)),
+        std::make_pair("swapped-same-envelope-parameters",
+                       generatedMatrix(2, 2, 1, false, true, false, false, true))}) {
+    ScopedDiagnosticHandler silence(&context, [](Diagnostic &) { return success(); });
+    auto module = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    bool rejected = false;
+    if (module) {
+      auto leaf = value(*module, "leaf");
+      auto selected = nodal::resolveStaticShapeProjection(leaf, leaf.getDefiningOp());
+      nodal::StaticShapeRegion image;
+      rejected = failed(selected) || nodal::resolveStaticShapeIterationImage(
+                                         *selected, leaf.getDefiningOp(), image) != Status::Proved;
+    }
+    check(bool(module) && rejected, std::string(name) + "-rejected");
   }
   llvm::outs() << "SHAPE_ITERATION_SUMMARY cases=" << cases << " failures=" << failures << '\n';
   return failures ? 1 : 0;

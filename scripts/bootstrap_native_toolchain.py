@@ -54,6 +54,8 @@ def _print_plan(plan: dict[str, Any], *, as_json: bool) -> None:
     print(f"prefix: {plan['prefix']}")
     print(f"asset:  {plan['asset']['filename']}")
     print(f"sha256: {plan['asset']['sha256']}")
+    if "overlay" in plan:
+        print("overlay:", plan["overlay"]["id"])
     for command in plan.get("commands", []):
         print("command:", " ".join(command))
 
@@ -67,12 +69,14 @@ def main(argv: list[str] | None = None) -> int:
 
     status = commands.add_parser("status", help="discover a validated installation")
     status.add_argument("--toolchain", type=Path)
+    status.add_argument("--overlay")
     status.add_argument("--require", action="store_true")
     status.add_argument("--json", action="store_true")
 
     plan = commands.add_parser("plan", help="show the exact locked install plan")
     plan.add_argument("--mode", choices=("auto", "prebuilt", "source"), default="auto")
     plan.add_argument("--prefix", type=Path)
+    plan.add_argument("--overlay")
     plan.add_argument("--jobs", type=int)
     plan.add_argument("--json", action="store_true")
 
@@ -81,21 +85,32 @@ def main(argv: list[str] | None = None) -> int:
         "--mode", choices=("auto", "prebuilt", "source"), default="auto"
     )
     install_parser.add_argument("--prefix", type=Path)
+    install_parser.add_argument("--overlay")
     install_parser.add_argument("--jobs", type=int)
     install_parser.add_argument("--force", action="store_true")
     install_parser.add_argument("--dry-run", action="store_true")
     install_parser.add_argument("--json", action="store_true")
 
+    verify = commands.add_parser("verify", help="validate only the exact selected installation, without discovery fallback")
+    verify.add_argument("--toolchain", type=Path, required=True)
+    verify.add_argument("--overlay")
+
     args = parser.parse_args(argv)
     root = args.root.resolve()
     try:
         lock = load_lock(root)
+        if args.command == "verify":
+            errors = validate_install(args.toolchain, lock, root=root, required_overlay=args.overlay)
+            if errors:
+                raise BootstrapError("; ".join(errors))
+            return 0
         if args.command == "status":
-            found, rejected = discover(root, lock, explicit=args.toolchain)
+            found, rejected = discover(root, lock, explicit=args.toolchain, required_overlay=args.overlay)
             result = {
                 "found": str(found) if found else None,
                 "rejected": rejected,
-                "fallback": plan_install(root, lock, mode="auto"),
+                "fallback": plan_install(root, lock, mode="auto", overlay=args.overlay),
+                "overlay": json.loads((found / ".nodal-toolchain.json").read_text()).get("overlay") if found else None,
             }
             if args.json:
                 print(json.dumps(result, indent=2, sort_keys=True))
@@ -117,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
                 mode=args.mode,
                 prefix=args.prefix,
                 jobs=args.jobs,
+                overlay=args.overlay,
             )
         else:
             result = install(
@@ -125,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
                 mode=args.mode,
                 prefix=args.prefix,
                 jobs=args.jobs,
+                overlay=args.overlay,
                 force=args.force,
                 dry_run=args.dry_run,
             )

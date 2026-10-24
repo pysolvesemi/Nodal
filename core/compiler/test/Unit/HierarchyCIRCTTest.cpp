@@ -1,0 +1,1585 @@
+#include "circt/Dialect/HW/HWAttributes.h"
+#include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/SV/SVOps.h"
+#include "circt/Dialect/Seq/SeqOps.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/Parser/Parser.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/NodalDialect.h"
+#include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/SequentialModel.h"
+#include "nodal/Transforms/Passes.h"
+
+#include "llvm/Support/raw_ostream.h"
+
+#include <functional>
+using namespace mlir;
+namespace {
+const std::string bit = "!nodal.bits<1>", clockType = "!nodal.capability<\"clock\">",
+                  resetType = "!nodal.capability<\"reset\">";
+std::string owner(StringRef name, const std::string &body) {
+  return "\"nodal.module\"() <{sym_name = \"" + name.str() + "\", metadata = {}}> ({\n" + body +
+         "}) : () -> ()\n";
+}
+std::string port(StringRef name, StringRef direction, StringRef domain,
+                 const std::string &type = bit) {
+  return "\"nodal.port\"() <{sym_name = \"" + name.str() + "\", type = " + type +
+         ", direction = \"" + direction.str() + "\", domain = @" + domain.str() +
+         ", metadata = {}}> : () -> ()\n%" + name.str() + " = \"nodal.port_value\"() <{port = @" +
+         name.str() + ", metadata = {}}> : () -> " + type + "\n";
+}
+std::string domain(StringRef name, StringRef edge = "rising", StringRef polarity = "active_high",
+                   bool reset = true) {
+  auto n = name.str();
+  return "\"nodal.domain\"() <{sym_name = \"" + n + "\", edge = \"" + edge.str() +
+         "\", reset_policy = \"" + (reset ? "sync" : "none") + "\", metadata = {}}> : () -> ()\n" +
+         port("clock_" + n, "input", name, clockType) +
+         (reset ? port("reset_" + n, "input", name, resetType) : "") +
+         "\"nodal.local_domain_binding\"(%clock_" + n + (reset ? ", %reset_" + n : "") +
+         ") <{domain = @" + n + ", reset_polarity = \"" + polarity.str() +
+         "\", metadata = {}}> : (" + clockType + (reset ? ", " + resetType : "") + ") -> ()\n";
+}
+std::string requirement(bool projections = false) {
+  return "\"nodal.domain_requirement\"() <{sym_name = \"req\", metadata = {}}> : () -> ()\n" +
+         (projections
+              ? "%clock_req = \"nodal.requirement_clock\"() <{requirement = @req, metadata = "
+                "{}}> : () -> " +
+                    clockType +
+                    "\n%reset_req = \"nodal.requirement_reset\"() <{requirement = @req, metadata "
+                    "= {}}> : () -> " +
+                    resetType + "\n"
+              : "");
+}
+std::string assign(StringRef target, StringRef value, StringRef kind = "continuous") {
+  return "\"nodal.digital_assign\"(%" + target.str() + ", %" + value.str() + ") <{kind = \"" +
+         kind.str() + "\", metadata = {}}> : (" + bit + ", " + bit + ") -> ()\n";
+}
+std::string instance(StringRef name, StringRef target, StringRef actual, StringRef input,
+                     bool reset = true) {
+  auto n = name.str();
+  return "\"nodal.instance\"() <{sym_name = \"" + n + "\", module = @" + target.str() +
+         ", domain_bindings = {req = @" + actual.str() +
+         "}, parameter_bindings = {}, metadata = {}}> : () -> ()\n"
+         "\"nodal.instance_domain_binding\"(%clock_" +
+         actual.str() + (reset ? ", %reset_" + actual.str() : "") + ") <{instance = @" + n +
+         ", requirement = @req, actual = @" + actual.str() +
+         ", origin = \"named\", metadata = {}}> : (" + clockType + (reset ? ", " + resetType : "") +
+         ") -> () loc(\"hierarchy-target.scala\":21:7)\n%" + n +
+         "_input = \"nodal.instance_port\"() <{instance = @" + n +
+         ", port = \"input\", direction = \"input\", metadata = {}}> : () -> " + bit + "\n%" + n +
+         "_output = \"nodal.instance_port\"() <{instance = @" + n +
+         ", port = \"output\", direction = \"output\", metadata = {}}> : () -> " + bit + "\n" +
+         assign(n + "_input", input);
+}
+std::string leaf(bool initialized = true) {
+  return requirement() + port("input", "input", "req") + port("output", "output", "req") +
+         "%zero = \"nodal.const_literal\"() <{value = false, spelling = \"0\", metadata = "
+         "{}}> : () -> " +
+         bit + "\n%state = \"nodal.digital_storage\"(" + (initialized ? "%zero" : "") +
+         ") <{name = \"state\", kind = \"register\", domain = @req, metadata = {}}> : (" +
+         (initialized ? bit : "") + ") -> " + bit + "\n" +
+         assign("state", "input", "register_next") + assign("output", "state");
+}
+std::string fixture(bool material = false, bool nested = false, bool resetless = false,
+                    unsigned repeated = 2) {
+  std::string top = domain("a") +
+                    domain("b", material ? "falling" : "rising",
+                           material ? "active_low" : "active_high", !resetless) +
+                    port("x", "input", "a") + port("y", "input", "b");
+  for (unsigned i = 0; i < repeated; ++i) {
+    auto name = "child" + std::to_string(i);
+    auto actual = i % 2 ? "b" : "a";
+    auto target = nested && i % 2 ? "Forward" : resetless && i % 2 ? "Resetless" : "Child";
+    top += instance(name, target, actual, i % 2 ? "y" : "x", !(resetless && i % 2));
+    top += port("result" + std::to_string(i), "output", actual) +
+           assign("result" + std::to_string(i), name + "_output");
+  }
+  std::string result = "module attributes {nodal.root.module = @Top} {\n" + owner("Top", top) +
+                       owner("Child", leaf());
+  if (nested)
+    result +=
+        owner("Forward",
+              requirement(true) + port("input", "input", "req") + port("output", "output", "req") +
+                  instance("leaf", "Child", "req", "input") + assign("output", "leaf_output"));
+  if (resetless)
+    result += owner("Resetless", leaf(false));
+  return result + "}\n";
+}
+std::string replace(std::string text, StringRef from, StringRef to) {
+  auto at = text.find(from.str());
+  if (at == std::string::npos)
+    llvm::report_fatal_error("missing hierarchy target mutation");
+  return text.replace(at, from.size(), to.str());
+}
+std::string conditionalFixture(bool queryOnly = false) {
+  std::string top = domain("a", "rising", "active_low") +
+                    domain("b", "falling", "active_high", false) + port("x", "input", "a") +
+                    port("y", "input", "b") + instance("left", "Child", "a", "x") +
+                    instance("right", "Child", "b", "y", false) +
+                    port("leftResult", "output", "a") + assign("leftResult", "left_output") +
+                    port("rightResult", "output", "b") + assign("rightResult", "right_output");
+  std::string child =
+      queryOnly ? requirement() + port("input", "input", "req") + port("output", "output", "req") +
+                      "%asserted = \"nodal.reset_asserted\"() <{domain = @req, metadata = "
+                      "{semantic_path = \"Child.asserted\"}}> : () -> " +
+                      bit + "\n" + assign("output", "asserted")
+                : replace(leaf(), "kind = \"register\", domain = @req,",
+                          "kind = \"register\", domain = @req, initializer_policy = \"if_reset\",");
+  return "module attributes {nodal.root.module = @Top} {\n" + owner("Top", top) +
+         owner("Child", child) + "}\n";
+}
+std::string generatedFixture(bool symbolic = true, bool choice = true) {
+  std::string parameters = symbolic ? R"mlir(
+    "nodal.parameter"() <{sym_name = "N", type = i64, classification = "structural", variability = "symbolic", default_value = 3 : i64, metadata = {}}> : () -> ()
+    %minimum = "nodal.const_literal"() <{value = 1 : i64, spelling = "1", metadata = {}}> : () -> i64
+    %maximum = "nodal.const_literal"() <{value = 8 : i64, spelling = "8", metadata = {}}> : () -> i64
+    "nodal.parameter_constraint"(%minimum, %maximum) <{parameter = @N, constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{parameter = @N, effects = ["shape", "topology"], policy = "static_generate", metadata = {}}> : () -> ()
+    %upper = "nodal.const_parameter_ref"() <{parameter = @N, metadata = {}}> : () -> i64
+  )mlir"
+                                    : R"mlir(
+    %upper = "nodal.const_literal"() <{value = 3 : i64, spelling = "3", metadata = {}}> : () -> i64
+  )mlir";
+  std::string body = R"mlir(
+    %zero = "nodal.const_literal"() <{value = false, spelling = "0", metadata = {}}> : () -> !nodal.bits<1>
+    %state = "nodal.digital_storage"(%zero) <{name = "state", kind = "register", domain = @a, metadata = {semantic_path = "Top.family.state"}}> : (!nodal.bits<1>) -> !nodal.bits<1>
+  )mlir";
+  if (choice)
+    body += R"mlir(
+    %predicate = "nodal.static_compare"(%i, %lower) <{comparison = "eq", metadata = {semantic_path = "Top.family.predicate"}}> : (i64, i64) -> !nodal.static_predicate
+    "nodal.structural_if"(%predicate, %state, %input) <{contract_version = "structural-if-v1", region_id = "Top.family.choice", operandSegmentSizes = array<i32: 1, 2, 0>, metadata = {semantic_path = "Top.family.choice"}}> ({
+    ^bb0(%s: !nodal.bits<1>, %v: !nodal.bits<1>):
+      "nodal.digital_assign"(%s, %v) <{kind = "register_next", metadata = {}}> : (!nodal.bits<1>, !nodal.bits<1>) -> ()
+      "nodal.structural_yield"() <{metadata = {semantic_path = "Top.family.choice.then.yield"}}> : () -> ()
+    }, {
+      "nodal.structural_yield"() <{metadata = {semantic_path = "Top.family.choice.else.yield"}}> : () -> ()
+    }) : (!nodal.static_predicate, !nodal.bits<1>, !nodal.bits<1>) -> ()
+    )mlir";
+  else
+    body += assign("state", "input", "register_next");
+  body += R"mlir(
+    "nodal.generated_export"(%state) <{member = "state", access = "register", metadata = {}}> : (!nodal.bits<1>) -> ()
+  )mlir";
+  std::string family = R"mlir(
+    %lower = "nodal.const_literal"() <{value = 0 : i64, spelling = "0", metadata = {}}> : () -> i64
+    %step = "nodal.const_literal"() <{value = 1 : i64, spelling = "1", metadata = {}}> : () -> i64
+    %family = "nodal.generate"(%lower, %upper, %step) <{induction = "i", induction_path = "Top.family.i", region_id = "Top.family", metadata = {maximum_trip_count = )mlir" +
+                       std::string(symbolic ? "8" : "3") + R"mlir( : i64}}> ({
+    ^bb0(%i: i64):
+  )mlir" + body + R"mlir(
+    }) : (i64, i64, i64) -> !nodal.generated_family
+    %selected = "nodal.generated_member"(%family, %lower) <{member = "state", access = "read", metadata = {}}> : (!nodal.generated_family, i64) -> !nodal.bits<1>
+  )mlir";
+  return "module attributes {nodal.root.module = @Top} {\n" +
+         owner("Top", parameters + domain("a") + port("input", "input", "a") +
+                          port("output", "output", "a") + family + assign("output", "selected")) +
+         "}\n";
+}
+
+std::string nestedGeneratedFixture(unsigned depth = 2, bool symbolic = true) {
+  std::string input = generatedFixture(symbolic, false);
+  const std::string originalPath = "Top.family";
+  std::string path = "Top";
+  for (unsigned i = 0; i < depth; ++i)
+    path += ".family";
+  for (size_t at = 0; (at = input.find(originalPath, at)) != std::string::npos; at += path.size())
+    input.replace(at, originalPath.size(), path);
+  auto begin = input.find("%family =");
+  auto end = input.find("%selected =", begin);
+  std::string body = input.substr(begin, end - begin);
+  for (unsigned i = depth - 1; i-- > 0;) {
+    std::string owner = "Top";
+    for (unsigned j = 0; j <= i; ++j)
+      owner += ".family";
+    std::string handle = i + 1 == depth - 1 ? "family" : "family" + std::to_string(i + 1);
+    body = "%family" + std::to_string(i) +
+           " = \"nodal.generate\"(%lower, %outerUpper, %step) <{induction = \"i\", "
+           "induction_path = \"" +
+           owner + ".i\", region_id = \"" + owner +
+           "\", metadata = {maximum_trip_count = 2 : i64}}> ({^bb0(%outer" + std::to_string(i) +
+           ": i64):\n" + body + "\"nodal.generated_export\"(%" + handle +
+           ") <{member = \"inner\", access = \"read\", kind = \"family\", metadata = {}}> : "
+           "(!nodal.generated_family) -> ()\n}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  }
+  std::string selection;
+  std::string handle = "family0";
+  for (unsigned i = 0; i + 1 < depth; ++i) {
+    std::string view = "view" + std::to_string(i);
+    selection += "%" + view + " = \"nodal.generated_member\"(%" + handle +
+                 ", %step) <{member = \"inner\", access = \"read\", kind = \"family\", "
+                 "metadata = {}}> : (!nodal.generated_family, i64) -> !nodal.generated_family\n";
+    handle = view;
+  }
+  std::string suffix = input.substr(end);
+  suffix = replace(suffix, "generated_member\"(%family,", "generated_member\"(%" + handle + ",");
+  return input.substr(0, begin) +
+         "%outerUpper = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\", "
+         "metadata = {}}> : () -> i64\n" +
+         body + selection + suffix;
+}
+
+std::string nestedMatrixFixture() {
+  const std::string matrix = "!nodal.shaped<\"2,N\", !nodal.bits<1>>";
+  const std::string row = "!nodal.shaped<\"N\", !nodal.bits<1>>";
+  auto slice = [&](StringRef name, StringRef input, StringRef index, const std::string &inputType,
+                   const std::string &resultType) {
+    return "%" + name.str() + " = \"nodal.shape_index\"(%" + input.str() + ", %" + index.str() +
+           ") <{metadata = {semantic_path = \"Top." + name.str() + "\"}}> : (" + inputType +
+           ", i64) -> " + resultType + "\n";
+  };
+  std::string input =
+      replace(nestedGeneratedFixture(), port("input", "input", "a"),
+              port("matrixIn", "input", "a", matrix) + port("matrixOut", "output", "a", matrix));
+  input = replace(input, "%family =",
+                  slice("rowIn", "matrixIn", "outer0", matrix, row) +
+                      slice("rowOut", "matrixOut", "outer0", matrix, row) + "%family =");
+  input = replace(input, "%zero =", slice("input", "rowIn", "i", row, bit) + "%zero =");
+  input = replace(input, "%family = \"nodal.generate\"(%lower, %upper, %step)",
+                  "%innerLower = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\", "
+                  "metadata = {}}> : () -> i64\n"
+                  "%innerStep = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\", "
+                  "metadata = {}}> : () -> i64\n"
+                  "%family = \"nodal.generate\"(%innerLower, %upper, %innerStep)");
+  return replace(input, "\"nodal.generated_export\"(%state)",
+                 slice("laneOut", "rowOut", "i", row, bit) + assign("laneOut", "state") +
+                     "\"nodal.generated_export\"(%state)");
+}
+
+std::string derivedWidthFixture() {
+  auto ty = [](unsigned bits) {
+    return "!nodal.digital<\"sint\", \"Top.width" + std::to_string(bits) + "\">";
+  };
+  std::string body = domain("a") + "%widthZero = \"nodal.const_literal\"() <{value = 0 : i64, "
+                                   "spelling = \"0\", metadata = {}}> : () -> i64\n";
+  for (unsigned bits : {4, 5, 8}) {
+    std::string name = std::to_string(bits);
+    body += "%literal" + name + " = \"nodal.const_literal\"() <{value = " + name +
+            " : i64, spelling = \"" + name + "\", metadata = {}}> : () -> i64\n" + "%width" + name +
+            " = \"nodal.const_expr\"(%literal" + name +
+            ", %widthZero) "
+            "<{operator_name = \"add\", metadata = {semantic_path = \"Top.width" +
+            name + "\"}}> : (i64, i64) -> i64\n";
+  }
+  body += port("x", "input", "a", ty(4)) + port("y", "input", "a", ty(4)) +
+          port("sum", "output", "a", ty(5)) + port("product", "output", "a", ty(8)) +
+          port("negative", "output", "a", ty(5)) + port("less", "output", "a");
+  auto expression = [&](StringRef name, StringRef code, unsigned bits, bool unary = false) {
+    const std::string type = bits == 1 ? bit : ty(bits);
+    return "%" + name.str() + "Value = \"nodal.digital_expr\"(%x" + (unary ? "" : ", %y") +
+           ") <{operator_name = \"" + code.str() + "\", metadata = {}}> : (" + ty(4) +
+           (unary ? "" : ", " + ty(4)) + ") -> " + type + "\n\"nodal.digital_assign\"(%" +
+           name.str() + ", %" + name.str() + "Value) <{kind = \"continuous\", metadata = {}}> : (" +
+           type + ", " + type + ") -> ()\n";
+  };
+  body += expression("sum", "digital_add", 5) + expression("product", "digital_mul", 8) +
+          expression("negative", "digital_neg", 5, true) + expression("less", "digital_lt", 1);
+  return "module attributes {nodal.root.module = @Top} {\n" + owner("Top", body) + "}\n";
+}
+
+std::string print(Operation *op) {
+  std::string result;
+  llvm::raw_string_ostream out(result);
+  op->print(out);
+  return result;
+}
+} // namespace
+namespace resolved_target {
+namespace {
+const std::string tag = "interface_abi_version = 1 : i64";
+const std::string bits = "!nodal.bits<8>", boolean = "!nodal.bits<1>";
+std::string model(StringRef body, StringRef header = "") {
+  return "module attributes {nodal.root.module = @Fixture} { " + header.str() +
+         "\n \"nodal.module\"() <{sym_name = \"Fixture\", metadata = {}}> ({\n" + body.str() +
+         "}) : () -> () }\n";
+}
+std::string domain(StringRef name = "clock") {
+  return "\"nodal.domain\"() <{sym_name = \"" + name.str() +
+         "\", edge = \"rising\", reset_policy = \"sync\", metadata = {}}> : () -> ()\n";
+}
+std::string entry(StringRef path, StringRef access, StringRef role) {
+  return "{path = \"" + path.str() + "\", access = \"" + access.str() + "\", leaf_role = \"" +
+         role.str() + "\", nested_roles = [], nested_interfaces = []}";
+}
+std::string definition(StringRef type = bits, StringRef member = "data",
+                       StringRef protocol = "plain") {
+  std::string body;
+  for (auto pair :
+       {std::pair{"source", "out"}, std::pair{"sink", "in"}, std::pair{"monitor", "observe"}})
+    body += "\"nodal.interface_role\"() <{sym_name = \"" + std::string(pair.first) +
+            "\", kind = \"explicit\", metadata = {" + tag + ", access = [" +
+            entry(member, pair.second, pair.first) + "]}}> : () -> ()\n";
+  body += "\"nodal.interface_member\"() <{sym_name = \"" + member.str() +
+          "\", type = " + type.str() + ", protocol = \"" + protocol.str() +
+          "\", roles = [\"source\", \"sink\", \"monitor\"], metadata = {" + tag +
+          "}}> : () -> ()\n";
+  return "\"nodal.interface\"() <{sym_name = \"Bus\", metadata = {" + tag +
+         ", semantic_identity = \"pkg.Bus\"}}> ({\n" + body + "}) : () -> ()\n";
+}
+std::string instance(StringRef name, StringRef role, StringRef access, StringRef type = bits,
+                     StringRef dimensions = "", StringRef clock = "clock",
+                     StringRef member = "data") {
+  return "\"nodal.interface_instance\"() <{sym_name = \"" + name.str() +
+         "\", definition = @Bus, role = \"" + role.str() + "\", metadata = {" + tag +
+         ", domain = @" + clock.str() + ", dimensions = [" + dimensions.str() +
+         "], semantic_path = \"Fixture." + name.str() + "\"}}> : () -> ()\n" +
+         "\"nodal.interface_abi\"() <{logical_path = \"Fixture." + name.str() +
+         "\", layout_policy = \"structural\", members = [{path = \"" + member.str() +
+         "\", type = " + type.str() + ", role = \"" + role.str() + "\", access = \"" +
+         access.str() + "\", nested_roles = [], nested_interfaces = []}], metadata = {" + tag +
+         ", instance = @" + name.str() + "}}> : () -> ()\n";
+}
+std::string member(StringRef name, StringRef endpoint, StringRef type = bits, StringRef role = "",
+                   StringRef path = "data") {
+  return "%" + name.str() + " = \"nodal.member_access\"() <{instance = @" + endpoint.str() +
+         ", path = \"" + path.str() + "\", metadata = {" + tag +
+         (role.empty() ? "" : ", role = \"" + role.str() + "\"") + "}}> : () -> " + type.str() +
+         "\n";
+}
+std::string port(StringRef name, StringRef type, StringRef direction = "input",
+                 StringRef clock = "clock") {
+  return "\"nodal.port\"() <{sym_name = \"" + name.str() + "\", type = " + type.str() +
+         ", direction = \"" + direction.str() + "\", domain = @" + clock.str() +
+         ", metadata = {}}> : () -> ()\n%" + name.str() + " = \"nodal.port_value\"() <{port = @" +
+         name.str() + ", metadata = {}}> : () -> " + type.str() + "\n";
+}
+std::string observe(StringRef target = "a", StringRef type = bits) {
+  return "\"nodal.interface_observe\"(%" + target.str() + ") <{metadata = {" + tag + "}}> : (" +
+         type.str() + ") -> ()\n";
+}
+std::string resolved(StringRef mode = "push_pull", StringRef type = bits) {
+  return "!nodal.resolved<\"" + mode.str() + "\", " + type.str() + ">";
+}
+std::string net(StringRef name = "net", StringRef mode = "push_pull",
+                StringRef placement = "top_level_pin",
+                StringRef profile = "portable_boundary_only") {
+  return "%" + name.str() + " = \"nodal.resolved_net\"() <{name = \"" + name.str() +
+         "\", metadata = {" + tag + ", placement = \"" + placement.str() + "\", profile = \"" +
+         profile.str() + "\"}}> : () -> " + resolved(mode) + "\n";
+}
+std::string driver(StringRef name = "driver", StringRef target = "net",
+                   StringRef mode = "push_pull") {
+  return "%" + name.str() + " = \"nodal.net_driver\"(%" + target.str() + ") <{driver_id = \"" +
+         name.str() + "\", metadata = {" + tag + "}}> : (" + resolved(mode) +
+         ") -> !nodal.driver<" + bits + ">\n";
+}
+std::string netDrive(StringRef identity = "driver", StringRef target = "net",
+                     StringRef mode = "push_pull") {
+  return "\"nodal.net_drive\"(%" + target.str() + ", %" + identity.str() +
+         ", %value, %enable) <{mode = \"" + mode.str() + "\", metadata = {" + tag + "}}> : (" +
+         resolved(mode) + ", !nodal.driver<" + bits + ">, " + bits + ", " + boolean + ") -> ()\n";
+}
+std::string level(StringRef active = "low", StringRef mode = "open_drain") {
+  return "\"nodal.net_drive_level\"(%net, %driver, %enable) <{level = \"" + active.str() +
+         "\", metadata = {" + tag + "}}> : (" + resolved(mode) + ", !nodal.driver<" + bits + ">, " +
+         boolean + ") -> ()\n";
+}
+std::string release(StringRef identity = "release", StringRef target = "net",
+                    StringRef mode = "push_pull") {
+  return "\"nodal.net_release\"(%" + target.str() + ", %" + identity.str() + ") <{metadata = {" +
+         tag + "}}> : (" + resolved(mode) + ", !nodal.driver<" + bits + ">) -> ()\n";
+}
+std::string split(StringRef target = "net", StringRef mode = "push_pull") {
+  return "%write, %enabled = \"nodal.net_split\"(%" + target.str() + ") <{metadata = {" + tag +
+         "}}> : (" + resolved(mode) + ") -> (" + bits + ", " + boolean + ")\n";
+}
+std::string through(StringRef first = "net", StringRef second = "other",
+                    StringRef mode = "push_pull") {
+  return "\"nodal.net_pass_through\"(%" + first.str() + ", %" + second.str() + ") <{metadata = {" +
+         tag + "}}> : (" + resolved(mode) + ", " + resolved(mode) + ") -> ()\n";
+}
+std::string replace(std::string text, StringRef from, StringRef to) {
+  auto index = text.find(from.str());
+  if (index == std::string::npos)
+    return text;
+  text.replace(index, from.size(), to.str());
+  return text;
+}
+std::string resolvedDefinition() {
+  std::string result = definition(resolved(), "data", "resolved");
+  result = replace(result, "access = \"out\"", "access = \"drive\"");
+  return replace(result, "access = \"in\"", "access = \"connect\"");
+}
+
+std::string boundDomain() {
+  return domain() + port("clock_pin", "!nodal.capability<\"clock\">") +
+         port("reset_pin", "!nodal.capability<\"reset\">") +
+         "\"nodal.local_domain_binding\"(%clock_pin, %reset_pin) <{domain = @clock, reset_polarity "
+         "= \"active_high\", metadata = {}}> : (!nodal.capability<\"clock\">, "
+         "!nodal.capability<\"reset\">) -> ()\n";
+}
+std::string module(StringRef name, const std::string &body, bool external = false,
+                   StringRef physical = "ExternalPad") {
+  return "\"nodal.module\"() <{sym_name = \"" + name.str() + "\", metadata = {}" +
+         (external ? ", external_name = \"" + physical.str() + "\"" : "") + "}> ({\n" + body +
+         "}) : () -> ()\n";
+}
+std::string child(StringRef name = "child", StringRef target = "Child") {
+  return "\"nodal.instance\"() <{sym_name = \"" + name.str() + "\", module = @" + target.str() +
+         ", parameter_bindings = {}, domain_bindings = {}, metadata = {}}> : () -> ()\n";
+}
+std::string boundary(StringRef value = "view", StringRef instance = "child") {
+  return "%" + value.str() + " = \"nodal.net_boundary\"() <{instance = @" + instance.str() +
+         ", endpoint = \"pin\", metadata = {" + tag +
+         ", placement = \"black_box_pin\", profile = \"portable_boundary_only\", semantic_path = "
+         "\"Top." +
+         value.str() + "\"}}> : () -> " + resolved() + "\n";
+}
+std::string read(StringRef value = "observed", StringRef target = "net") {
+  return "%" + value.str() + " = \"nodal.net_read\"(%" + target.str() + ") <{metadata = {" + tag +
+         "}}> : (" + resolved() + ") -> " + bits + "\n";
+}
+std::string route(StringRef target, StringRef value) {
+  return "\"nodal.digital_assign\"(%" + target.str() + ", %" + value.str() +
+         ") <{kind = \"continuous\", metadata = {}}> : (" + bits + ", " + bits + ") -> ()\n";
+}
+std::string externalFixture(bool drive = false, bool repeated = false, bool unprojected = false) {
+  std::string body = boundDomain() + port("output", bits, "output") + net("pad") + child();
+  if (!unprojected)
+    body += boundary() + through("pad", "view");
+  body += read("observed", "pad") + route("output", "observed");
+  if (drive)
+    body += port("value", bits) + port("enable", boolean) + driver("driver", "pad") +
+            netDrive("driver", "pad");
+  if (repeated)
+    body += net("other") + child("sibling") + boundary("other_view", "sibling") +
+            through("other", "other_view");
+  return "module attributes {nodal.root.module = @Top} {\n" + module("Top", body) +
+         module("Child", net("pin", "push_pull", "black_box_pin"), true) + "}\n";
+}
+std::string typedRoute(StringRef target, StringRef value, StringRef type) {
+  return "\"nodal.digital_assign\"(%" + target.str() + ", %" + value.str() +
+         ") <{kind = \"continuous\", metadata = {}}> : (" + type.str() + ", " + type.str() +
+         ") -> ()\n";
+}
+std::string requirement() {
+  return "\"nodal.domain_requirement\"() <{sym_name = \"req\", metadata = {}}> : () -> ()\n";
+}
+std::string boundChild(StringRef name, StringRef target) {
+  return replace(child(name, target), "domain_bindings = {}", "domain_bindings = {req = @clock}") +
+         "\"nodal.instance_domain_binding\"(%clock_pin, %reset_pin) <{instance = @" + name.str() +
+         ", requirement = @req, actual = @clock, origin = \"named\", metadata = {}}> : "
+         "(!nodal.capability<\"clock\">, !nodal.capability<\"reset\">) -> ()\n";
+}
+std::string childPort(StringRef value, StringRef instance, StringRef pin, StringRef direction,
+                      StringRef type) {
+  return "%" + value.str() + " = \"nodal.instance_port\"() <{instance = @" + instance.str() +
+         ", port = \"" + pin.str() + "\", direction = \"" + direction.str() +
+         "\", metadata = {}}> : () -> " + type.str() + "\n";
+}
+std::string localBoundary(StringRef value, StringRef instance, StringRef endpoint = "pin") {
+  return replace(replace(boundary(value, instance), "black_box_pin", "top_level_pin"),
+                 "endpoint = \"pin\"", "endpoint = \"" + endpoint.str() + "\"");
+}
+std::string splitReader(bool two = false) {
+  std::string body = requirement();
+  for (unsigned i = 0; i < (two ? 2u : 1u); ++i) {
+    std::string s = std::to_string(i), pin = i ? "other" : "pin";
+    std::string query = replace(split(pin), "<{metadata", "<{hierarchy_driver = unit, metadata");
+    query =
+        replace(replace(query, "%write,", "%write" + s + ","), "%enabled =", "%enabled" + s + " =");
+    body += net(pin) + port("written" + s, bits, "output", "req") +
+            port("active" + s, boolean, "output", "req") + query +
+            route("written" + s, "write" + s) + typedRoute("active" + s, "enabled" + s, boolean);
+  }
+  return module("Reader", body);
+}
+std::string splitWriter() {
+  return module("Writer", requirement() + port("value", bits, "input", "req") +
+                              port("enable", boolean, "input", "req") + net("pin") +
+                              driver("driver", "pin") + netDrive("driver", "pin"));
+}
+std::string observeReader(StringRef inst, StringRef prefix, unsigned pins = 1) {
+  std::string result;
+  for (unsigned i = 0; i < pins; ++i) {
+    std::string s = std::to_string(i), out = prefix.str() + s;
+    result += port(out, bits, "output") + port(out + "_enabled", boolean, "output") +
+              childPort(out + "_value", inst, "written" + s, "output", bits) +
+              childPort(out + "_active", inst, "active" + s, "output", boolean) +
+              route(out, out + "_value") + typedRoute(out + "_enabled", out + "_active", boolean);
+  }
+  return result;
+}
+std::string driveLocal(StringRef suffix, StringRef target) {
+  std::string value = "value" + suffix.str(), enable = "enable" + suffix.str(),
+              id = "driver" + suffix.str();
+  std::string drive = replace(replace(netDrive(id, target), "%value,", "%" + value + ","),
+                              "%enable)", "%" + enable + ")");
+  return port(value, bits) + port(enable, boolean) + driver(id, target) + drive;
+}
+std::string feedWriter(StringRef inst) {
+  return port("value", bits) + port("enable", boolean) +
+         childPort("to_value", inst, "value", "input", bits) +
+         childPort("to_enable", inst, "enable", "input", boolean) + route("to_value", "value") +
+         typedRoute("to_enable", "enable", boolean);
+}
+std::string splitHierarchy(StringRef mode) {
+  std::string body = boundDomain(), definitions;
+  if (mode == "down") {
+    body += boundChild("reader", "Reader") + localBoundary("view", "reader") +
+            driveLocal("", "view") + observeReader("reader", "out");
+    definitions = splitReader();
+  } else if (mode == "up") {
+    body += boundChild("writer", "Writer") + localBoundary("view", "writer") +
+            feedWriter("writer") + port("written", bits, "output") +
+            port("active", boolean, "output") +
+            replace(split("view"), "<{metadata", "<{hierarchy_driver = unit, metadata") +
+            route("written", "write") + typedRoute("active", "enabled", boolean);
+    definitions = splitWriter();
+  } else if (mode == "sibling") {
+    body += boundChild("writer", "Writer") + boundChild("reader", "Reader") +
+            localBoundary("write_view", "writer") + localBoundary("read_view", "reader") +
+            through("write_view", "read_view") + feedWriter("writer") +
+            observeReader("reader", "out");
+    definitions = splitReader() + splitWriter();
+  } else {
+    bool different = mode == "different";
+    for (unsigned i = 0; i < 2; ++i) {
+      std::string s = std::to_string(i), inst = "reader" + s, view = "view" + s;
+      body += boundChild(inst, "Reader") + localBoundary(view, inst) + driveLocal(s, view) +
+              observeReader(inst, "out" + s + "_", different ? 2u : 1u);
+      if (different) {
+        body += localBoundary(view + "_other", inst, "other");
+        body += i ? driveLocal("2", view + "_other") : through(view, view + "_other");
+      }
+    }
+    definitions = splitReader(different);
+  }
+  return "module attributes {nodal.root.module = @Top} {\n" + module("Top", body) + definitions +
+         "}\n";
+}
+
+std::string print(Operation *op) {
+  std::string out;
+  llvm::raw_string_ostream stream(out);
+  op->print(stream);
+  return out;
+}
+} // namespace
+std::pair<unsigned, unsigned> run() {
+  DialectRegistry registry;
+  registry.insert<nodal::NodalDialect>();
+  MLIRContext context(registry);
+  std::string diagnostics;
+  ScopedDiagnosticHandler handler(&context, [&](Diagnostic &d) {
+    llvm::raw_string_ostream out(diagnostics);
+    d.print(out);
+    out << '\n';
+    return success();
+  });
+  unsigned count = 0, failures = 0;
+  auto report = [&](StringRef name, bool ok) {
+    ++count;
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  auto positive = [&](StringRef name, const std::string &input,
+                      std::function<bool(mlir::ModuleOp)> check) {
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    PassManager pm(&context);
+    pm.addPass(nodal::createSequentialToCIRCTPass());
+    bool ok = parsed && succeeded(verify(*parsed)) && succeeded(pm.run(*parsed));
+    if (ok)
+      ok = check(*parsed);
+    report(name, ok);
+    if (!ok && parsed)
+      llvm::errs() << print(parsed->getOperation()) << '\n';
+  };
+  auto negative = [&](StringRef name, const std::string &input, StringRef diagnostic) {
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    std::string before = parsed ? print(parsed->getOperation()) : "";
+    PassManager pm(&context);
+    pm.addPass(nodal::createSequentialToCIRCTPass());
+    bool ok = parsed && failed(pm.run(*parsed)) && before == print(parsed->getOperation()) &&
+              StringRef(diagnostics).contains(diagnostic);
+    report(name, ok);
+  };
+  auto contains = [](StringRef token) {
+    return [=](mlir::ModuleOp op) { return StringRef(print(op)).contains(token); };
+  };
+  auto symbolic = [&](std::string body) {
+    std::string payload = "!nodal.digital<\"uint\", \"W\">";
+    size_t at = 0;
+    while ((at = body.find(bits, at)) != std::string::npos) {
+      body.replace(at, bits.size(), payload);
+      at += payload.size();
+    }
+    return model(R"mlir(
+      "nodal.parameter"() <{sym_name = "W", type = i64, classification = "structural", variability = "symbolic", default_value = 4 : i64, metadata = {}}> : () -> ()
+      %minimum = "nodal.const_literal"() <{value = 2 : i64, spelling = "2", metadata = {}}> : () -> i64
+      %maximum = "nodal.const_literal"() <{value = 8 : i64, spelling = "8", metadata = {}}> : () -> i64
+      "nodal.parameter_constraint"(%minimum, %maximum) <{parameter = @W, constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()
+      "nodal.parameter_envelope"() <{parameter = @W, effects = ["width"], policy = "static_generate", metadata = {}}> : () -> ()
+    )mlir" + body);
+  };
+  auto closedFill = [](StringRef token) {
+    return [=](mlir::ModuleOp op) {
+      unsigned fills = 0;
+      bool valid = true;
+      op.walk([&](circt::sv::VerbatimExprOp expression) {
+        auto tag = expression->getAttrOfType<StringAttr>("nodal.resolved_fill");
+        if (!tag)
+          return;
+        ++fills;
+        valid &= expression.getNumOperands() == 0 &&
+                 isa<circt::hw::IntType>(expression.getResult().getType()) &&
+                 llvm::is_contained(ArrayRef<StringRef>{"0", "1", "z"}, tag.getValue()) &&
+                 expression.getFormatString() == "'" + tag.getValue().str();
+      });
+      return valid && fills && StringRef(print(op)).contains(token);
+    };
+  };
+  auto symbolicPositive = [&](StringRef name, const std::string &input,
+                              std::function<bool(mlir::ModuleOp)> check) {
+    context.getOrLoadDialect<circt::hw::HWDialect>();
+    auto reference = circt::hw::ParamDeclRefAttr::get(StringAttr::get(&context, "probe"),
+                                                      IntegerType::get(&context, 32));
+    if (circt::hw::isParametricType(circt::hw::InOutType::get(circt::hw::IntType::get(reference))))
+      positive(name, input, check);
+    else
+      negative(name, input, "bootstrap --overlay circt-inout-parameters-v1");
+  };
+  symbolicPositive("symbolic-resolved-driver-retains-closed-width-sized-Z",
+                   symbolic(boundDomain() + net() + port("value", bits) + port("enable", boolean) +
+                            driver() + netDrive()),
+                   closedFill("nodal.resolved_fill = \"z\""));
+  symbolicPositive("symbolic-resolved-release-retains-closed-width-sized-Z",
+                   symbolic(net() + driver("release") + release()),
+                   closedFill("nodal.resolved_fill = \"z\""));
+  symbolicPositive("symbolic-resolved-open-drain-uses-closed-zero-and-Z",
+                   symbolic(boundDomain() + net("net", "open_drain") + port("enable", boolean) +
+                            driver("driver", "net", "open_drain") + level()),
+                   closedFill("nodal.resolved_fill = \"0\""));
+  symbolicPositive("symbolic-resolved-open-source-uses-closed-one-and-Z",
+                   symbolic(boundDomain() + net("net", "open_source") + port("enable", boolean) +
+                            driver("driver", "net", "open_source") + level("high", "open_source")),
+                   closedFill("nodal.resolved_fill = \"1\""));
+  symbolicPositive("symbolic-resolved-alias-retains-typed-static-width-bound",
+                   symbolic(net() + net("other") + through()), [](mlir::ModuleOp op) {
+                     unsigned aliases = 0;
+                     bool valid = true;
+                     op.walk([&](circt::sv::VerbatimOp alias) {
+                       if (!alias->hasAttr("nodal.resolved_alias"))
+                         return;
+                       ++aliases;
+                       valid &= alias.getNumOperands() == 3 &&
+                                alias.getOperand(0).getType() == alias.getOperand(1).getType() &&
+                                isa<circt::hw::InOutType>(alias.getOperand(0).getType()) &&
+                                alias.getOperand(2).getDefiningOp<circt::sv::LocalParamOp>();
+                     });
+                     return valid && aliases == 1;
+                   });
+  negative("symbolic-resolved-forged-split-kind-is-not-width-only",
+           replace(symbolic(boundDomain() + net() + port("value", bits) + port("enable", boolean) +
+                            driver() + netDrive() + split()),
+                   ") -> (!nodal.digital<\"uint\", \"W\">, !nodal.bits<1>)",
+                   ") -> (!nodal.digital<\"sint\", \"W\">, !nodal.bits<1>)"),
+           "net read/split must retain exact value and canonical Bool result types");
+  negative("symbolic-resolved-width-envelope-over-target-budget",
+           replace(symbolic(net()), "value = 8 : i64, spelling = \"8\"",
+                   "value = 4097 : i64, spelling = \"4097\""),
+           "resolved physical target requires exact bounded scalar portable boundary pins");
+  negative("symbolic-resolved-split-default-width-is-not-a-proof",
+           replace(symbolic(boundDomain() + net() + port("value", bits) + port("enable", boolean) +
+                            driver() + netDrive() + split()),
+                   ") -> (!nodal.digital<\"uint\", \"W\">, !nodal.bits<1>)",
+                   ") -> (!nodal.uint<4>, !nodal.bits<1>)"),
+           "net read/split must retain exact value and canonical Bool result types");
+  positive("declared-unaccessed-pin", model(net()), [](mlir::ModuleOp op) {
+    auto modules = op.getOps<circt::hw::HWModuleOp>();
+    if (modules.empty())
+      return false;
+    auto *body = (*modules.begin()).getBodyBlock();
+    return body->getNumArguments() == 1 &&
+           isa<circt::hw::InOutType>(body->getArgument(0).getType());
+  });
+  positive("conditional-driver-native-Z",
+           model(boundDomain() + net() + port("value", bits) + port("enable", boolean) + driver() +
+                 netDrive()),
+           contains("sv.constantZ"));
+  positive("explicit-release-native-Z", model(net() + driver("release") + release()),
+           contains("sv.constantZ"));
+  positive("open-drain-level",
+           model(boundDomain() + net("net", "open_drain") + port("enable", boolean) +
+                 driver("driver", "net", "open_drain") + level()),
+           contains("sv.constantZ"));
+  positive("two-local-public-pins-preserve-electrical-alias",
+           model(net() + net("other") + through()), [](mlir::ModuleOp op) {
+             unsigned aliases = 0;
+             op.walk(
+                 [&](circt::sv::VerbatimOp v) { aliases += v->hasAttr("nodal.resolved_alias"); });
+             return aliases == 1 && StringRef(print(op)).contains("tran ");
+           });
+  positive("read-native-resolved-value",
+           model(boundDomain() + net() + port("output", bits, "output") + read() +
+                 route("output", "observed")),
+           contains("sv.read_inout"));
+  positive("true-extern-not-body", externalFixture(), [](mlir::ModuleOp op) {
+    unsigned modules = 0, externs = 0, instances = 0;
+    op.walk([&](circt::hw::HWModuleOp) { ++modules; });
+    op.walk([&](circt::hw::HWModuleExternOp) { ++externs; });
+    op.walk([&](circt::hw::InstanceOp) { ++instances; });
+    return modules == 1 && externs == 1 && instances == 1 &&
+           StringRef(print(op)).contains("ExternalPad");
+  });
+  positive("extern-parent-conditional-drive", externalFixture(true), contains("sv.constantZ"));
+  positive("complete-unprojected-extern-pin", externalFixture(false, false, true),
+           contains("nodal.resolved_declaration"));
+  positive("reused-child-pins-never-global-shorted", externalFixture(false, true),
+           [](mlir::ModuleOp op) {
+             SmallVector<Value> pins;
+             op.walk([&](circt::hw::InstanceOp i) { pins.push_back(i->getOperand(0)); });
+             return pins.size() == 2 && pins[0] != pins[1];
+           });
+  std::string iface =
+      boundDomain() + resolvedDefinition() + instance("left", "sink", "connect", resolved());
+  positive("unaccessed-resolved-Interface-pin", model(iface), contains("true-inout"));
+  positive("repeated-Interface-member-aliases",
+           model(iface + member("a", "left", resolved()) + member("b", "left", resolved()) +
+                 observe("a", resolved()) + observe("b", resolved())),
+           [](mlir::ModuleOp op) {
+             unsigned wires = 0;
+             op.walk([&](circt::sv::WireOp) { ++wires; });
+             return wires == 0 && StringRef(print(op)).contains("true-inout");
+           });
+  positive("local-split-retains-exact-driver-data-and-enable",
+           model(boundDomain() + net() + port("value", bits) + port("enable", boolean) +
+                 port("written", bits, "output") + port("active", boolean, "output") + driver() +
+                 netDrive() + split() + route("written", "write") +
+                 "\"nodal.digital_assign\"(%active, %enabled) <{kind = \"continuous\", metadata = "
+                 "{}}> : (" +
+                 boolean + ", " + boolean + ") -> ()\n"),
+           [](mlir::ModuleOp op) {
+             unsigned registers = 0, reads = 0;
+             op.walk([&](circt::seq::CompRegOp) { ++registers; });
+             op.walk([&](circt::sv::ReadInOutOp) { ++reads; });
+             return !registers && !reads && StringRef(print(op)).contains("sv.constantZ");
+           });
+  for (auto mode : {"down", "up", "sibling", "reuse", "different"}) {
+    unsigned expectedModules =
+        (StringRef(mode) == "sibling" || StringRef(mode) == "different") ? 3 : 2;
+    positive("fixed-split-route-" + std::string(mode), splitHierarchy(mode),
+             [=](mlir::ModuleOp op) {
+               unsigned modules = 0, state = 0, reads = 0, dataPorts = 0, enablePorts = 0;
+               op.walk([&](circt::hw::HWModuleOp m) {
+                 ++modules;
+                 auto ports = m.getPortList();
+                 for (auto &port : ports) {
+                   auto fact = port.attrs.getAs<DictionaryAttr>("nodal.split_sideband");
+                   if (fact) {
+                     auto role = fact.getAs<StringAttr>("role");
+                     dataPorts += role && role.getValue() == "data";
+                     enablePorts += role && role.getValue() == "enable";
+                   }
+                 }
+               });
+               op.walk([&](circt::seq::CompRegOp) { ++state; });
+               op.walk([&](circt::sv::ReadInOutOp) { ++reads; });
+               return modules == expectedModules && !state && !reads && dataPorts &&
+                      dataPorts == enablePorts;
+             });
+  }
+  positive("reused-split-reader-actual-inputs-remain-independent", splitHierarchy("reuse"),
+           [](mlir::ModuleOp op) {
+             SmallVector<circt::hw::InstanceOp> children;
+             op.walk([&](circt::hw::InstanceOp instance) { children.push_back(instance); });
+             if (children.size() != 2 || children[0].getModuleName() != children[1].getModuleName())
+               return false;
+             SmallVector<Value> data, enables;
+             for (auto instance : children)
+               for (auto [index, name] : llvm::enumerate(instance.getArgNames())) {
+                 StringRef label = cast<StringAttr>(name).getValue();
+                 if (label == "__nodal_split_0_data")
+                   data.push_back(instance.getOperand(index));
+                 if (label == "__nodal_split_0_enable")
+                   enables.push_back(instance.getOperand(index));
+               }
+             return data.size() == 2 && enables.size() == 2 && data[0] != data[1] &&
+                    enables[0] != enables[1];
+           });
+  negative("split-zero-actual-driver-rejects-transactionally",
+           replace(splitHierarchy("down"), driveLocal("", "view"), ""),
+           "resolved hierarchy split requires exactly one actual conditional driver");
+  negative("split-two-actual-drivers-reject-transactionally",
+           replace(splitHierarchy("down"), driveLocal("", "view"),
+                   driveLocal("", "view") + driveLocal("second", "view")),
+           "resolved hierarchy split requires exactly one actual conditional driver");
+  negative("split-width-forgery-rejects-before-transport",
+           model(boundDomain() + net() + port("value", bits) + port("enable", boolean) + driver() +
+                 netDrive() +
+                 replace(split(), ") -> (!nodal.bits<8>, !nodal.bits<1>)",
+                         ") -> (!nodal.bits<7>, !nodal.bits<1>)")),
+           "net read/split must retain exact value and canonical Bool result types");
+  std::string splitScale = boundDomain();
+  for (unsigned i = 0; i < 64; ++i) {
+    std::string suffix = std::to_string(i), inst = "reader" + suffix, view = "view" + suffix;
+    splitScale += boundChild(inst, "Reader") + localBoundary(view, inst) +
+                  driveLocal(suffix, view) + observeReader(inst, "out" + suffix + "_");
+  }
+  positive("64-independent-split-readers-share-one-relative-ABI",
+           "module attributes {nodal.root.module = @Top} {" + module("Top", splitScale) +
+               splitReader() + "}",
+           [](mlir::ModuleOp op) {
+             unsigned modules = 0, instances = 0;
+             op.walk([&](circt::hw::HWModuleOp) { ++modules; });
+             op.walk([&](circt::hw::InstanceOp) { ++instances; });
+             return modules == 2 && instances == 64;
+           });
+  negative("unsupported-internal-placement",
+           model(net("net", "push_pull", "internal_resolved_net", "full_resolved_simulation")),
+           "resolved physical target requires exact bounded scalar portable boundary pins");
+
+  std::string many;
+  for (unsigned i = 0; i < 64; ++i) {
+    std::string id = std::to_string(i), pin = "pad" + id, inst = "child" + id, view = "view" + id;
+    many += net(pin) + child(inst) + boundary(view, inst) + through(pin, view);
+  }
+  positive("64-independent-occurrences-share-one-external-signature",
+           "module attributes {nodal.root.module = @Top} {" + module("Top", many) +
+               module("Child", net("pin", "push_pull", "black_box_pin"), true) + "}",
+           [](mlir::ModuleOp op) {
+             SmallVector<Value> pins;
+             unsigned declarations = 0;
+             op.walk([&](circt::hw::HWModuleExternOp) { ++declarations; });
+             bool distinct = true;
+             op.walk([&](circt::hw::InstanceOp instance) {
+               Value value = instance->getOperand(0);
+               distinct &= !llvm::is_contained(pins, value);
+               pins.push_back(value);
+             });
+             return declarations == 1 && pins.size() == 64 && distinct;
+           });
+  std::string generated = R"mlir(
+    %low = "nodal.const_literal"() <{value = 0 : i64, spelling = "0", metadata = {}}> : () -> i64
+    %high = "nodal.const_literal"() <{value = 2 : i64, spelling = "2", metadata = {}}> : () -> i64
+    %step = "nodal.const_literal"() <{value = 1 : i64, spelling = "1", metadata = {}}> : () -> i64
+    %family = "nodal.generate"(%low, %high, %step) <{induction = "i", induction_path = "Top.family.i", region_id = "Top.family", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0(%i: i64):
+  )mlir" +
+                          replace(child(), "module = @Child,",
+                                  "module = @Child, generated_owner = \"Top.family\", "
+                                  "generated_induction = \"Top.family.i\",") +
+                          "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  negative("generated-external-endpoint-needs-selected-physical-transport",
+           "module attributes {nodal.root.module = @Top} {" + module("Top", generated) +
+               module("Child", net("pin", "push_pull", "black_box_pin"), true) + "}",
+           "generated resolved endpoint requires exact selected-lane physical transport");
+  negative("external-signature-document-is-not-executable-root",
+           "module attributes {nodal.root.module = @Child} {" +
+               module("Child", net("pin", "push_pull", "black_box_pin"), true) + "}",
+           "external signature cannot be the physical executable root");
+  negative("opaque-extern-cannot-prove-driver-uniqueness",
+           replace(externalFixture(true), read("observed", "pad"),
+                   read("observed", "pad") + split("pad")),
+           "opaque external contribution");
+  // One actual two-axis electrical family. Payload and enable lane shapes stay
+  // separate; all geometry is original authored identity, never a lane registry.
+  const std::string resolvedArray =
+      R"mlir(module attributes {nodal.root.module = @Fixture, nodal.root.parameter_bindings = {}} {
+"nodal.module"() <{sym_name = "Fixture", metadata = {}}> ({
+"nodal.domain"() <{sym_name = "clock", edge = "rising", reset_policy = "none", metadata = {}}> : () -> ()
+"nodal.port"() <{sym_name = "clockPin", type = !nodal.capability<"clock">, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%clockPin = "nodal.port_value"() <{port = @clockPin, metadata = {}}> : () -> !nodal.capability<"clock">
+"nodal.local_domain_binding"(%clockPin) <{domain = @clock, reset_polarity = "active_high", metadata = {}}> : (!nodal.capability<"clock">) -> ()
+"nodal.interface"() <{sym_name = "Bus", metadata = {interface_abi_version = 1 : i64, semantic_identity = "pkg.Bus"}}> ({
+"nodal.interface_role"() <{sym_name = "connected", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "connect", leaf_role = "connected", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_role"() <{sym_name = "monitor", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "observe", leaf_role = "monitor", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_member"() <{sym_name = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, protocol = "resolved", roles = ["connected", "monitor"], metadata = {interface_abi_version = 1 : i64}}> : () -> ()
+}) : () -> ()
+"nodal.interface_instance"() <{sym_name = "left", definition = @Bus, role = "connected", metadata = {interface_abi_version = 1 : i64, domain = @clock, dimensions = ["2", "3"], semantic_path = "Fixture.left"}}> : () -> ()
+"nodal.interface_abi"() <{logical_path = "Fixture.left", layout_policy = "structural", members = [{path = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, role = "connected", access = "connect", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @left}}> : () -> ()
+%left = "nodal.member_access"() <{instance = @left, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_instance"() <{sym_name = "right", definition = @Bus, role = "connected", metadata = {interface_abi_version = 1 : i64, domain = @clock, dimensions = ["2", "3"], semantic_path = "Fixture.right"}}> : () -> ()
+"nodal.interface_abi"() <{logical_path = "Fixture.right", layout_policy = "structural", members = [{path = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, role = "connected", access = "connect", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @right}}> : () -> ()
+%right = "nodal.member_access"() <{instance = @right, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_connect"(%left, %right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> ()
+"nodal.port"() <{sym_name = "data", type = !nodal.shaped<"2,3", !nodal.bits<8>>, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%data = "nodal.port_value"() <{port = @data, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.port"() <{sym_name = "enable", type = !nodal.shaped<"2,3", !nodal.bits<1>>, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%enable = "nodal.port_value"() <{port = @enable, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<1>>
+%driver = "nodal.net_driver"(%left) <{driver_id = "writer", metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> !nodal.shaped<"2,3", !nodal.driver<!nodal.bits<8>>>
+"nodal.net_drive"(%left, %driver, %data, %enable) <{mode = "push_pull", metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.driver<!nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<1>>) -> ()
+%read = "nodal.net_read"(%right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> !nodal.shaped<"2,3", !nodal.bits<8>>
+%write, %enabled = "nodal.net_split"(%right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> (!nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<1>>)
+"nodal.port"() <{sym_name = "observed", type = !nodal.shaped<"2,3", !nodal.bits<8>>, direction = "output", domain = @clock, metadata = {}}> : () -> ()
+%observed = "nodal.port_value"() <{port = @observed, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.digital_assign"(%observed, %read) <{kind = "continuous", metadata = {}}> : (!nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<8>>) -> ()
+"nodal.port"() <{sym_name = "written", type = !nodal.shaped<"2,3", !nodal.bits<8>>, direction = "output", domain = @clock, metadata = {}}> : () -> ()
+%written = "nodal.port_value"() <{port = @written, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.digital_assign"(%written, %write) <{kind = "continuous", metadata = {}}> : (!nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<8>>) -> ()
+"nodal.port"() <{sym_name = "active", type = !nodal.shaped<"2,3", !nodal.bits<1>>, direction = "output", domain = @clock, metadata = {}}> : () -> ()
+%active = "nodal.port_value"() <{port = @active, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<1>>
+"nodal.digital_assign"(%active, %enabled) <{kind = "continuous", metadata = {}}> : (!nodal.shaped<"2,3", !nodal.bits<1>>, !nodal.shaped<"2,3", !nodal.bits<1>>) -> ()
+}) : () -> ()
+}
+)mlir";
+  auto replaceArrayTokens = [](std::string input, StringRef from, StringRef to) {
+    size_t position = 0;
+    while ((position = input.find(from.str(), position)) != std::string::npos) {
+      input.replace(position, from.size(), to.str());
+      position += to.size();
+    }
+    return input;
+  };
+  auto symbolicArray = replaceArrayTokens(resolvedArray, "2,3", "N,3");
+  symbolicArray = replaceArrayTokens(symbolicArray, "[\"2\", \"3\"]", "[\"N\", \"3\"]");
+  symbolicArray = replace(
+      symbolicArray, "\"nodal.interface\"",
+      R"mlir("nodal.parameter"() <{sym_name = "N", type = i64, default_value = 2 : i64, parameter_kind = "integer", classification = "structural", variability = "symbolic", metadata = {}}> : () -> ()
+%lo = "nodal.const_literal"() <{kind = "integer", spelling = "1", value = 1 : i64, metadata = {}}> : () -> i64
+%hi = "nodal.const_literal"() <{kind = "integer", spelling = "4", value = 4 : i64, metadata = {}}> : () -> i64
+"nodal.parameter_constraint"(%lo, %hi) <{parameter = @N, constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()
+"nodal.parameter_envelope"() <{parameter = @N, policy = "static_generate", effects = ["shape"], metadata = {}}> : () -> ()
+)mlir"
+      "\"nodal.interface\"");
+  auto variablePayloadArray =
+      replaceArrayTokens(symbolicArray, "!nodal.bits<8>", "!nodal.digital<\"bits\", \"W\">");
+  variablePayloadArray = replace(
+      variablePayloadArray, "\"nodal.interface\"",
+      R"mlir("nodal.parameter"() <{sym_name = "W", type = i64, default_value = 2 : i64, parameter_kind = "integer", classification = "structural", variability = "symbolic", metadata = {}}> : () -> ()
+%wlo = "nodal.const_literal"() <{kind = "integer", spelling = "1", value = 1 : i64, metadata = {}}> : () -> i64
+%whi = "nodal.const_literal"() <{kind = "integer", spelling = "8", value = 8 : i64, metadata = {}}> : () -> i64
+"nodal.parameter_constraint"(%wlo, %whi) <{parameter = @W, constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()
+"nodal.parameter_envelope"() <{parameter = @W, policy = "static_generate", effects = ["width"], metadata = {}}> : () -> ()
+)mlir"
+      "\"nodal.interface\"");
+  auto oneArrayLoop = [](mlir::ModuleOp module) {
+    unsigned loops = 0;
+    module.walk([&](circt::sv::GenerateForOp) { ++loops; });
+    return loops == 1;
+  };
+  positive("resolved-array-unequal-axes-pointwise-physical-layout", resolvedArray,
+           [&](mlir::ModuleOp module) {
+             std::string ir = print(module);
+             return oneArrayLoop(module) &&
+                    StringRef(ir).contains("outer_dimensions = [\"2\", \"3\"]") &&
+                    StringRef(ir).contains("lane_count = 6 : i32") &&
+                    StringRef(ir).contains("lane_width = 8 : i32") &&
+                    StringRef(ir).contains("!hw.inout<i48>") &&
+                    StringRef(ir).contains("bit_strides = [24, 8]");
+           });
+  positive("resolved-array-symbolic-outer-axis-not-default", symbolicArray,
+           [&](mlir::ModuleOp module) {
+             std::string ir = print(module);
+             return oneArrayLoop(module) &&
+                    StringRef(ir).contains("outer_dimensions = [\"N\", \"3\"]") &&
+                    StringRef(ir).contains("!hw.inout<int<") &&
+                    StringRef(ir).contains("#hw.param.decl.ref<\"N\"");
+           });
+  positive("resolved-array-independent-payload-width-axis", variablePayloadArray,
+           [&](mlir::ModuleOp module) {
+             std::string ir = print(module);
+             return oneArrayLoop(module) &&
+                    StringRef(ir).contains("outer_dimensions = [\"N\", \"3\"]") &&
+                    StringRef(ir).contains("#hw.param.decl.ref<\"N\"") &&
+                    StringRef(ir).contains("#hw.param.decl.ref<\"W\"");
+           });
+  negative(
+      "resolved-array-scalar-enable-is-not-broadcast",
+      replaceArrayTokens(resolvedArray, "!nodal.shaped<\"2,3\", !nodal.bits<1>>", "!nodal.bits<1>"),
+      "conditional driver enable requires an actual owned canonical Bool");
+  negative("resolved-array-equal-cardinality-axis-permutation-is-not-identity",
+           replaceArrayTokens(resolvedArray, "!nodal.shaped<\"2,3\", !nodal.bits<1>>",
+                              "!nodal.shaped<\"3,2\", !nodal.bits<1>>"),
+           "conditional driver enable requires an actual owned canonical Bool");
+  negative("resolved-array-driver-retains-original-family-origin",
+           replace(resolvedArray, "\"nodal.net_drive\"(%left", "\"nodal.net_drive\"(%right"),
+           "drive/release must use one actual unique driver of this exact owned net");
+  negative("resolved-array-native-valid-footprint-refuses-transactionally",
+           replace(symbolicArray, "spelling = \"4\", value = 4 : i64",
+                   "spelling = \"513\", value = 513 : i64"),
+           "split physical routes exceed their checked bounded profile");
+
+  const std::string externalArray =
+      R"mlir(module attributes {nodal.root.module = @Fixture, nodal.root.parameter_bindings = {}} {
+"nodal.module"() <{sym_name = "Fixture", metadata = {}}> ({
+"nodal.domain"() <{sym_name = "clock", edge = "rising", reset_policy = "none", metadata = {}}> : () -> ()
+"nodal.port"() <{sym_name = "clockPin", type = !nodal.capability<"clock">, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%clockPin = "nodal.port_value"() <{port = @clockPin, metadata = {}}> : () -> !nodal.capability<"clock">
+"nodal.local_domain_binding"(%clockPin) <{domain = @clock, reset_polarity = "active_high", metadata = {}}> : (!nodal.capability<"clock">) -> ()
+"nodal.interface"() <{sym_name = "Bus", metadata = {interface_abi_version = 1 : i64, semantic_identity = "pkg.Bus"}}> ({
+"nodal.interface_role"() <{sym_name = "connected", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "connect", leaf_role = "connected", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_role"() <{sym_name = "monitor", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "observe", leaf_role = "monitor", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_member"() <{sym_name = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, protocol = "resolved", roles = ["connected", "monitor"], metadata = {interface_abi_version = 1 : i64}}> : () -> ()
+}) : () -> ()
+"nodal.interface_instance"() <{sym_name = "left", definition = @Bus, role = "connected", metadata = {interface_abi_version = 1 : i64, domain = @clock, dimensions = ["2", "3"], semantic_path = "Fixture.left"}}> : () -> ()
+"nodal.interface_abi"() <{logical_path = "Fixture.left", layout_policy = "structural", members = [{path = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, role = "connected", access = "connect", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @left}}> : () -> ()
+%left = "nodal.member_access"() <{instance = @left, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_instance"() <{sym_name = "right", definition = @Bus, role = "connected", metadata = {interface_abi_version = 1 : i64, domain = @clock, dimensions = ["2", "3"], semantic_path = "Fixture.right"}}> : () -> ()
+"nodal.interface_abi"() <{logical_path = "Fixture.right", layout_policy = "structural", members = [{path = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, role = "connected", access = "connect", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @right}}> : () -> ()
+%right = "nodal.member_access"() <{instance = @right, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_connect"(%left, %right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> ()
+"nodal.port"() <{sym_name = "data", type = !nodal.shaped<"2,3", !nodal.bits<8>>, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%data = "nodal.port_value"() <{port = @data, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.port"() <{sym_name = "enable", type = !nodal.shaped<"2,3", !nodal.bits<1>>, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%enable = "nodal.port_value"() <{port = @enable, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<1>>
+%driver = "nodal.net_driver"(%left) <{driver_id = "writer", metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> !nodal.shaped<"2,3", !nodal.driver<!nodal.bits<8>>>
+"nodal.net_drive"(%left, %driver, %data, %enable) <{mode = "push_pull", metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.driver<!nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<1>>) -> ()
+%read = "nodal.net_read"(%right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.port"() <{sym_name = "observed", type = !nodal.shaped<"2,3", !nodal.bits<8>>, direction = "output", domain = @clock, metadata = {}}> : () -> ()
+%observed = "nodal.port_value"() <{port = @observed, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.digital_assign"(%observed, %read) <{kind = "continuous", metadata = {}}> : (!nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<8>>) -> ()
+"nodal.instance"() <{sym_name = "child", module = @Extern, parameter_bindings = {}, domain_bindings = {}, metadata = {}}> : () -> ()
+"nodal.interface_boundary"() <{sym_name = "child_view", instance = @child, endpoint = "exported", metadata = {interface_abi_version = 1 : i64, dimensions = ["2", "3"], semantic_path = "Fixture.child_view"}}> : () -> ()
+%child_pin = "nodal.member_access"() <{instance = @child_view, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_connect"(%left, %child_pin) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> ()
+}) : () -> ()
+"nodal.module"() <{sym_name = "Extern", external_name = "ExternalArray", metadata = {}}> ({
+"nodal.interface"() <{sym_name = "Bus", metadata = {interface_abi_version = 1 : i64, semantic_identity = "pkg.Bus"}}> ({
+"nodal.interface_role"() <{sym_name = "connected", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "connect", leaf_role = "connected", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_role"() <{sym_name = "monitor", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "observe", leaf_role = "monitor", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_member"() <{sym_name = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, protocol = "resolved", roles = ["connected", "monitor"], metadata = {interface_abi_version = 1 : i64}}> : () -> ()
+}) : () -> ()
+"nodal.interface_instance"() <{sym_name = "exported", definition = @Bus, role = "connected", metadata = {interface_abi_version = 1 : i64, placement = "black_box_pin", profile = "portable_boundary_only", dimensions = ["2", "3"], semantic_path = "Extern.exported"}}> : () -> ()
+"nodal.interface_abi"() <{logical_path = "Extern.exported", layout_policy = "structural", members = [{path = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, role = "connected", access = "connect", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @exported}}> : () -> ()
+}) : () -> ()
+}
+)mlir";
+  auto independentExternalArray = replace(
+      externalArray,
+      R"mlir("nodal.interface_connect"(%left, %right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> ()
+)mlir",
+      "");
+  independentExternalArray = replace(
+      independentExternalArray, "}) : () -> ()\n\"nodal.module\"() <{sym_name = \"Extern\"",
+      std::string(
+          R"mlir("nodal.instance"() <{sym_name = "sibling", module = @Extern, parameter_bindings = {}, domain_bindings = {}, metadata = {}}> : () -> ()
+"nodal.interface_boundary"() <{sym_name = "sibling_view", instance = @sibling, endpoint = "exported", metadata = {interface_abi_version = 1 : i64, dimensions = ["2", "3"], semantic_path = "Fixture.sibling_view"}}> : () -> ()
+%sibling_pin = "nodal.member_access"() <{instance = @sibling_view, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_connect"(%right, %sibling_pin) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> ()
+)mlir") + "}) : () -> ()\n\"nodal.module\"() <{sym_name = \"Extern\"");
+  auto exactExternalArray = [&](unsigned expectedInstances) {
+    return [&, expectedInstances](mlir::ModuleOp module) {
+      unsigned externals = 0, instances = 0;
+      module.walk([&](circt::hw::HWModuleExternOp op) { ++externals; });
+      module.walk([&](circt::hw::InstanceOp op) { ++instances; });
+      auto ir = print(module);
+      return externals == 1 && instances == expectedInstances && oneArrayLoop(module) &&
+             StringRef(ir).contains("hw.module.extern @Extern(inout %exported__m_4_data : i48") &&
+             StringRef(ir).contains("outer_dimensions = [\"2\", \"3\"]") &&
+             StringRef(ir).contains("placement = \"black_box_pin\"");
+    };
+  };
+  positive("resolved-external-array-one-original-opaque-family-pin", externalArray,
+           exactExternalArray(1));
+  positive("resolved-external-array-reused-definition-retains-independent-occurrences",
+           independentExternalArray, exactExternalArray(2));
+  negative(
+      "resolved-external-array-opaque-drive-forbids-split",
+      replace(
+          externalArray, "%read =",
+          std::string(
+              R"mlir(%write, %enabled = "nodal.net_split"(%right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> (!nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<1>>)
+)mlir") + "%read ="),
+      "resolved split cannot infer a unique driver across an opaque external contribution");
+  negative("resolved-external-array-equal-cardinality-swapped-axes-refused",
+           replace(externalArray,
+                   "dimensions = [\"2\", \"3\"], semantic_path = \"Fixture.child_view\"",
+                   "dimensions = [\"3\", \"2\"], semantic_path = \"Fixture.child_view\""),
+           "actual extent differs from the exact substituted child extent");
+  negative("resolved-external-array-top-level-placement-is-not-black-box",
+           replace(externalArray, "placement = \"black_box_pin\"", "placement = \"top_level_pin\""),
+           "external Interface requires explicit portable black-box placement");
+
+  llvm::outs() << count << " resolved target cases, " << failures << " failures\n";
+  return {count, failures};
+}
+
+} // namespace resolved_target
+
+int main() {
+  DialectRegistry registry;
+  registry.insert<nodal::NodalDialect>();
+  MLIRContext context(registry);
+  std::string diagnostics;
+  ScopedDiagnosticHandler handler(&context, [&](Diagnostic &d) {
+    llvm::raw_string_ostream out(diagnostics);
+    d.getLocation().print(out);
+    d.print(out);
+    out << '\n';
+    return success();
+  });
+  unsigned count = 0, failures = 0;
+  auto report = [&](StringRef name, bool ok) {
+    ++count;
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  auto positive = [&](StringRef name, const std::string &input, unsigned modules,
+                      unsigned instances, unsigned states, unsigned falling = 0) {
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    PassManager manager(&context);
+    manager.addPass(nodal::createSequentialToCIRCTPass());
+    bool ok = parsed && succeeded(verify(*parsed)) && succeeded(manager.run(*parsed));
+    unsigned m = 0, i = 0, s = 0, f = 0;
+    if (ok) {
+      parsed->walk([&](circt::hw::HWModuleOp) { ++m; });
+      parsed->walk([&](circt::hw::InstanceOp) { ++i; });
+      parsed->walk([&](circt::seq::CompRegOp) { ++s; });
+      parsed->walk([&](circt::seq::ClockInverterOp) { ++f; });
+      ok = m == modules && i == instances && s == states && f == falling &&
+           StringRef(print(parsed->getOperation())).contains("__nodal_req_clock");
+    }
+    report(name, ok);
+  };
+  positive("shared-definition-independent-clock-inputs", fixture(), 2, 2, 1);
+  positive("material-edge-polarity-variants", fixture(true), 3, 2, 2, 1);
+  positive("nested-forwarded-domain", fixture(false, true), 3, 3, 1);
+  positive("resetless-distinct-state-shape", fixture(false, false, true), 3, 2, 2);
+  positive("repeated-definition-not-per-occurrence-cloned", fixture(false, false, false, 32), 2, 32,
+           1);
+  diagnostics.clear();
+  {
+    auto parsed = parseSourceString<mlir::ModuleOp>(fixture(), ParserConfig(&context, false));
+    PassManager manager(&context);
+    manager.addPass(nodal::createSequentialToCIRCTPass());
+    bool wired = parsed && succeeded(manager.run(*parsed));
+    circt::hw::HWModuleOp top;
+    if (wired)
+      for (auto module : parsed->getOps<circt::hw::HWModuleOp>())
+        if (module->getAttrOfType<StringAttr>("sym_name").getValue() == "Top")
+          top = module;
+    wired &= bool(top);
+    if (wired) {
+      auto *body = top.getBodyBlock();
+      SmallVector<circt::hw::InstanceOp> instances;
+      for (auto instance : body->getOps<circt::hw::InstanceOp>())
+        instances.push_back(instance);
+      wired = body->getNumArguments() == 6 && instances.size() == 2;
+      if (wired) {
+        // Both references name one child definition, but no physical input or
+        // output result is shared. This checks causal wiring, not only op counts.
+        wired = instances[0].getModuleName() == "Child" && instances[1].getModuleName() == "Child";
+        for (unsigned i = 0; i < 2; ++i) {
+          wired &= instances[i]->getNumOperands() == 3 &&
+                   instances[i]->getOperand(0) == body->getArgument(4 + i) &&
+                   instances[i]->getOperand(1) == body->getArgument(2 * i) &&
+                   instances[i]->getOperand(2) == body->getArgument(2 * i + 1) &&
+                   body->back().getOperand(i) == instances[i].getResult(0);
+        }
+      }
+    }
+    report("shared-definition-preserves-exact-independent-causal-edges", wired);
+  }
+  {
+    auto formal = [](StringRef name) {
+      auto result =
+          replace(requirement(true), "sym_name = \"req\"", "sym_name = \"" + name.str() + "\"");
+      result = replace(result, "%clock_req", "%clock_" + name.str());
+      result = replace(result, "%reset_req", "%reset_" + name.str());
+      result = replace(result, "requirement = @req", "requirement = @" + name.str());
+      result = replace(result, "requirement = @req", "requirement = @" + name.str());
+      return result;
+    };
+    std::string child =
+        formal("src") + formal("dst") + port("input", "input", "src") +
+        port("output", "output", "dst") +
+        "%gray = \"nodal.crossing\"(%input) <{source_domain = @src, destination_domain = @dst, "
+        "kind = \"gray\", contract = \"gray_v1\", stages = 2 : i64, obligations = {"
+        "transition = \"one_bit_per_source_sample\", skew = \"less_than_source_period\", "
+        "stability = \"stable_between_source_samples\"}, metadata = {semantic_path = "
+        "\"Child.gray\"}}> : (" +
+        bit + ") -> " + bit + "\n" + assign("output", "gray");
+    std::string occurrence = instance("child", "Child", "a", "x");
+    occurrence = replace(occurrence, "domain_bindings = {req = @a}",
+                         "domain_bindings = {src = @a, dst = @b}");
+    occurrence = replace(occurrence, "requirement = @req", "requirement = @src");
+    occurrence += "\"nodal.instance_domain_binding\"(%clock_b, %reset_b) <{instance = @child, "
+                  "requirement = @dst, actual = @b, origin = \"named\", metadata = {}}> : (" +
+                  clockType + ", " + resetType + ") -> ()\n";
+    auto input =
+        "module attributes {nodal.root.module = @Top} {\n" +
+        owner("Top", domain("a") + domain("b") + port("x", "input", "a") + occurrence +
+                         port("result", "output", "b") + assign("result", "child_output")) +
+        owner("Child", child) + "}\n";
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    PassManager manager(&context);
+    manager.addPass(nodal::createSequentialToCIRCTPass());
+    bool minimal = parsed && succeeded(manager.run(*parsed));
+    if (minimal) {
+      auto output = print(parsed->getOperation());
+      minimal = StringRef(output).contains("__nodal_src_reset") &&
+                StringRef(output).contains("__nodal_dst_clock") &&
+                !StringRef(output).contains("__nodal_dst_reset");
+    }
+    report("gray-destination-payload-does-not-demand-reset", minimal);
+  }
+  positive("conditional-initializer-partitions-reset-bearing-and-resetless-occurrences",
+           conditionalFixture(), 3, 2, 2, 1);
+  {
+    diagnostics.clear();
+    auto parsed =
+        parseSourceString<mlir::ModuleOp>(conditionalFixture(true), ParserConfig(&context, false));
+    bool ok = bool(parsed);
+    unsigned obligations = 0;
+    if (ok) {
+      for (auto module : parsed->getOps<nodal::ModuleOp>())
+        if (module->getAttrOfType<StringAttr>("sym_name").getValue() == "Child") {
+          auto query = *module.getBody().front().getOps<nodal::ResetAssertedOp>().begin();
+          auto graph = nodal::analyzeDigitalAssignmentDependencies(
+              module, {{query->getResult(0), *query->getResult(0).getUsers().begin()}});
+          ok &= succeeded(graph);
+          if (succeeded(graph))
+            for (auto &node : graph->nodes)
+              obligations += bool(node.contextualReset);
+        }
+      ok &= obligations == 1;
+    }
+    report("formal-reset-query-retains-explicit-occurrence-dependency", ok);
+    PassManager manager(&context);
+    manager.addPass(nodal::createSequentialToCIRCTPass());
+    ok &= parsed && succeeded(manager.run(*parsed));
+    if (ok) {
+      std::string output = print(*parsed);
+      unsigned children = 0, resetPorts = 0, resetlessFalse = 0;
+      parsed->walk([&](circt::hw::HWModuleOp module) {
+        auto definition = module->getAttrOfType<StringAttr>("nodal.definition");
+        if (!definition || definition.getValue() != "Child")
+          return;
+        ++children;
+        auto *body = module.getBodyBlock();
+        resetPorts += body->getNumArguments() == 2;
+        if (body->getNumArguments() == 1) {
+          auto value = body->back().getOperand(0).getDefiningOp();
+          auto constant = value ? value->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+          resetlessFalse += constant && constant.getValue().isZero();
+        }
+      });
+      ok = children == 2 && resetPorts == 1 && resetlessFalse == 1 &&
+           !StringRef(output).contains("__nodal_req_clock") &&
+           StringRef(output).contains("__nodal_req_reset") &&
+           StringRef(output).contains("comb.xor");
+    }
+    report("reset-query-alone-infers-no-clock-and-proves-resetless-false", ok);
+  }
+  auto negative = [&](StringRef name, const std::string &input, StringRef diagnostic) {
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    auto before = parsed ? print(parsed->getOperation()) : "";
+    PassManager manager(&context);
+    manager.addPass(nodal::createSequentialToCIRCTPass());
+    bool ok = parsed && failed(manager.run(*parsed)) && before == print(parsed->getOperation()) &&
+              StringRef(diagnostics).contains(diagnostic);
+    report(name, ok);
+  };
+  negative("actual-clock-swap-keeps-descriptor",
+           replace(fixture(), "instance_domain_binding\"(%clock_a,",
+                   "instance_domain_binding\"(%clock_b,"),
+           "Clock operand disagrees");
+  negative("actual-reset-swap-keeps-descriptor",
+           replace(fixture(), "instance_domain_binding\"(%clock_a, %reset_a)",
+                   "instance_domain_binding\"(%clock_a, %reset_b)"),
+           "Reset operand disagrees");
+  negative("initialized-resetless-occurrence",
+           replace(fixture(false, false, true), owner("Resetless", leaf(false)),
+                   owner("Resetless", leaf(true))),
+           "initialized child state requires");
+  negative("unbounded-ordinary-parameter-remains-unsupported-atomically",
+           replace(fixture(), owner("Child", leaf()),
+                   owner("Child",
+                         leaf() + "\"nodal.parameter\"() <{sym_name = \"N\", type = i64, "
+                                  "default_value = 4 : i64, variability = \"symbolic\", metadata "
+                                  "= {}}> : () -> ()\n")),
+           "target Integer parameter envelope must fit signed 32-bit arithmetic");
+  negative("conditional-initializer-policy-is-closed",
+           replace(conditionalFixture(), "initializer_policy = \"if_reset\"",
+                   "initializer_policy = \"sometimes\""),
+           "if_reset requires");
+  negative("conditional-initializer-cannot-hide-missing-value",
+           replace(replace(conditionalFixture(), "digital_storage\"(%zero)", "digital_storage\"()"),
+                   "}> : (!nodal.bits<1>) -> !nodal.bits<1>", "}> : () -> !nodal.bits<1>"),
+           "if_reset requires");
+  negative("formal-reset-query-cannot-guess-polarity",
+           replace(conditionalFixture(true), "domain = @req, metadata = {semantic_path",
+                   "domain = @req, reset_polarity = \"active_high\", metadata = {semantic_path"),
+           "formal reset assertion retains only");
+  negative(
+      "formal-query-cannot-bypass-closed-root-selection",
+      replace(conditionalFixture(true), "module attributes {nodal.root.module = @Top}", "module"),
+      "requires one exact outer nodal.root.module selector");
+  negative(
+      "formal-consumer-root-cannot-remain-unbound",
+      replace(conditionalFixture(true), "nodal.root.module = @Top", "nodal.root.module = @Child"),
+      "reachable requirement lacks a unique concrete clock/reset binding");
+  {
+    diagnostics.clear();
+    auto parsed =
+        parseSourceString<mlir::ModuleOp>(conditionalFixture(), ParserConfig(&context, false));
+    bool valid = bool(parsed);
+    unsigned conditional = 0, resets = 0;
+    if (valid) {
+      for (auto module : parsed->getOps<nodal::ModuleOp>())
+        valid &= succeeded(nodal::normalizeSequentialModel(module));
+      parsed->walk([&](nodal::SequentialUpdateOp update) {
+        conditional +=
+            update->getNumOperands() == 4 &&
+            update->getAttrOfType<StringAttr>("initializer_policy").getValue() == "if_reset" &&
+            !update->hasAttr("edge") && !update->hasAttr("reset_policy") &&
+            !update->hasAttr("reset_polarity");
+      });
+      parsed->walk([&](nodal::RequirementResetOp) { ++resets; });
+      valid &= conditional == 1 && resets == 0 && succeeded(verify(*parsed));
+    }
+    report("conditional-normalization-preserves-initial-without-reset-projection", valid);
+  }
+  diagnostics.clear();
+  auto normalized = parseSourceString<mlir::ModuleOp>(fixture(), ParserConfig(&context, false));
+  bool ok = bool(normalized);
+  if (ok) {
+    for (auto module : normalized->getOps<nodal::ModuleOp>())
+      ok &= succeeded(nodal::normalizeSequentialModel(module));
+    unsigned formal = 0;
+    normalized->walk([&](nodal::SequentialUpdateOp update) {
+      if (!update->hasAttr("edge") && !update->hasAttr("reset_policy") &&
+          !update->hasAttr("reset_polarity"))
+        ++formal;
+    });
+    ok &= succeeded(verify(*normalized)) && formal == 1;
+  }
+  report("normalization-retains-formal-material-absence", ok);
+  if (ok) {
+    auto malformed = cast<mlir::ModuleOp>(normalized->clone());
+    malformed.walk([&](nodal::SequentialUpdateOp update) {
+      update->setAttr("edge", StringAttr::get(&context, "rising"));
+    });
+    diagnostics.clear();
+    report("formal-update-cannot-guess-one-material-field",
+           failed(verify(malformed)) && StringRef(diagnostics).contains("no guessed material"));
+    malformed.erase();
+  }
+  auto generatedTarget = [&](StringRef name, const std::string &input, bool preserve, bool expected,
+                             StringRef diagnostic = "", int extractOffset = -1, unsigned depth = 1,
+                             int terminalCoordinate = 0, int terminalOrdinal = 0) {
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    bool valid = parsed && succeeded(verify(*parsed));
+    std::string before = parsed ? print(*parsed) : "";
+    PassManager manager(&context);
+    auto pass = nodal::createSequentialToCIRCTPass();
+    valid &= succeeded(pass->initializeOptions(preserve ? "preserve-constant-loops=true" : "",
+                                               [&](const Twine &) { return failure(); }));
+    manager.addPass(std::move(pass));
+    bool lowered = valid && succeeded(manager.run(*parsed));
+    bool correct = valid && lowered == expected;
+    if (lowered) {
+      unsigned modules = 0, instances = 0, loops = 0, registers = 0, leftovers = 0;
+      bool extraction = extractOffset < 0;
+      unsigned prefixMaps = 0;
+      bool constantWidthsDominate = true;
+      parsed->walk([&](Operation *op) {
+        if (op->getName().getStringRef() == "comb.extract")
+          if (auto low = op->getAttrOfType<IntegerAttr>("lowBit"))
+            extraction |= low.getInt() == extractOffset;
+        if (op->getName().getStringRef() == "sv.localparam")
+          for (Operation *user : op->getUsers()) {
+            Operation *ancestor = user;
+            while (ancestor && ancestor->getBlock() != op->getBlock())
+              ancestor = ancestor->getParentOp();
+            constantWidthsDominate &= ancestor && op->isBeforeInBlock(ancestor);
+          }
+        if (auto prefixes = op->getAttrOfType<ArrayAttr>("nodal.generated_selection")) {
+          if (prefixes.size() == depth) {
+            bool exact = true;
+            for (auto [index, raw] : llvm::enumerate(prefixes)) {
+              auto frame = cast<DictionaryAttr>(raw);
+              auto coordinate = dyn_cast<IntegerAttr>(frame.get("coordinate"));
+              exact &= frame.getAs<StringAttr>("family") && frame.get("stride_bits") &&
+                       coordinate &&
+                       coordinate.getInt() == (index + 1 == depth ? terminalCoordinate : 1) &&
+                       frame.getAs<IntegerAttr>("ordinal") &&
+                       frame.getAs<IntegerAttr>("ordinal").getInt() ==
+                           (index + 1 == depth ? terminalOrdinal : 1);
+            }
+            prefixMaps += exact;
+          }
+        }
+        modules += isa<circt::hw::HWModuleOp>(op);
+        instances += isa<circt::hw::InstanceOp>(op);
+        registers += isa<circt::seq::CompRegOp>(op);
+        loops += op->getName().getStringRef() == "sv.generate.for";
+        leftovers += op->getDialect()->getNamespace() == "nodal";
+      });
+      correct &= modules == depth + 1 && instances == depth && registers == 1 && loops == depth &&
+                 !leftovers && extraction && prefixMaps == 1 && constantWidthsDominate &&
+                 succeeded(verify(*parsed));
+      auto text = print(*parsed);
+      correct &= !StringRef(text).contains("i0") &&
+                 StringRef(text).contains("nodal.generated_template") &&
+                 StringRef(text).contains("nodal.preserve_constant_loops");
+      auto roundtrip = parseSourceString<mlir::ModuleOp>(text, &context);
+      correct &= bool(roundtrip) && succeeded(verify(*roundtrip));
+    } else if (parsed)
+      correct &= before == print(*parsed) && StringRef(diagnostics).contains(diagnostic);
+    report(name, correct);
+  };
+  generatedTarget("symbolic-family-retains-one-parametric-state-template", generatedFixture(),
+                  false, true);
+  generatedTarget("symbolic-family-direct-update-shares-clocked-emitter",
+                  generatedFixture(true, false), false, true);
+  std::string extracted = R"mlir(
+    %wide = "nodal.const_literal"() <{value = 164 : i64, spelling = "164", metadata = {}}> : () -> !nodal.uint<8>
+    %begin = "nodal.const_literal"() <{value = 2 : i64, spelling = "2", metadata = {}}> : () -> !nodal.uint<3>
+    %end = "nodal.const_literal"() <{value = 3 : i64, spelling = "3", metadata = {}}> : () -> !nodal.uint<3>
+    %extracted = "nodal.digital_expr"(%wide, %begin, %end) <{operator_name = "digital_extract", metadata = {}}> : (!nodal.uint<8>, !nodal.uint<3>, !nodal.uint<3>) -> !nodal.bits<1>
+  )mlir" + assign("state", "extracted", "register_next");
+  generatedTarget(
+      "shared-generated-extraction-retains-nonzero-offset",
+      replace(generatedFixture(true, false), assign("state", "input", "register_next"), extracted),
+      false, true, "", 2);
+  generatedTarget("concrete-family-explicit-preservation", generatedFixture(false), true, true);
+  generatedTarget("concrete-family-no-silent-unroll-or-default-preservation",
+                  generatedFixture(false), false, false, "preserve-constant-loops=true");
+  generatedTarget("generated-static-predicate-profile-is-explicit",
+                  replace(generatedFixture(), "comparison = \"eq\"", "comparison = \"lt\""), false,
+                  false, "generated static alternatives require exact supported Integer equality");
+  generatedTarget(
+      "generated-nonunit-stride-retains-ordinal-transport",
+      replace(replace(generatedFixture(false, false),
+                      "%step = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\"",
+                      "%step = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\""),
+              "maximum_trip_count = 3", "maximum_trip_count = 2"),
+      true, true);
+  generatedTarget(
+      "generated-nonzero-domain-retains-actual-induction",
+      replace(replace(generatedFixture(false, false),
+                      "%lower = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\"",
+                      "%lower = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\""),
+              "%upper = \"nodal.const_literal\"() <{value = 3 : i64, spelling = \"3\"",
+              "%upper = \"nodal.const_literal\"() <{value = 4 : i64, spelling = \"4\""),
+      true, true, "", -1, 1, 2, 1);
+  {
+    auto overflow = replace(
+        replace(
+            replace(
+                replace(generatedFixture(false, false),
+                        "%lower = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\"",
+                        "%lower = \"nodal.const_literal\"() <{value = -2147483647 : i64, spelling "
+                        "= \"-2147483647\""),
+                "%upper = \"nodal.const_literal\"() <{value = 3 : i64, spelling = \"3\"",
+                "%upper = \"nodal.const_literal\"() <{value = 2147483647 : i64, spelling = "
+                "\"2147483647\""),
+            "%step = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\"",
+            "%step = \"nodal.const_literal\"() <{value = 2147483647 : i64, spelling = "
+            "\"2147483647\""),
+        "maximum_trip_count = 3", "maximum_trip_count = 2");
+    overflow = replace(overflow, "%family =",
+                       "%ordinal = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\", "
+                       "metadata = {}}> : () -> i64\n%family =");
+    overflow = replace(overflow, "generated_member\"(%family, %lower)",
+                       "generated_member\"(%family, %ordinal)");
+    generatedTarget("generated-cardinality-rejects-signed-i32-intermediate-overflow", overflow,
+                    true, false,
+                    "generated cardinality requires checked positive signed-i32 arithmetic");
+  }
+  for (unsigned depth : {1U, 2U}) {
+    std::string input =
+        depth == 1 ? generatedFixture(false, false) : nestedGeneratedFixture(2, false);
+    input = replace(input, "%upper = \"nodal.const_literal\"() <{value = 3 : i64, spelling = \"3\"",
+                    "%upper = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\"");
+    input = replace(input, "maximum_trip_count = 3", "maximum_trip_count = 0");
+    // Remove only the impossible read, not the authored storage/export or loops.
+    auto eraseLine = [&](StringRef prefix) {
+      size_t begin = input.find(prefix.str());
+      size_t end = input.find('\n', begin);
+      input.erase(begin, end - begin + 1);
+    };
+    eraseLine("%selected =");
+    if (depth == 2)
+      eraseLine("%view0 =");
+    input =
+        replace(input, "digital_assign\"(%output, %selected)", "digital_assign\"(%output, %input)");
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    PassManager manager(&context);
+    auto pass = nodal::createSequentialToCIRCTPass();
+    bool valid = parsed && succeeded(verify(*parsed)) &&
+                 succeeded(pass->initializeOptions("preserve-constant-loops=true",
+                                                   [&](const Twine &) { return failure(); }));
+    manager.addPass(std::move(pass));
+    valid &= valid && succeeded(manager.run(*parsed));
+    unsigned helpers = 0, loops = 0, zeroTrip = 0, states = 0;
+    if (valid) {
+      parsed->walk([&](Operation *op) {
+        helpers += op->hasAttr("nodal.generated_template");
+        states += isa<circt::seq::CompRegOp>(op);
+        if (op->getName().getStringRef() == "sv.generate.for") {
+          ++loops;
+          zeroTrip += op->getAttr("lowerBound") == op->getAttr("upperBound");
+        }
+        if (isa<circt::hw::InstanceOp>(op))
+          valid &= op->getNumResults() == 0;
+      });
+      valid &= helpers == depth && loops == depth && zeroTrip == 1 && states == 1 &&
+               !StringRef(print(*parsed)).contains("i0") && succeeded(verify(*parsed));
+    }
+    report(depth == 1 ? "empty-authored-export-has-no-physical-slot-or-driver"
+                      : "nested-empty-export-has-no-fabricated-parent-slot",
+           valid);
+  }
+  generatedTarget("nested-family-two-exact-prefixes-and-reusable-bodies", nestedGeneratedFixture(),
+                  true, true, "", -1, 2);
+  generatedTarget("nested-matrix-routes-exact-parent-row-through-shared-helpers",
+                  nestedMatrixFixture(), true, true, "", -1, 2);
+  generatedTarget("nested-family-three-prefixes-retain-inverse-dimensions",
+                  nestedGeneratedFixture(3), true, true, "", -1, 3);
+  generatedTarget("nested-concrete-preserves-each-actual-loop", nestedGeneratedFixture(2, false),
+                  true, true, "", -1, 2);
+  generatedTarget("nested-template-count-independent-of-cardinality",
+                  replace(replace(nestedGeneratedFixture(), "value = 8 : i64, spelling = \"8\"",
+                                  "value = 256 : i64, spelling = \"256\""),
+                          "maximum_trip_count = 8", "maximum_trip_count = 256"),
+                  true, true, "", -1, 2);
+  generatedTarget("nested-physical-output-budget-is-not-template-budget",
+                  replace(replace(nestedGeneratedFixture(), "value = 8 : i64, spelling = \"8\"",
+                                  "value = 4096 : i64, spelling = \"4096\""),
+                          "maximum_trip_count = 8", "maximum_trip_count = 4096"),
+                  true, false, "nested generated export exceeds finite physical bit budget");
+  negative("nested-selection-outer-ordinal-proof-is-not-last-index-only",
+           replace(nestedGeneratedFixture(), "generated_member\"(%family0, %step)",
+                   "generated_member\"(%family0, %outerUpper)"),
+           "generated ordinal lacks an all-legal existence proof");
+  negative("nested-selection-inner-ordinal-proof-remains-independent",
+           replace(nestedGeneratedFixture(), "generated_member\"(%view0, %lower)",
+                   "generated_member\"(%view0, %upper)"),
+           "generated ordinal lacks an all-legal existence proof");
+  negative("nested-selection-member-must-belong-to-exact-export-inventory",
+           replace(nestedGeneratedFixture(),
+                   "member = \"inner\", access = \"read\", kind = \"family\", metadata = {}}> : "
+                   "(!nodal.generated_family, i64)",
+                   "member = \"foreign\", access = \"read\", kind = \"family\", metadata = {}}> : "
+                   "(!nodal.generated_family, i64)"),
+           "generated member key is absent");
+  {
+    diagnostics.clear();
+    auto parsed =
+        parseSourceString<mlir::ModuleOp>(derivedWidthFixture(), ParserConfig(&context, false));
+    PassManager manager(&context);
+    manager.addPass(nodal::createSequentialToCIRCTPass());
+    bool ok = parsed && succeeded(verify(*parsed)) && succeeded(manager.run(*parsed));
+    if (ok) {
+      auto output = print(*parsed);
+      ok = !StringRef(output).contains("i0") && StringRef(output).contains("comb.add") &&
+           StringRef(output).contains("comb.mul") && StringRef(output).contains("slt") &&
+           StringRef(output).contains("i5") && StringRef(output).contains("i8");
+      auto roundtrip = parseSourceString<mlir::ModuleOp>(output, &context);
+      ok &= bool(roundtrip) && succeeded(verify(*roundtrip));
+    }
+    report("fixed-derived-width-arithmetic-retains-mapped-width-and-sign", ok);
+  }
+  auto [resolvedCount, resolvedFailures] = resolved_target::run();
+  count += resolvedCount;
+  failures += resolvedFailures;
+  llvm::outs() << count << " hierarchy target cases, " << failures << " failures\n";
+  return failures ? 1 : 0;
+}

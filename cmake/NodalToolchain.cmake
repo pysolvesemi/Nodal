@@ -88,31 +88,26 @@ if(NOT EXISTS "${_nodal_manifest_path}")
     "${_nodal_manifest_path} is missing")
 endif()
 
+# The shared state owner checks the exact lock digest and optional repair
+# identity/output hash. Do not duplicate a weaker manifest check in CMake or
+# let discovery fall back to another prefix when this one is invalid.
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+execute_process(
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/scripts/bootstrap_native_toolchain.py"
+    --root "${NODAL_REPOSITORY_ROOT}" verify --toolchain "${NODAL_NATIVE_TOOLCHAIN}"
+  RESULT_VARIABLE _nodal_verify_status
+  OUTPUT_VARIABLE _nodal_verify_output ERROR_VARIABLE _nodal_verify_error)
+if(NOT _nodal_verify_status EQUAL 0)
+  message(FATAL_ERROR "Managed toolchain verification failed: ${_nodal_verify_error}")
+endif()
 file(READ "${_nodal_manifest_path}" NODAL_TOOLCHAIN_MANIFEST_JSON)
-_nodal_json_get(_manifest_lock_id "${NODAL_TOOLCHAIN_MANIFEST_JSON}" lock_id)
-_nodal_json_get(_manifest_circt_tag "${NODAL_TOOLCHAIN_MANIFEST_JSON}" circt_release_tag)
-_nodal_json_get(_manifest_circt_commit "${NODAL_TOOLCHAIN_MANIFEST_JSON}" circt_commit)
-_nodal_json_get(_manifest_llvm_commit "${NODAL_TOOLCHAIN_MANIFEST_JSON}" llvm_commit)
-
-foreach(_field IN ITEMS lock_id circt_tag circt_commit llvm_commit)
-  if(_field STREQUAL "lock_id")
-    set(_actual "${_manifest_lock_id}")
-    set(_expected "${NODAL_NATIVE_LOCK_ID}")
-  elseif(_field STREQUAL "circt_tag")
-    set(_actual "${_manifest_circt_tag}")
-    set(_expected "${NODAL_CIRCT_RELEASE_TAG}")
-  elseif(_field STREQUAL "circt_commit")
-    set(_actual "${_manifest_circt_commit}")
-    set(_expected "${NODAL_CIRCT_COMMIT}")
-  else()
-    set(_actual "${_manifest_llvm_commit}")
-    set(_expected "${NODAL_LLVM_COMMIT}")
-  endif()
-  if(NOT _actual STREQUAL _expected)
-    message(FATAL_ERROR
-      "Managed toolchain ${_field} is '${_actual}', expected '${_expected}'")
-  endif()
-endforeach()
+string(JSON NODAL_TOOLCHAIN_OVERLAY ERROR_VARIABLE _no_overlay
+  GET "${NODAL_TOOLCHAIN_MANIFEST_JSON}" overlay id)
+if(_no_overlay)
+  set(NODAL_TOOLCHAIN_OVERLAY "base")
+endif()
+message(STATUS "Nodal native repair profile: ${NODAL_TOOLCHAIN_OVERLAY}")
 
 if(NOT CMAKE_CXX_STANDARD EQUAL NODAL_CXX_STANDARD)
   message(FATAL_ERROR

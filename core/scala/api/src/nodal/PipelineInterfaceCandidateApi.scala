@@ -37,7 +37,7 @@ object InterfaceMember:
       extends InterfaceMember
   final case class SignalFlow[D](name: String, dimension: String) extends InterfaceMember
 
-  def value[A <: Data](name: String, dataType: DataType[A]): InterfaceMember =
+  def value[A <: Data](name: String, dataType: DataType[A]): Value[A] =
     Value(name, dataType)
 
   def valid[A <: Data](name: String, payloadType: DataType[A]): InterfaceMember =
@@ -46,16 +46,16 @@ object InterfaceMember:
   def stream[A <: Data](name: String, payloadType: DataType[A]): InterfaceMember =
     StreamChannel(name, payloadType)
 
-  def nested[I <: Interface](name: String, definition: InterfaceType[I]): InterfaceMember =
+  def nested[I <: Interface](name: String, definition: InterfaceType[I]): Nested[I] =
     Nested(name, definition)
 
   def digitalInout[A <: Bits, M <: DriveMode](
       name: String,
       dataType: DataType[A],
       mode: DriveMode.Value[M]
-  ): InterfaceMember = DigitalResolved(name, dataType, mode)
+  ): DigitalResolved[A, M] = DigitalResolved(name, dataType, mode)
 
-  def terminal[D <: Discipline](name: String, discipline: D): InterfaceMember =
+  def terminal[D <: Discipline](name: String, discipline: D): Conservative[D] =
     Conservative(name, discipline)
 
   def analogSignal[D](name: String, dimension: String): InterfaceMember =
@@ -64,15 +64,20 @@ object InterfaceMember:
 final class InterfaceType[I <: Interface] private[nodal] (
     val name: String,
     val members: Seq[InterfaceMember],
-    private[nodal] val roles: Vector[Role[?]] = Vector.empty
+    private[nodal] val roles: Vector[Role[?]] = Vector.empty,
+    private[nodal] val constructionContext: Option[InterfaceDefinitionContext] = None
 ):
   /** Bind actual named role maps for nested Interface applications without global registration. */
   def withRoles(bindings: Role[?]*): InterfaceType[I] =
-    new InterfaceType(name, members, roles ++ bindings)
+    new InterfaceType(name, members, roles ++ bindings, constructionContext)
 
 object Interface:
   def apply[I <: Interface](name: String, members: InterfaceMember*): InterfaceType[I] =
-    new InterfaceType(name, members.toSeq)
+    new InterfaceType(
+      name,
+      members.toSeq,
+      constructionContext = ConstructionKernel.interfaceDefinitionContext()
+    )
 
 /** Stable named role identity. */
 trait RoleKind
@@ -227,14 +232,23 @@ object RoleCanDrive:
   given deviceCanDrive: RoleCanDrive[DeviceRole] with {}
   given environmentCanDrive: RoleCanDrive[EnvironmentRole] with {}
 
+private[nodal] sealed trait InterfaceEndpoint:
+  def definition: InterfaceType[?]
+  def role: Role[?]
+  def name: String
+  def domain: ClockDomain
+  private[nodal] def domainOption: Option[ClockDomain] = Some(domain)
+  private[nodal] def boundary: Boolean
+
 final class InterfacePort[I <: Interface, R <: RoleKind] private[nodal] (
     val definition: InterfaceType[I],
     val role: Role[R],
     val name: String,
     val domain: ClockDomain,
     private[nodal] val exported: Boolean,
-    private[nodal] val origin: Option[InterfacePort[I, ?]] = None
-):
+    private[nodal] val origin: Option[InterfacePort[I, ?]] = None,
+    private[nodal] val boundary: Boolean = false
+) extends InterfaceEndpoint:
   if exported then
     CandidateRuntime.declare(
       this,
@@ -247,21 +261,39 @@ final class InterfacePort[I <: Interface, R <: RoleKind] private[nodal] (
 final class InterfaceArray[I <: Interface, R <: RoleKind] private[nodal] (
     val definition: InterfaceType[I],
     val role: Role[R],
-    val count: Dimension,
+    private[nodal] val formalCount: Dimension,
     val name: String,
-    val domain: ClockDomain
-):
-  CandidateRuntime.declare(
-    this,
-    KernelSignalKind.InterfaceArray,
-    explicitName = Some(name),
-    domain = Some(domain),
-    attributes = Vector(
-      "interface" -> definition.name,
-      "role" -> role.name,
-      "count" -> count
-    )
+    override private[nodal] val domainOption: Option[ClockDomain],
+    private[nodal] val exported: Boolean = true,
+    private[nodal] val boundary: Boolean = false,
+    private[nodal] val origin: Option[InterfaceArray[I, ?]] = None,
+    private[nodal] val externalAttributes: Vector[(String, Any)] = Vector.empty
+) extends InterfaceEndpoint:
+  def domain: ClockDomain = domainOption.getOrElse(
+    DigitalInterfaceContract.fail(6, "declaration-only external InterfaceArray has no ClockDomain")
   )
+
+  /** Local declared count. A projected count is finalized after all Instance overrides. */
+  def count: Dimension =
+    if origin.nonEmpty then return origin.get.count
+    if boundary then
+      DigitalInterfaceContract.fail(
+        7,
+        "projected InterfaceArray count is formal metadata, not a parent expression"
+      )
+    formalCount
+  if exported then
+    CandidateRuntime.declare(
+      this,
+      KernelSignalKind.InterfaceArray,
+      explicitName = Some(name),
+      domain = domainOption,
+      attributes = Vector(
+        "interface" -> definition.name,
+        "role" -> role.name,
+        "count" -> formalCount
+      ) ++ externalAttributes
+    )
 
 def interfacePort[I <: Interface, R <: RoleKind](
     definition: InterfaceType[I],
@@ -276,9 +308,71 @@ def interfaceArray[I <: Interface, R <: RoleKind](
     count: Dimension,
     name: String,
     domain: ClockDomain
-): InterfaceArray[I, R] = new InterfaceArray(definition, role, count, name, domain)
+): InterfaceArray[I, R] = new InterfaceArray(definition, role, count, name, Some(domain))
+
+/** A closed ordinary read capability bound to one exact endpoint and declared member. */
+final class InterfaceValueRef[A <: Data] private[nodal] (
+    private[nodal] val memberRecord: InterfaceValueReadRecord
+):
+  def read: Expr[A] =
+    ConstructionKernel.interfaceValueRefRead(this).asInstanceOf[Expr[A]]
 
 extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
+  /** Retain an exact member witness for checked instance or generated-family projection. */
+  def valueRef[A <: Data](
+      field: InterfaceMember.Value[A],
+      through: InterfaceMember.Nested[?]*
+  ): InterfaceValueRef[A] =
+    ConstructionKernel.interfaceValueReference[A](endpoint, field, through.toVector)
+
+  /** Read one exact ordinary Value declaration without changing endpoint orientation. */
+  def read[A <: Data](
+      field: InterfaceMember.Value[A],
+      through: InterfaceMember.Nested[?]*
+  ): Expr[A] =
+    ConstructionKernel.interfaceValueRead(endpoint, field, through.toVector).asInstanceOf[Expr[A]]
+
+  /** Select the exact conservative declaration and retain the actual role's rights. */
+  def connectTerminal[D <: Discipline](
+      field: InterfaceMember.Conservative[D],
+      through: InterfaceMember.Nested[?]*
+  ): ConservativeView[D, ConservativeAccess.Connect] =
+    ConstructionKernel.interfaceConservativeMember[D, ConservativeAccess.Connect](
+      endpoint,
+      field,
+      through.toVector,
+      "connect"
+    )
+
+  def senseTerminal[D <: Discipline](
+      field: InterfaceMember.Conservative[D],
+      through: InterfaceMember.Nested[?]*
+  ): ConservativeView[D, ConservativeAccess.Sense] =
+    ConstructionKernel.interfaceConservativeMember[D, ConservativeAccess.Sense](
+      endpoint,
+      field,
+      through.toVector,
+      "sense"
+    )
+
+  def contributeTerminal[D <: Discipline](
+      field: InterfaceMember.Conservative[D],
+      through: InterfaceMember.Nested[?]*
+  ): ConservativeView[D, ConservativeAccess.Contribute] =
+    ConstructionKernel.interfaceConservativeMember[D, ConservativeAccess.Contribute](
+      endpoint,
+      field,
+      through.toVector,
+      "contribute"
+    )
+
+  /** Select an actual declared resolved member through its ordered declared nested fields. */
+  def resolved[A <: Bits, M <: DriveMode](
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: InterfaceMember.Nested[?]*
+  ): ResolvedDigital[A, M] =
+    ConstructionKernel.interfaceResolvedMember(endpoint, field, through.toVector)
+
   def inverted(using inverse: RoleInverse[R]): InterfacePort[I, inverse.Out] =
     DigitalInterfaceContract.requireInvertible(endpoint)
     val invertedRole = new Role[inverse.Out](
@@ -311,7 +405,68 @@ extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
   )(using RoleConnection[R, OtherRole]): Unit =
     ConstructionKernel.operation("interface-connect", endpoint, other)
 
+  /** Forward an exported endpoint through one exact child boundary without changing its role. */
+  def forwardExact(other: InterfacePort[I, R]): Unit =
+    if DigitalInterfaceContract.root(endpoint).boundary ==
+        DigitalInterfaceContract.root(other).boundary
+    then DigitalInterfaceContract.fail(3, "forwardExact requires one local and one child endpoint")
+    ConstructionKernel.operation("interface-connect", endpoint, other)
+
   def driveMember[A <: Data](member: String, value: Expr[A])(using RoleCanDrive[R]): Unit =
+    ConstructionKernel.operation("interface-drive", endpoint, member, value)
+
+  def observeMember(member: String): Unit =
+    ConstructionKernel.operation("interface-observe", endpoint, member)
+
+extension [I <: Interface, R <: RoleKind](endpoint: InterfaceArray[I, R])
+  /** Retain the exact whole-array ordinary member without flattening the outer axis. */
+  def valueRef[A <: Data](
+      field: InterfaceMember.Value[A],
+      through: InterfaceMember.Nested[?]*
+  ): InterfaceValueRef[Vec[A]] =
+    ConstructionKernel.interfaceValueReference[Vec[A]](endpoint, field, through.toVector)
+
+  /** Read the exact whole outer family of one ordinary Value declaration. */
+  def read[A <: Data](
+      field: InterfaceMember.Value[A],
+      through: InterfaceMember.Nested[?]*
+  ): Expr[Vec[A]] =
+    ConstructionKernel.interfaceValueRead(
+      endpoint,
+      field,
+      through.toVector
+    ).asInstanceOf[Expr[Vec[A]]]
+
+  /** A whole-family resolved capability over this exact declared array member. */
+  def resolved[A <: Bits, M <: DriveMode](
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: InterfaceMember.Nested[?]*
+  ): ResolvedDigitalArray[A, M] =
+    ConstructionKernel.interfaceResolvedArrayMember(endpoint, field, through.toVector)
+
+  def monitorView: InterfaceArray[I, MonitorRole] =
+    new InterfaceArray(
+      endpoint.definition,
+      monitor,
+      endpoint.formalCount,
+      s"${endpoint.name}.monitor",
+      endpoint.domainOption,
+      exported = false,
+      origin = Some(endpoint)
+    )
+
+  def connectExact[OtherRole <: RoleKind](
+      other: InterfaceArray[I, OtherRole]
+  )(using RoleConnection[R, OtherRole]): Unit =
+    ConstructionKernel.operation("interface-connect", endpoint, other)
+
+  /** Forward the whole structural array; no lane or member identity is flattened. */
+  def forwardExact(other: InterfaceArray[I, R]): Unit =
+    if endpoint.boundary == other.boundary then
+      DigitalInterfaceContract.fail(3, "forwardExact requires one local and one child endpoint")
+    ConstructionKernel.operation("interface-connect", endpoint, other)
+
+  def driveMember[A <: Data](member: String, value: Expr[Vec[A]])(using RoleCanDrive[R]): Unit =
     ConstructionKernel.operation("interface-drive", endpoint, member, value)
 
   def observeMember(member: String): Unit =
@@ -357,26 +512,69 @@ enum ResolutionProfile:
   case FullResolvedSimulation
   case TechnologyMapped
 
+/** Closed internal carrier shared by scalar and whole Interface-array views. */
+private[nodal] sealed trait ResolvedDigitalCapability[A <: Data, M <: DriveMode]:
+  val dataType: DataType[A]
+  val mode: DriveMode.Value[M]
+  def enableDataType: DataType[?]
+  final def read: Expr[A] =
+    DigitalInterfaceContract.netExpression("digital_net_read", this, dataType)
+
+/** A scalar resolved capability. Standalone declarations remain scalar only. */
+sealed trait ResolvedDigital[A <: Bits, M <: DriveMode] extends ResolvedDigitalCapability[A, M]:
+  final def enableDataType: DataType[Bool] = Bool
+
+/** A whole actual InterfaceArray member, with pointwise data and enable geometry. */
+sealed trait ResolvedDigitalArray[A <: Bits, M <: DriveMode]
+    extends ResolvedDigitalCapability[Vec[A], M]:
+  val enableDataType: DataType[Vec[Bool]]
+
+private[nodal] sealed trait InterfaceResolvedMember[A <: Data, M <: DriveMode]
+    extends ResolvedDigitalCapability[A, M]:
+  val endpoint: InterfaceEndpoint
+  val declaration: InterfaceMember.DigitalResolved[?, M]
+  val through: Vector[InterfaceMember.Nested[?]]
+  val member: String
+
+private[nodal] final class InterfaceResolvedView[A <: Bits, M <: DriveMode](
+    val dataType: DataType[A],
+    val mode: DriveMode.Value[M],
+    val endpoint: InterfacePort[?, ?],
+    val declaration: InterfaceMember.DigitalResolved[A, M],
+    val through: Vector[InterfaceMember.Nested[?]],
+    val member: String
+) extends ResolvedDigital[A, M] with InterfaceResolvedMember[A, M]
+
+private[nodal] final class InterfaceResolvedArrayView[A <: Bits, M <: DriveMode](
+    val dataType: DataType[Vec[A]],
+    val enableDataType: DataType[Vec[Bool]],
+    val mode: DriveMode.Value[M],
+    val endpoint: InterfaceArray[?, ?],
+    val declaration: InterfaceMember.DigitalResolved[A, M],
+    val through: Vector[InterfaceMember.Nested[?]],
+    val member: String
+) extends ResolvedDigitalArray[A, M] with InterfaceResolvedMember[Vec[A], M]
+
 final class DigitalInout[A <: Bits, M <: DriveMode] private[nodal] (
     val dataType: DataType[A],
     val mode: DriveMode.Value[M],
     val placement: InoutPlacement,
     val profile: ResolutionProfile,
-    val name: String
-):
-  CandidateRuntime.declare(
-    this,
-    KernelSignalKind.DigitalInout,
-    dataType = Some(dataType),
-    explicitName = Some(name),
-    attributes = Vector(
-      "mode" -> mode.name,
-      "placement" -> placement,
-      "profile" -> profile
+    val name: String,
+    private[nodal] val boundary: Boolean = false
+) extends ResolvedDigital[A, M]:
+  if !boundary then
+    CandidateRuntime.declare(
+      this,
+      KernelSignalKind.DigitalInout,
+      dataType = Some(dataType),
+      explicitName = Some(name),
+      attributes = Vector(
+        "mode" -> mode.name,
+        "placement" -> placement,
+        "profile" -> profile
+      )
     )
-  )
-
-  def read: Expr[A] = DigitalInterfaceContract.netExpression("digital_net_read", this, dataType)
 
 trait ArbitraryDrive[M <: DriveMode]
 
@@ -399,6 +597,13 @@ final class TriStateCarrier[A <: Bits, M <: DriveMode] private[nodal] (
     val mode: DriveMode.Value[M]
 )
 
+final class TriStateArrayCarrier[A <: Bits, M <: DriveMode] private[nodal] (
+    val read: Expr[Vec[A]],
+    val write: Expr[Vec[A]],
+    val enable: Expr[Vec[Bool]],
+    val mode: DriveMode.Value[M]
+)
+
 final class PadAdapter[A <: Bits, M <: DriveMode] private[nodal] (
     val endpoint: DigitalInout[A, M],
     val cell: String
@@ -412,7 +617,7 @@ def digitalInout[A <: Bits, M <: DriveMode](
     name: String
 ): DigitalInout[A, M] = new DigitalInout(dataType, mode, placement, profile, name)
 
-extension [A <: Bits, M <: DriveMode](endpoint: DigitalInout[A, M])
+extension [A <: Bits, M <: DriveMode](endpoint: ResolvedDigital[A, M])
   def drive(value: Expr[A], enable: Expr[Bool])(using ArbitraryDrive[M]): Unit =
     ConstructionKernel.operation("inout-drive", endpoint, value, enable)
 
@@ -427,17 +632,49 @@ extension [A <: Bits, M <: DriveMode](endpoint: DigitalInout[A, M])
       endpoint.mode
     )
 
-extension [A <: Bits](endpoint: DigitalInout[A, DriveMode.OpenDrain])
+extension [A <: Bits](endpoint: ResolvedDigital[A, DriveMode.OpenDrain])
   def driveLow(enable: Expr[Bool]): Unit =
     ConstructionKernel.operation("inout-drive-low", endpoint, enable)
 
-extension [A <: Bits](endpoint: DigitalInout[A, DriveMode.OpenSource])
+extension [A <: Bits](endpoint: ResolvedDigital[A, DriveMode.OpenSource])
   def driveHigh(enable: Expr[Bool]): Unit =
     ConstructionKernel.operation("inout-drive-high", endpoint, enable)
 
 def passThrough[A <: Bits, M <: DriveMode](
-    outer: DigitalInout[A, M],
-    inner: DigitalInout[A, M]
+    outer: ResolvedDigital[A, M],
+    inner: ResolvedDigital[A, M]
+): Unit = ConstructionKernel.operation("inout-pass-through", outer, inner)
+
+extension [A <: Bits, M <: DriveMode](endpoint: ResolvedDigitalArray[A, M])
+  def drive(value: Expr[Vec[A]], enable: Expr[Vec[Bool]])(using ArbitraryDrive[M]): Unit =
+    ConstructionKernel.operation("inout-drive", endpoint, value, enable)
+
+  def highZ()(using ReleasableDrive[M]): Unit =
+    ConstructionKernel.operation("inout-high-z", endpoint)
+
+  def split: TriStateArrayCarrier[A, M] =
+    new TriStateArrayCarrier(
+      endpoint.read,
+      DigitalInterfaceContract.netExpression("digital_net_write_view", endpoint, endpoint.dataType),
+      DigitalInterfaceContract.netExpression(
+        "digital_net_enable_view",
+        endpoint,
+        endpoint.enableDataType
+      ),
+      endpoint.mode
+    )
+
+extension [A <: Bits](endpoint: ResolvedDigitalArray[A, DriveMode.OpenDrain])
+  def driveLow(enable: Expr[Vec[Bool]]): Unit =
+    ConstructionKernel.operation("inout-drive-low", endpoint, enable)
+
+extension [A <: Bits](endpoint: ResolvedDigitalArray[A, DriveMode.OpenSource])
+  def driveHigh(enable: Expr[Vec[Bool]]): Unit =
+    ConstructionKernel.operation("inout-drive-high", endpoint, enable)
+
+def passThrough[A <: Bits, M <: DriveMode](
+    outer: ResolvedDigitalArray[A, M],
+    inner: ResolvedDigitalArray[A, M]
 ): Unit = ConstructionKernel.operation("inout-pass-through", outer, inner)
 
 def padAdapter[A <: Bits, M <: DriveMode](
@@ -482,9 +719,28 @@ object ConservativeAccess:
   object Monitor:
     given monitorSense: CanSense[Monitor] with {}
 
+/** A capability over one existing endpoint, never a fabricated standalone terminal. */
+sealed trait ConservativeView[D <: Discipline, A <: ConservativeAccess]:
+  def discipline: D
+  private[nodal] def permission: String
+  private[nodal] def conservativeIdentity: AnyRef
+
 final class TerminalView[D <: Discipline, A <: ConservativeAccess] private[nodal] (
-    val terminal: Terminal[D]
-)
+    val terminal: Terminal[D],
+    private[nodal] val permission: String
+) extends ConservativeView[D, A]:
+  def discipline: D = terminal.discipline
+  private[nodal] def conservativeIdentity: AnyRef = terminal
+
+private[nodal] final class InterfaceTerminalView[D <: Discipline, A <: ConservativeAccess](
+    val endpoint: InterfacePort[?, ?],
+    val declaration: InterfaceMember.Conservative[D],
+    val through: Vector[InterfaceMember.Nested[?]],
+    val member: String,
+    val permission: String
+) extends ConservativeView[D, A]:
+  def discipline: D = declaration.discipline
+  private[nodal] def conservativeIdentity: AnyRef = this
 
 object CanConnect {}
 object CanSense {}
@@ -494,16 +750,23 @@ def terminal[D <: Discipline](discipline: D, name: String): Terminal[D] =
   new Terminal(discipline, name)
 
 extension [D <: Discipline](endpoint: Terminal[D])
-  def connectView: TerminalView[D, ConservativeAccess.Connect] = new TerminalView(endpoint)
-  def senseView: TerminalView[D, ConservativeAccess.Sense] = new TerminalView(endpoint)
-  def contributeView: TerminalView[D, ConservativeAccess.Contribute] = new TerminalView(endpoint)
-  def terminalMonitorView: TerminalView[D, ConservativeAccess.Monitor] = new TerminalView(endpoint)
+  def connectView: TerminalView[D, ConservativeAccess.Connect] =
+    new TerminalView(endpoint, "connect")
+  def senseView: TerminalView[D, ConservativeAccess.Sense] = new TerminalView(endpoint, "sense")
+  def contributeView: TerminalView[D, ConservativeAccess.Contribute] =
+    new TerminalView(endpoint, "contribute")
+  def terminalMonitorView: TerminalView[D, ConservativeAccess.Monitor] =
+    new TerminalView(endpoint, "sense")
 
-extension [D <: Discipline, A <: ConservativeAccess](view: TerminalView[D, A])
+extension [D <: Discipline, A <: ConservativeAccess](view: ConservativeView[D, A])
   def connectTo[B <: ConservativeAccess](
-      other: TerminalView[D, B]
+      other: ConservativeView[D, B]
   )(using CanConnect[A], CanConnect[B]): Unit =
-    ConstructionKernel.operation("terminal-connect", view.terminal, other.terminal)
+    ConstructionKernel.operation(
+      "terminal-connect",
+      view.conservativeIdentity,
+      other.conservativeIdentity
+    )
 
   def potential(using CanSense[A]): Expr[Real] = CandidateRuntime.expr(view, "potential")
 
@@ -575,14 +838,14 @@ final case class BridgeContract(
 
 object MixedSignalBridge:
   def sample[D <: Discipline, A <: ConservativeAccess, O <: Data](
-      source: TerminalView[D, A],
+      source: ConservativeView[D, A],
       outputType: DataType[O],
       contract: BridgeContract
   )(using CanSense[A]): Expr[O] = CandidateRuntime.expr(source, outputType, contract)
 
   def drive[I <: Data, D <: Discipline, A <: ConservativeAccess](
       input: Expr[I],
-      destination: TerminalView[D, A],
+      destination: ConservativeView[D, A],
       contract: BridgeContract
   )(using CanContribute[A]): Unit = CandidateRuntime.statement(input, destination, contract)
 
@@ -593,7 +856,7 @@ object ConservativeSignalBridge:
       Q,
       R <: AnalogDirection
   ](
-      source: TerminalView[D, A],
+      source: ConservativeView[D, A],
       destination: AnalogSignal[Q, R],
       contract: BridgeContract
   )(using CanSense[A], CanDriveAnalog[R]): Unit =

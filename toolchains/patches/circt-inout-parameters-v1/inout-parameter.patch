@@ -1,0 +1,125 @@
+--- a/lib/Dialect/HW/HWAttributes.cpp
++++ b/lib/Dialect/HW/HWAttributes.cpp
+@@ -1057,6 +1057,13 @@
+         // Otherwise parameter references are still involved
+         return hw::IntType::get(cast<TypedAttr>(*evaluatedWidth));
+       })
++      .Case<hw::InOutType>([&](hw::InOutType inout) -> FailureOr<Type> {
++        auto element = evaluateParametricType(loc, parameters,
++                                             inout.getElementType(), emitErrors);
++        if (failed(element))
++          return failure();
++        return hw::InOutType::get(*element);
++      })
+       .Case<hw::ArrayType, hw::UnpackedArrayType>(
+           [&](auto arrayType) -> FailureOr<Type> {
+             return evaluateParametricArrayType(loc, parameters, arrayType,
+@@ -1080,6 +1087,9 @@
+   return llvm::TypeSwitch<Type, bool>(t)
+       .Case<hw::IntType>(
+           [&](hw::IntType t) { return isParamAttrWithParamRef(t.getWidth()); })
++      .Case<hw::InOutType>([&](hw::InOutType inout) {
++        return isParametricType(inout.getElementType());
++      })
+       .Case<hw::ArrayType, hw::UnpackedArrayType>([&](auto arrayType) {
+         return isParametricType(arrayType.getElementType()) ||
+                isParamAttrWithParamRef(arrayType.getSizeAttr());
+--- a/test/Dialect/HW/parameters.mlir
++++ b/test/Dialect/HW/parameters.mlir
+@@ -248,3 +248,26 @@
+   %a.output = hw.instance "a" @param_in_param<RESET_VALUE: i96 = 0, DATA_WIDTH: i32 = 96>(input: %input: i96) -> (output: i96)
+   hw.output %a.output : i96
+ }
++
++
++// CHECK-LABEL: hw.module @inoutChild<W: i32 = 4>
++hw.module @inoutChild<W: i32 = 4>
++  (inout %pad: !hw.int<#hw.param.decl.ref<"W">>) {
++  hw.output
++}
++
++// CHECK-LABEL: hw.module @inoutParent<P: i32 = 7>
++hw.module @inoutParent<P: i32 = 7>
++  (inout %pad: !hw.int<#hw.param.decl.ref<"P">>) {
++  // CHECK: hw.instance "child" @inoutChild<W: i32 = #hw.param.decl.ref<"P">>
++  hw.instance "child" @inoutChild<W: i32 = #hw.param.decl.ref<"P">>
++    (pad: %pad: !hw.inout<int<#hw.param.decl.ref<"P">>>) -> ()
++  hw.output
++}
++
++// CHECK-LABEL: hw.module @inoutFixedParent
++hw.module @inoutFixedParent(inout %pad: i7) {
++  // CHECK: hw.instance "child" @inoutChild<W: i32 = 7>(pad: %pad: !hw.inout<i7>) -> ()
++  hw.instance "child" @inoutChild<W: i32 = 7>(pad: %pad: !hw.inout<i7>) -> ()
++  hw.output
++}
+--- a/unittests/Dialect/HW/TypesTest.cpp
++++ b/unittests/Dialect/HW/TypesTest.cpp
+@@ -6,6 +6,7 @@
+ //
+ //===----------------------------------------------------------------------===//
+ 
++#include "circt/Dialect/HW/HWAttributes.h"
+ #include "circt/Dialect/HW/HWDialect.h"
+ #include "circt/Dialect/HW/HWTypes.h"
+ #include "mlir/IR/Builders.h"
+@@ -83,4 +84,59 @@
+   EXPECT_EQ(unionFields[1].offset, 42u);
+ }
+ 
++// Instance signatures must substitute inside the capability wrapper, retaining
++// its electrical identity and rejecting absent bindings rather than defaults.
++TEST(TypesTest, EvaluateParametricInOut) {
++  MLIRContext context;
++  context.loadDialect<HWDialect>();
++  Builder builder(&context);
++  auto formal =
++      ParamDeclRefAttr::get(builder.getStringAttr("W"), builder.getI32Type());
++  auto actual =
++      ParamDeclRefAttr::get(builder.getStringAttr("P"), builder.getI32Type());
++  auto type = InOutType::get(IntType::get(formal));
++  auto parameters = builder.getArrayAttr(
++      {ParamDeclAttr::get(builder.getStringAttr("W"), actual)});
++  auto result =
++      evaluateParametricType(builder.getUnknownLoc(), parameters, type);
++  ASSERT_TRUE(succeeded(result));
++  EXPECT_EQ(*result, InOutType::get(IntType::get(actual)));
++  EXPECT_TRUE(isParametricType(type));
++  EXPECT_TRUE(isParametricType(*result));
++  EXPECT_TRUE(failed(evaluateParametricType(builder.getUnknownLoc(),
++                                            builder.getArrayAttr({}), type,
++                                            /*emitErrors=*/false)));
++  auto concrete = builder.getArrayAttr({ParamDeclAttr::get(
++      builder.getStringAttr("W"), builder.getI32IntegerAttr(7))});
++  result = evaluateParametricType(builder.getUnknownLoc(), concrete, type);
++  ASSERT_TRUE(succeeded(result));
++  EXPECT_EQ(*result, InOutType::get(builder.getIntegerType(7)));
++  EXPECT_FALSE(isParametricType(*result));
++}
++
++TEST(TypesTest, EvaluateParametricInOutArrayElements) {
++  MLIRContext context;
++  context.loadDialect<HWDialect>();
++  Builder builder(&context);
++  auto formal =
++      ParamDeclRefAttr::get(builder.getStringAttr("W"), builder.getI32Type());
++  auto parameters = builder.getArrayAttr({ParamDeclAttr::get(
++      builder.getStringAttr("W"), builder.getI32IntegerAttr(7))});
++  auto packed = InOutType::get(ArrayType::get(IntType::get(formal), 3));
++  auto unpacked =
++      InOutType::get(UnpackedArrayType::get(IntType::get(formal), 2));
++  auto packedResult =
++      evaluateParametricType(builder.getUnknownLoc(), parameters, packed);
++  auto unpackedResult =
++      evaluateParametricType(builder.getUnknownLoc(), parameters, unpacked);
++  ASSERT_TRUE(succeeded(packedResult));
++  ASSERT_TRUE(succeeded(unpackedResult));
++  EXPECT_TRUE(isParametricType(packed));
++  EXPECT_TRUE(isParametricType(unpacked));
++  EXPECT_EQ(*packedResult,
++            InOutType::get(ArrayType::get(builder.getIntegerType(7), 3)));
++  EXPECT_EQ(*unpackedResult, InOutType::get(UnpackedArrayType::get(
++                                 builder.getIntegerType(7), 2)));
++}
++
+ } // namespace

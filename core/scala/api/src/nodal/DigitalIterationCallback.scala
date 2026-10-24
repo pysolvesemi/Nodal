@@ -14,6 +14,17 @@ private[nodal] object DigitalIterationCallback:
       extends (Expr[Integer] => Unit):
     def apply(index: Expr[Integer]): Unit = function(index)
 
+  private final class CheckedAreaRange[A <: Area](function: Expr[Integer] => A)
+      extends (Expr[Integer] => A):
+    def apply(index: Expr[Integer]): A = function(index)
+
+  def checkedAreaRange[A <: Area](function: Expr[Integer] => A): Expr[Integer] => A =
+    new CheckedAreaRange(function)
+
+  def requireAreaRange(function: AnyRef): Unit = function match
+    case _: CheckedAreaRange[?] => ()
+    case _ => missing("AREA-RANGE")
+
   def checkedLoop(function: LoopIndex => Unit): LoopIndex => Unit = new CheckedLoop(function)
 
   def checkedRange(function: Expr[Integer] => Unit): Expr[Integer] => Unit =

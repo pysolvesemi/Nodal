@@ -4,6 +4,7 @@ import dotty.tools.dotc.ast.tpd
 import dotty.tools.dotc.ast.tpd.*
 import dotty.tools.dotc.core.Annotations.Annotation
 import dotty.tools.dotc.core.Constants.Constant
+import dotty.tools.dotc.core.DenotTransformers.IdentityDenotTransformer
 import dotty.tools.dotc.core.Contexts.*
 import dotty.tools.dotc.core.Flags.*
 import dotty.tools.dotc.core.NameKinds.DefaultGetterName
@@ -20,9 +21,10 @@ import scala.collection.mutable
   * symbols and actual same-compilation bodies are authoritative, never source spellings.
   * Unsupported host staging fails closed; this is deliberately not a general Scala effect system.
   */
-private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase:
+private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
+    with IdentityDenotTransformer:
   val phaseName = "nodalDigitalCollectionCallbacks"
-  override val runsAfter = Set("nodalConstructorCapture")
+  override val runsAfter = Set("nodalAreaCapture")
   override val runsBefore = Set("pickler")
 
   private val definitions = mutable.HashMap.empty[Symbol, DefDef]
@@ -36,11 +38,26 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var scanned = false
   private var collections = Set.empty[Symbol]
   private var pureMethods = Set.empty[Symbol]
+  private var immutableFsmMethods = Set.empty[Symbol]
+  private var immutableFsmModules = Set.empty[Symbol]
+  private var immutableFsmSource = Set.empty[Symbol]
+  private var immutableFsmRuntime = Set.empty[Symbol]
+  private var areaMemberMethods = Set.empty[Symbol]
   private var pureModules = Set.empty[Symbol]
   private var factories = Set.empty[Symbol]
+  private var globalInterfaceInitializers = Set.empty[Symbol]
   private var iterationFactories = Set.empty[Symbol]
   private var loops = Set.empty[Symbol]
   private var ranges = Set.empty[Symbol]
+  private var legacyRanges = Set.empty[Symbol]
+  private var legacyRangeDefaults = Set.empty[Symbol]
+  private var areaRanges = Set.empty[Symbol]
+  private var areaRangeFactories = Set.empty[Symbol]
+  private var areaFamilyMethods = Set.empty[Symbol]
+  private var areaInterfaceMethods = Set.empty[Symbol]
+  private var areaConservativeMethods = Set.empty[Symbol]
+  private var areaInterfaceModule: Symbol = NoSymbol
+  private var selectedInstanceClosures = Set.empty[Symbol]
   private var loopMethods = Set.empty[Symbol]
   private var loopModules = Set.empty[Symbol]
   private var rangeMethods = Set.empty[Symbol]
@@ -48,6 +65,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var rangeClosures = Set.empty[Symbol]
   private var selectionMethods = Set.empty[Symbol]
   private var constructorClosures = Set.empty[Symbol]
+  private var instanceFactories = Set.empty[Symbol]
+  private var instanceDomainMethods = Set.empty[Symbol]
+  private var instanceParameterMethods = Set.empty[Symbol]
+  private var requiredDomainMethods = Set.empty[Symbol]
   private var structuralMethods = Set.empty[Symbol]
   private var structuralBranches = Set.empty[Symbol]
   private var structuralFactories = Set.empty[Symbol]
@@ -66,7 +87,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private val behavioral = new BehavioralGuardCapture(structural)
 
   private enum Profile:
-    case Pure, Loop, Range, StructuralRange, Selection, StructuralIf, Sequential
+    case Pure, Loop, Range, StructuralRange, Selection, StructuralIf, Sequential, GeneratedArea,
+      ImmutableFsm, StructuralFamily, ContinuousRange
 
   private final class Budget:
     var visitedNodes = 0
@@ -86,10 +108,17 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     methods(module, names*)
 
   private def initializeProfile()(using Context): Unit =
+    areaMemberMethods = methods(requiredClass("nodal.Area"), "selectDynamic")
+    areaRanges = methods(requiredClass("nodal.HdlRange"), "map")
+    pureModules += requiredModule("nodal.GeneratedAreaDerivation")
     val owner = requiredModule("nodal.CoreSemanticsCandidateApi$package")
     collections = methods(owner, "map", "zipWith", "fold", "scan", "reduce", "reduceBalancedTree")
     pureModules += owner
     factories = methods(requiredModule("nodal.DigitalCollectionCallback"), "checked1", "checked2")
+    globalInterfaceInitializers =
+      methods(requiredModule("nodal.DigitalCollectionCallback"), "initializeGlobalInterface")
+    factories ++= globalInterfaceInitializers
+    factories ++= methods(requiredModule("nodal.ConstructionKernel"), "initializeGlobalInterface")
     val structuralRuntime = requiredModule("nodal.StructuralIfRuntime")
     structuralModules += structuralRuntime
     structuralModules += requiredModule("nodal.DigitalCollectionCallback")
@@ -119,6 +148,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     )
     val flatRuntime = requiredModule("nodal.FlatFsmRuntime")
     sequentialModules += flatRuntime
+    val definitionRuntime = requiredModule("nodal.FsmDefinitionRuntime")
+    sequentialModules += definitionRuntime
+    sequentialKernelMethods ++= methods(definitionRuntime, "actionBinding")
     sequentialBranches ++=
       methods(flatRuntime, "action", "transitionAction", "switchCase", "switchEnum")
     flatGraphRuntime = methods(flatRuntime, "switchEnum")
@@ -128,11 +160,15 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "flatFsmState",
       "flatFsmTerminal",
       "flatFsmTransition",
+      "flatFsmTimer",
+      "flatFsmTransferTransition",
+      "fsmTransfer",
       "flatFsmAction",
       "flatFsmStateView",
       "flatFsmEvent",
       "flatFsmTaken",
       "flatFsmCompleted",
+      "flatFsmStatus",
       "enumSwitch",
       "enumSwitchCase"
     )
@@ -172,10 +208,33 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         methods(requiredClass("nodal.DigitalUIntOperators"), "-") ++
         moduleMethods("nodal.SInt", "+", "-", ">>") ++
         moduleMethods("nodal.Bits", ">>") ++
-        moduleMethods("nodal.UInt") ++
+        moduleMethods("nodal.UInt", "apply") ++
+        moduleMethods("nodal.SInt", "apply") ++
+        moduleMethods("nodal.Bits", "apply") ++
+        moduleMethods("nodal.Vec", "apply") ++
         moduleMethods("nodal.DigitalCombinationalApi$package", "select") ++
         moduleMethods("nodal.DigitalAggregateApi$package", "field", "value", "member") ++
+        areaMemberMethods ++
+        methods(requiredClass("nodal.GeneratedAreas"), "apply") ++
+        moduleMethods("nodal.GeneratedAreaRuntime", "member", "nested", "family") ++
         methods(requiredClass("nodal.StructMember"), "bind") ++
+        // Immutable type/field descriptors do not execute callbacks. Every authored
+        // argument still traverses the same bounded effect and ownership checks.
+        moduleMethods("nodal.Struct", "apply") ++
+        moduleMethods("nodal.StructField", "apply") ++
+        moduleMethods("nodal.Interface", "apply") ++
+        methods(requiredClass("nodal.InterfaceType"), "withRoles") ++
+        moduleMethods("nodal.Role", "apply") ++
+        moduleMethods("nodal.InterfaceMember", "value", "valid", "stream", "nested", "terminal") ++
+        moduleMethods("nodal.RoleAccess.Connect", "apply") ++
+        moduleMethods("nodal.RoleAccess.Sense", "apply") ++
+        moduleMethods("nodal.RoleAccess.Contribute", "apply") ++
+        moduleMethods("nodal.RoleAccess.In", "apply") ++
+        moduleMethods("nodal.RoleAccess.Out", "apply") ++
+        moduleMethods("nodal.RoleAccess.Observe", "apply") ++
+        moduleMethods("nodal.RoleAccess.Master", "apply") ++
+        moduleMethods("nodal.RoleAccess.Slave", "apply") ++
+        moduleMethods("nodal.RoleAccess.Nested", "apply") ++
         methods(
           owner,
           "S",
@@ -218,10 +277,66 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           "exiting",
           "transitionTaken",
           "completed"
+        ) ++
+        methods(
+          requiredClass("nodal.FsmInstance"),
+          "currentState",
+          "nextState",
+          "entering",
+          "exiting",
+          "transitionTaken",
+          "completed"
         )
+    pureMethods ++= methods(
+      requiredClass("nodal.FsmRun"),
+      "state",
+      "status",
+      "running",
+      "completed",
+      "cancelled",
+      "child"
+    )
+    pureMethods ++= methods(requiredClass("nodal.FsmChildRun"), "active", "run")
+    pureMethods ++= moduleMethods("nodal.FsmControl", "apply")
+    // These factories construct immutable control data only. Runtime predicates/actions enter
+    // through separately checked bindings; none of these methods executes an authored callback.
+    List(
+      "nodal.FsmDefinition",
+      "nodal.FsmGuard",
+      "nodal.FsmAction",
+      "nodal.FsmState",
+      "nodal.FsmFragment",
+      "nodal.FsmDef",
+      "nodal.FsmChild",
+      "nodal.FsmTransfer",
+      "nodal.FsmStackPolicy.Trap"
+    ).foreach: name =>
+      pureMethods ++= moduleMethods(name, "apply")
+    pureMethods ++= methods(
+      requiredClass("nodal.FsmState"),
+      "on",
+      "onWithAction",
+      "call",
+      "returnOn",
+      "after",
+      "awaitTransfer",
+      "entry",
+      "active",
+      "exit",
+      "terminal",
+      "children",
+      "onAllComplete",
+      "onAnyComplete",
+      "onChildComplete"
+    )
     pureModules += requiredModule("nodal.TransitionMode")
     pureMethods ++=
-      defaultGetters(methods(requiredClass("nodal.StateBuilder"), "on", "onWithAction"))
+      defaultGetters(methods(
+        requiredClass("nodal.StateBuilder"),
+        "on",
+        "onWithAction",
+        "awaitTransfer"
+      ))
     val arithmetic = moduleMethods("nodal.CandidateApi$package", "+", "-", "*", "/", "unary_-")
     pureMethods = pureMethods ++ arithmetic.filter { symbol =>
       symbol.info.finalResultType.dealias match
@@ -254,8 +369,42 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         "toLong"
       )
 
+    // The enum companion is immutable; only the exact case factories above are sanctioned.
+    pureModules += requiredModule("nodal.RoleAccess")
+    // Library role witnesses are empty immutable objects, not endpoint construction authority.
+    List(
+      "masterCanDrive",
+      "slaveCanDrive",
+      "sourceCanDrive",
+      "sinkCanDrive",
+      "initiatorCanDrive",
+      "targetCanDrive",
+      "controllerCanDrive",
+      "peripheralCanDrive",
+      "deviceCanDrive",
+      "environmentCanDrive"
+    ).foreach(name =>
+      pureModules += requiredModule("nodal.RoleCanDrive." + name)
+    )
+    pureModules += requiredModule("nodal.RoleCanDrive")
+    List(
+      "masterSlave",
+      "slaveMaster",
+      "sourceSink",
+      "sinkSource",
+      "initiatorTarget",
+      "targetInitiator",
+      "controllerPeripheral",
+      "peripheralController",
+      "deviceEnvironment",
+      "environmentDevice"
+    ).foreach(name =>
+      pureModules += requiredModule("nodal.RoleConnection." + name)
+    )
+    pureModules += requiredModule("nodal.RoleConnection")
     // Default expressions are part of the trusted library method's contract too (e.g. slice axis).
     pureMethods ++= defaultGetters(pureMethods)
+    initializeImmutableFsmProfile()
     initializeIterationProfiles(owner)
     eventControl.initialize(
       pureMethods ++ loopMethods,
@@ -264,6 +413,74 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       collections,
       pureModules ++ structuralModules ++ sequentialModules ++ loopModules ++ rangeModules
     )
+
+  private def initializeImmutableFsmProfile()(using Context): Unit =
+    def immutableModule(name: String, names: String*): Set[Symbol] =
+      val module = requiredModule(name)
+      immutableFsmModules += module
+      methods(module, names*)
+    List(
+      "nodal.FsmDefinition",
+      "nodal.FsmGuard",
+      "nodal.FsmAction",
+      "nodal.FsmState",
+      "nodal.FsmFragment",
+      "nodal.FsmDef",
+      "nodal.FsmChild",
+      "nodal.FsmTransfer",
+      "nodal.FsmStackPolicy.Trap"
+    ).foreach: name =>
+      immutableFsmMethods ++= immutableModule(name, "apply")
+    immutableFsmModules += requiredModule("nodal.TransitionMode")
+    immutableFsmModules += requiredModule("nodal.FsmStackPolicy")
+    immutableFsmModules += requiredModule("nodal.FsmStackPolicy.AssertHold")
+    immutableFsmMethods ++= methods(requiredModule("nodal.FsmDef"), "withCallStack")
+    immutableFsmMethods ++= methods(
+      requiredClass("nodal.FsmState"),
+      "on",
+      "onWithAction",
+      "call",
+      "returnOn",
+      "after",
+      "awaitTransfer",
+      "entry",
+      "active",
+      "exit",
+      "terminal",
+      "children",
+      "onAllComplete",
+      "onAnyComplete",
+      "onChildComplete"
+    )
+    immutableFsmMethods ++= methods(requiredClass("nodal.FsmDef"), "definition", "initial")
+    immutableFsmMethods ++= immutableModule("scala.Predef", "summon")
+    immutableFsmMethods ++= immutableModule("scala.<:<", "refl")
+    List("scala.Int", "scala.Long", "scala.Boolean").foreach: name =>
+      immutableFsmMethods ++= methods(
+        requiredClass(name),
+        "+",
+        "-",
+        "*",
+        "unary_-",
+        "&",
+        "|",
+        "^",
+        "unary_~",
+        "<<",
+        ">>",
+        ">>>",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "unary_!",
+        "toInt",
+        "toLong"
+      )
+    immutableFsmMethods ++= defaultGetters(immutableFsmMethods)
+    immutableFsmSource = methods(requiredModule("nodal.FsmDef"), "unroll")
+    immutableFsmRuntime = methods(requiredModule("nodal.FsmDefinitionRuntime"), "unroll") ++
+      methods(requiredModule("nodal.DigitalCollectionCallback"), "checkedFsmGraph2")
 
   private def defaultGetters(symbols: Set[Symbol])(using Context): Set[Symbol] =
     symbols.flatMap: method =>
@@ -275,10 +492,64 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
   private def initializeIterationProfiles(owner: Symbol)(using Context): Unit =
     loops = methods(owner, "loop")
-    ranges = methods(requiredModule("nodal.CandidateApi$package"), "hdlRange")
+    instanceFactories = methods(requiredClass("nodal.Module"), "instance") ++
+      methods(requiredClass("nodal.Area"), "instance")
+    instanceDomainMethods = methods(requiredClass("nodal.Instance"), "domain")
+    instanceParameterMethods = methods(requiredClass("nodal.Instance"), "param")
+    requiredDomainMethods = methods(requiredModule("nodal.ClockDomain"), "required")
+    requiredDomainMethods ++= defaultGetters(requiredDomainMethods)
+    areaRangeFactories = moduleMethods("nodal.CandidateApi$package", "hdlRange").filter(
+      _.info.finalResultType.widen.dealias.derivesFrom(requiredClass("nodal.HdlRange"))
+    )
+    legacyRanges =
+      (methods(requiredModule("nodal.CandidateApi$package"), "hdlRange") -- areaRangeFactories) ++
+        methods(requiredClass("nodal.HdlRange"), "foreach") ++
+        // This exact extension preserves callback syntax by delegating to HdlRange.foreach.
+        // It is not HdlRange.map or generated Area allocation.
+        moduleMethods("nodal.GeneratedAreaApi$package", "apply")
+    legacyRangeDefaults = defaultGetters(legacyRanges)
+    ranges = legacyRanges
     iterationFactories =
-      methods(requiredModule("nodal.DigitalIterationCallback"), "checkedLoop", "checkedRange")
+      methods(
+        requiredModule("nodal.DigitalIterationCallback"),
+        "checkedLoop",
+        "checkedRange",
+        "checkedAreaRange"
+      )
     factories ++= iterationFactories
+    selectedInstanceClosures = methods(requiredClass("nodal.GeneratedInstanceRef"), "apply")
+    areaFamilyMethods = methods(requiredModule("nodal.GeneratedAreaRuntime"), "bind", "instance") ++
+      methods(requiredModule("nodal.DigitalIterationCallback"), "checkedAreaRange") ++
+      selectedInstanceClosures
+    areaInterfaceModule = requiredModule("nodal.PipelineInterfaceCandidateApi$package")
+    areaInterfaceMethods = methods(
+      areaInterfaceModule,
+      "interfacePort",
+      "interfaceArray",
+      "driveMember",
+      "observeMember",
+      "read",
+      "valueRef",
+      "connectExact",
+      "forwardExact"
+    ) ++
+      methods(requiredModule("nodal.GeneratedAreaRuntime"), "interface", "value") ++
+      methods(requiredClass("nodal.InterfaceValueRef"), "read")
+    areaInterfaceMethods ++= defaultGetters(areaInterfaceMethods)
+    areaConservativeMethods = methods(
+      areaInterfaceModule,
+      "connectTerminal",
+      "senseTerminal",
+      "contributeTerminal",
+      "connectTo",
+      "connectView"
+    )
+    areaConservativeMethods ++= defaultGetters(areaConservativeMethods)
+    areaConservativeMethods ++= methods(
+      requiredModule("nodal.ConservativeAccess.Connect"),
+      "connectAccess"
+    )
+
     val selections = requiredModule("nodal.SignalSelection")
     loopModules += selections
     loopMethods = methods(requiredClass("nodal.LoopIndex"), "value") ++
@@ -421,10 +692,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       rangeModule("nodal.NoisePoint", "apply") ++
       rangeModule("nodal.NoiseOptions", "apply") ++
       rangeModule("nodal.Param", "liftReal") ++
-      rangeModule("nodal.UInt", "apply") ++
-      rangeModule("nodal.SInt", "apply") ++
-      rangeModule("nodal.Bits", "apply") ++
-      rangeModule("nodal.Vec", "apply", "fill") ++
+      rangeModule("nodal.Vec", "fill") ++
       rangeModule("scala.Predef", "intWrapper") ++
       methods(requiredClass("scala.runtime.RichInt"), "to", "until") ++
       methods(requiredClass("nodal.Event"), "or", "||") ++
@@ -444,11 +712,56 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "reshape"
     )
     selectionMethods ++= defaultGetters(selectionMethods)
-    rangeClosures = methods(requiredClass("nodal.Instance"), "apply", "param")
+    rangeClosures = methods(requiredClass("nodal.Instance"), "apply", "param") ++
+      methods(requiredClass("nodal.GeneratedInstanceRef"), "apply")
     constructorClosures = rangeModule("nodal.ConstructorCaptureRuntime", "guard", "allocate")
     rangeMethods ++= rangeClosures ++ constructorClosures ++
       rangeModule("nodal.ConstructorCaptureRuntime", "carrierReal", "omittedReal")
-    rangeMethods ++= defaultGetters(rangeMethods ++ ranges)
+    constructorClosures ++= rangeModule("nodal.AreaCaptureRuntime", "guard", "allocate")
+    rangeMethods ++= constructorClosures ++
+      rangeModule("nodal.AreaCaptureRuntime", "bind", "member", "capturedMember") ++
+      rangeModule("nodal.GeneratedAreaRuntime", "bind") ++
+      methods(requiredClass("nodal.Area"), "wire", "instance", "connect") ++
+      rangeModule("nodal.Reg", "apply", "uninitialized") ++
+      rangeModule("nodal.RegNext", "apply", "uninitialized")
+    rangeMethods ++= defaultGetters(rangeMethods ++ ranges ++ areaRanges)
+
+  private def indexDefinition(current: Tree)(using Context): Option[Symbol] =
+    current match
+      case definition: DefDef =>
+        structural.admitResult(definition.rhs, definition.tpt.tpe)
+        definitions(definition.symbol) = definition
+        sourceDefinitions(definition.symbol) = ((definition, ctx))
+        Some(definition.symbol)
+      case definition: ValDef =>
+        structural.admitResult(definition.rhs, definition.tpt.tpe)
+        values(definition.symbol) = definition
+        None
+      case typed: Typed =>
+        structural.admitResult(typed.expr, typed.tpt.tpe)
+        None
+      case definition: TypeDef => definition.rhs match
+          case template: Template =>
+            templates(definition.symbol) = template
+            sourceDefinitions(definition.symbol) = ((definition, ctx))
+            Some(definition.symbol)
+          case _ => None
+      case _ => None
+
+  /** Lambda lowering re-owns actual local symbols; retain their typed bodies, never stale
+    * summaries.
+    */
+  private def indexLoweredDefinitions(tree: Tree)(using
+      Context
+  )
+      : Vector[(Symbol, (Tree, Context))] =
+    val symbols = mutable.LinkedHashSet.empty[Symbol]
+    val collect = new TreeTraverser:
+      override def traverse(current: Tree)(using Context): Unit =
+        indexDefinition(current).foreach(symbols.add)
+        traverseChildren(current)
+    collect.traverse(tree)
+    symbols.toVector.map(symbol => symbol -> sourceDefinitions(symbol))
 
   override def prepareForUnit(tree: Tree)(using Context): Context =
     if !scanned then
@@ -459,20 +772,13 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         given Context = scanBase.fresh.setCompilationUnit(unit)
         val collect = new TreeTraverser:
           override def traverse(current: Tree)(using Context): Unit =
+            val _ = indexDefinition(current)
             current match
-              case definition: DefDef =>
-                structural.admitResult(definition.rhs, definition.tpt.tpe)
-                definitions(definition.symbol) = definition
-                sourceDefinitions(definition.symbol) = ((definition, ctx))
-              case definition: ValDef =>
-                structural.admitResult(definition.rhs, definition.tpt.tpe)
-                values(definition.symbol) = definition
-              case typed: Typed => structural.admitResult(typed.expr, typed.tpt.tpe)
-              case definition: TypeDef => definition.rhs match
-                  case template: Template =>
-                    templates(definition.symbol) = template
-                    sourceDefinitions(definition.symbol) = ((definition, ctx))
-                  case _ => ()
+              case reference: RefTree if immutableFsmRuntime(reference.symbol) =>
+                report.error(
+                  "NODAL-FSM-058-UNROLL-FORGED: source must not call compiler-owned immutable graph attestation methods",
+                  reference.srcPos
+                )
               case reference: RefTree if eventControl.compilerOwned(reference.symbol) =>
                 report.error(
                   "NODAL-EVENT-057-FORGED: source must not call compiler-owned event control certificate or dispatch methods",
@@ -524,8 +830,14 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         )
         behavioral.classifyAnalog(unit.tpdTree, definitions)
         behavioral.checkChains(unit.tpdTree)
-      publishEffectSummaries()
+      publishEffectSummaries(sourceDefinitions.toVector)
     ctx
+
+  override def transformUnit(tree: Tree)(using Context): Tree =
+    val actual = indexLoweredDefinitions(tree)
+    actual.foreach((symbol, _) => symbol.removeAnnotation(effectMarker))
+    publishEffectSummaries(actual)
+    tree
 
   private def effectMarker(using Context): ClassSymbol =
     requiredClass("nodal.ConstructorEffectSummary")
@@ -554,7 +866,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     if !symbol.is(Method) || !symbol.owner.is(ModuleClass) then None
     else
       val cls = symbol.owner.companionClass
-      if !cls.exists || !cls.derivesFrom(requiredClass("nodal.Module")) then None
+      if !cls.exists || (!cls.derivesFrom(requiredClass("nodal.Module")) &&
+          !cls.derivesFrom(requiredClass("nodal.Area")))
+      then None
       else
         cls.primaryConstructor.paramSymss.flatten.zipWithIndex.collectFirst:
           case (parameter, index)
@@ -577,6 +891,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       if symbol.derivesFrom(requiredClass("nodal.Module")) &&
         symbol.hasAnnotation(requiredClass("nodal.ConstructorSchema"))
       then Some("constructor")
+      else if symbol.derivesFrom(requiredClass("nodal.Area")) &&
+        symbol.hasAnnotation(requiredClass("nodal.AreaCaptureSchema"))
+      then Some("constructor")
       else if symbol.is(ModuleClass) &&
         (enumCompanion(symbol) ||
           symbol.info.parents.forall(_.typeSymbol == requiredClass("java.lang.Object")))
@@ -585,12 +902,17 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     else if defaultConstructor(symbol).nonEmpty then Some("default")
     else if symbol.is(Method) && !symbol.isConstructor && !symbol.is(Accessor) &&
       closedDispatch(symbol) &&
-      symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Module"))
+      (symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Module")) ||
+        symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Area")))
     then Some("factory")
     else if symbol.is(Method) && !symbol.isConstructor && !symbol.is(Accessor) &&
       closedDispatch(symbol) && (
         symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Expr")) ||
+          symbol.info.finalResultType.derivesFrom(requiredClass("nodal.InterfaceType")) ||
+          symbol.info.finalResultType.derivesFrom(requiredClass("nodal.InterfaceValueRef")) ||
+          symbol.info.finalResultType.derivesFrom(requiredClass("nodal.GeneratedAreas")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.HwEnum")) ||
+          symbol.info.finalResultType.derivesFrom(requiredClass("nodal.FsmDef")) ||
           symbol.info.finalResultType.typeSymbol.is(Enum) ||
           symbol.info.finalResultType =:= defn.UnitType
       )
@@ -637,7 +959,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     val fields = encoded.split("\t", -1).toList
     fields match
       case kind :: locator :: member :: signature :: profile :: Nil
-          if Set("1", "3", "4", "8", "16")(profile) =>
+          if Set("1", "3", "4", "8", "16", "32", "64", "128")(profile) =>
         val owner = if locator.startsWith("module:") then
           val name = locator.stripPrefix("module:")
           val direct = getModuleIfDefined(name)
@@ -664,22 +986,34 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             case _ => None
       case _ => None
 
-  private def publishEffectSummaries(): Unit =
-    sourceDefinitions.foreach: (symbol, entry) =>
+  private def publishEffectSummaries(entries: Vector[(Symbol, (Tree, Context))]): Unit =
+    entries.foreach: (symbol, entry) =>
       val (tree, context) = entry
       given Context = context
       effectKind(symbol).foreach: kind =>
         effectSignature(symbol, kind).foreach: signature =>
           val profiles = if kind == "helper" then
-            List(Profile.Pure, Profile.StructuralIf, Profile.Sequential)
+            List(
+              Profile.ImmutableFsm,
+              Profile.Pure,
+              Profile.StructuralIf,
+              Profile.StructuralFamily,
+              Profile.Sequential,
+              Profile.GeneratedArea
+            )
           else if kind == "singleton" then
             List(
+              Profile.ImmutableFsm,
               Profile.Pure,
               Profile.StructuralIf,
               Profile.Sequential,
               Profile.StructuralRange,
               Profile.Range
             )
+          else if symbol.isClass && symbol.derivesFrom(requiredClass("nodal.Area")) ||
+            symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Area"))
+          then
+            List(Profile.GeneratedArea)
           else List(Profile.StructuralRange, Profile.Range)
           val checked = profiles.iterator.flatMap: profile =>
             val validation = new Validation(profile, new Budget, reportErrors = false)
@@ -695,15 +1029,41 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 Literal(Constant(kind)),
                 Literal(Constant(signature)),
                 Literal(Constant(profile match
+                  case Profile.ImmutableFsm => 64
                   case Profile.Pure => 4
                   case Profile.StructuralIf => 8
+                  case Profile.StructuralFamily => 128
                   case Profile.Sequential => 16
+                  case Profile.GeneratedArea => 32
                   case Profile.StructuralRange => 1
                   case _ => 3)),
                 Literal(Constant(dependencies))
               ),
               tree.span
             ))
+
+  private def globalInterfaceMember(tree: ValDef)(using Context): Boolean =
+    def globalOwner(symbol: Symbol, remaining: Int): Boolean =
+      symbol.exists && remaining > 0 &&
+        (symbol.is(Package) ||
+          (symbol.is(ModuleClass) &&
+            !symbol.derivesFrom(requiredClass("nodal.Module")) &&
+            !symbol.derivesFrom(requiredClass("nodal.Area")) &&
+            globalOwner(symbol.owner, remaining - 1)))
+    !tree.rhs.isEmpty && !tree.symbol.isOneOf(Mutable | Synthetic) &&
+    tree.symbol.owner.is(ModuleClass) && globalOwner(tree.symbol.owner, 128) &&
+    tree.tpt.tpe.widen.dealias.derivesFrom(requiredClass("nodal.InterfaceType"))
+
+  override def transformValDef(tree: ValDef)(using Context): Tree =
+    if !globalInterfaceMember(tree) then tree
+    else
+      val method = newAnonFun(tree.symbol, MethodType(Nil)(_ => Nil, _ => tree.tpt.tpe))
+      val moved = tree.rhs.changeOwnerAfter(tree.symbol, method, this)
+      val closure = Closure(method, _ => moved)
+      val initialized =
+        ref(requiredMethod("nodal.DigitalCollectionCallback.initializeGlobalInterface"))
+          .appliedToType(tree.tpt.tpe).appliedTo(closure).withSpan(tree.rhs.span)
+      cpy.ValDef(tree)(rhs = initialized)
 
   override def prepareForValDef(tree: ValDef)(using Context): Context =
     structural.admitResult(tree.rhs, tree.tpt.tpe)
@@ -720,9 +1080,16 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   override def transformIf(tree: If)(using Context): Tree =
     if !structural.moduleContext || !structural.symbolic(tree.cond) then tree
     else
-      val validation = new Validation(Profile.StructuralIf, new Budget)
+      val validation = new Validation(Profile.StructuralFamily, new Budget)
       if validation.structuralIf(tree, 0) then
-        structural.lower(tree, structural.predicate(tree.cond).get, structural.resultType(tree).get)
+        val lowered = structural.lower(
+          tree,
+          structural.predicate(tree.cond).get,
+          structural.resultType(tree).get,
+          this
+        )
+        val _ = indexLoweredDefinitions(lowered)
+        lowered
       else tree
 
   private def callbackArity(tree: Tree)(using Context): Int =
@@ -731,9 +1098,24 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     else 0
 
   override def transformApply(tree: Apply)(using Context): Tree =
-    eventControl.lower(tree).getOrElse(
+    transformImmutableFsm(tree).getOrElse(eventControl.lower(tree).getOrElse(
       behavioral.lowerAnalog(tree).getOrElse(transformBehavioral(tree))
-    )
+    ))
+
+  private def transformImmutableFsm(tree: Apply)(using Context): Option[Tree] = tree match
+    case Apply(Apply(TypeApply(function, List(enumType)), List(levels, base)), List(step))
+        if immutableFsmSource(function.symbol) =>
+      if new Validation(Profile.ImmutableFsm, new Budget).callback(step, 0) then
+        val checked = ref(requiredMethod("nodal.DigitalCollectionCallback.checkedFsmGraph2"))
+          .appliedToType(enumType.tpe).appliedTo(step)
+        Some(ref(requiredMethod("nodal.FsmDefinitionRuntime.unroll"))
+          .appliedToType(enumType.tpe).appliedToArgs(List(
+            levels,
+            base,
+            checked
+          )).withSpan(tree.span))
+      else Some(tree)
+    case _ => None
 
   private def transformBehavioral(tree: Apply)(using Context): Tree =
     behavioral.guard(tree) match
@@ -757,6 +1139,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     val profile = if collections(symbol) then Some(Profile.Pure)
     else if loops(symbol) then Some(Profile.Loop)
     else if ranges(symbol) then Some(Profile.Range)
+    else if areaRanges(symbol) then Some(Profile.GeneratedArea)
     else None
     profile.fold[Tree](tree): profile =>
       cpy.Apply(tree)(tree.fun, tree.args.map(checkArgument(_, profile)))
@@ -774,6 +1157,13 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             case _ => Nil
           ref(requiredMethod(s"nodal.DigitalCollectionCallback.checked$arity"))
             .appliedToTypes(arguments)
+        else if profile == Profile.GeneratedArea then
+          val result = argument.tpe.widen.dealias.baseType(requiredClass("scala.Function1")) match
+            case AppliedType(_, _ :: output :: Nil) => output
+            case _ => defn.NothingType
+          ref(
+            requiredMethod("nodal.DigitalIterationCallback.checkedAreaRange")
+          ).appliedToType(result)
         else
           val factory = if profile == Profile.Loop then "checkedLoop" else "checkedRange"
           ref(requiredMethod(s"nodal.DigitalIterationCallback.$factory"))
@@ -785,30 +1175,111 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       sharedBudget: Budget,
       reportErrors: Boolean = true,
       structuralDiagnostic: Boolean = false,
-      sequentialDiagnostic: Boolean = false
+      sequentialDiagnostic: Boolean = false,
+      allowGuardedRange: Boolean = false,
+      continuousRangeRestriction: Boolean = false,
+      guardedRangeForbidden: Boolean = false
   )(using Context):
-    private val permitsStructure = profile == Profile.Range || profile == Profile.StructuralRange
+    // Each validator owns caches for one immutable permission context. Never reuse a broad
+    // structural proof to authorize a guarded legacy range or its nested pure operands.
+    private val continuousOnly = continuousRangeRestriction || profile == Profile.ContinuousRange
+    private def guardedRange(symbol: Symbol): Boolean =
+      allowGuardedRange && !guardedRangeForbidden && !continuousOnly && legacyRanges(symbol)
+    private val permitsStructure = profile == Profile.Range || profile == Profile.StructuralRange ||
+      profile == Profile.GeneratedArea
+    private val permitsAreaFamily = permitsStructure || profile == Profile.StructuralFamily
+    private def permitsInterface = directModuleInitializer || profile == Profile.GeneratedArea ||
+      profile == Profile.StructuralFamily || profile == Profile.StructuralIf
     private val permitsWrites = profile == Profile.Loop || profile == Profile.Range ||
-      profile == Profile.StructuralIf
-    private def sanctioned(symbol: Symbol): Boolean = pureMethods(symbol) ||
-      sequentialMethods(symbol) ||
-      (profile == Profile.Sequential &&
+      profile == Profile.StructuralIf || profile == Profile.StructuralFamily || profile == Profile.GeneratedArea ||
+      profile == Profile.ContinuousRange
+    // Quotes may insert a synthetic module accessor whose name is absent from the source member table.
+    // Admit only this exact compiler-owned, zero-argument accessor with its exact module result.
+    private def generatedRuntimeAccessor(symbol: Symbol): Boolean =
+      val owner = requiredModule("nodal.GeneratedAreaDerivation").moduleClass
+      val runtime = requiredModule("nodal.GeneratedAreaRuntime").moduleClass
+      symbol.owner == owner && symbol.name.toString == "inline$GeneratedAreaRuntime" &&
+      symbol.is(Synthetic) && symbol.paramSymss.flatten.isEmpty &&
+      symbol.info.finalResultType.widen.dealias.typeSymbol == runtime
+
+    // This is a transient typed-body proof context, not a semantic instance registry.
+    // A child initializer may declare its own required domain, but a generated Area,
+    // captured object, helper or singleton cannot borrow that constructor authority.
+    private var constructionOwners = List.empty[(Symbol, Set[Symbol], Set[Symbol])]
+    private val localInstances = mutable.HashMap.empty[Symbol, Symbol]
+    private def directModuleInitializer: Boolean = profile == Profile.GeneratedArea &&
+      constructionOwners.headOption.exists: (owner, helpers, singletons) =>
+        owner.derivesFrom(requiredClass("nodal.Module")) &&
+          active.toSet == helpers && activeModules.toSet == singletons
+    private def currentThis(tree: Tree): Boolean = tree match
+      case owner: This => constructionOwners.headOption.exists(_._1 == owner.symbol)
+      case _ => false
+    private def localInstanceExpression(tree: Tree): Boolean = tree match
+      case Typed(value, _) => localInstanceExpression(value)
+      case application: Apply if instanceFactories(application.fun.symbol) =>
+        application.fun match
+          case TypeApply(selection: Select, _) => currentThis(selection.qualifier)
+          case selection: Select => currentThis(selection.qualifier)
+          case _ => false
+      case application: Apply
+          if instanceDomainMethods(application.fun.symbol) || instanceParameterMethods(
+            application.fun.symbol
+          ) =>
+        application.fun match
+          case TypeApply(selection: Select, _) => localInstanceExpression(selection.qualifier)
+          case selection: Select => localInstanceExpression(selection.qualifier)
+          case _ => false
+      case reference: RefTree =>
+        val field = if reference.symbol.is(Accessor) then reference.symbol.accessedFieldOrGetter
+        else reference.symbol
+        constructionOwners.headOption.exists: (owner, _, _) =>
+          localInstances.get(field).contains(owner) && (reference match
+            case selection: Select => currentThis(selection.qualifier)
+            case _: Ident => true
+            case _ => false)
+      case _ => false
+
+    private def sanctioned(symbol: Symbol)
+        : Boolean = if profile == Profile.ImmutableFsm then immutableFsmMethods(symbol)
+    else
+      pureMethods(symbol) || generatedRuntimeAccessor(symbol) ||
+      (permitsInterface && areaInterfaceMethods(symbol)) ||
+      ((profile == Profile.GeneratedArea || profile == Profile.StructuralFamily) &&
+        areaConservativeMethods(symbol)) ||
+      (directModuleInitializer && requiredDomainMethods(symbol)) ||
+      (!continuousOnly && sequentialMethods(symbol)) ||
+      ((profile == Profile.Sequential || profile == Profile.GeneratedArea || profile == Profile.StructuralIf || profile == Profile.StructuralFamily) &&
         (sequentialBranches(symbol) || sequentialFactories(symbol) || sequentialWrites(symbol))) ||
       structuralMethods(symbol) || structuralBranches(symbol) || structuralFactories(symbol) ||
       (permitsWrites && loopMethods(symbol)) ||
+      (allowGuardedRange && !guardedRangeForbidden && !continuousOnly &&
+        (areaRangeFactories(symbol) || legacyRangeDefaults(symbol))) ||
       (permitsStructure && rangeMethods(symbol)) ||
+      (permitsAreaFamily && (areaFamilyMethods(symbol) || areaRangeFactories(symbol))) ||
       (profile == Profile.Selection && selectionMethods(symbol))
-    private def trustedModule(symbol: Symbol): Boolean = pureModules(symbol) ||
-      structuralModules(symbol) || sequentialModules(symbol) ||
-      (permitsWrites && loopModules(symbol)) || (permitsStructure && rangeModules(symbol))
+    private def trustedModule(symbol: Symbol): Boolean =
+      if profile == Profile.ImmutableFsm then immutableFsmModules(symbol)
+      else
+        pureModules(symbol) || (permitsInterface && symbol == areaInterfaceModule) ||
+        ((profile == Profile.GeneratedArea || profile == Profile.StructuralFamily) &&
+          (symbol == requiredModule("nodal.ConservativeAccess.Connect") ||
+            symbol == requiredModule("nodal.ConservativeAccess.Connect.connectAccess"))) ||
+        (directModuleInitializer && symbol == requiredModule("nodal.ClockDomain")) ||
+        structuralModules(symbol) || (!continuousOnly && sequentialModules(symbol)) ||
+        (permitsWrites && loopModules(symbol)) || (permitsStructure && rangeModules(symbol))
     private def fail(code: String, message: String, tree: Tree): Boolean =
       if !reportErrors then false
+      else if profile == Profile.ImmutableFsm then
+        report.error(s"NODAL-FSM-058-UNROLL-$code: $message", tree.srcPos)
+        false
       else if profile == Profile.Sequential || sequentialDiagnostic then
         report.error(s"NODAL-SEQUENTIAL-056-$code: $message", tree.srcPos)
         false
       else if profile == Profile.Pure && !structuralDiagnostic then
         DigitalCollectionCallbackPhase.this.fail(code, message, tree)
-      else if profile == Profile.StructuralIf || structuralDiagnostic then
+      else if profile == Profile.StructuralIf || profile == Profile.StructuralFamily ||
+        profile == Profile.ContinuousRange || structuralDiagnostic
+      then
         report.error(s"NODAL-STRUCTURAL-055-$code: $message", tree.srcPos)
         false
       else
@@ -848,7 +1319,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
     private def moduleReference(symbol: Symbol, tree: Tree, depth: Int): Boolean =
       if trustedModule(symbol) || checkedModules(symbol) then true
-      else if profile == Profile.Pure && enumPureProofs.get(symbol).exists:
+      else if profile == Profile.Pure && !continuousOnly && enumPureProofs.get(symbol).exists:
           case (_, provedDepth, helperDepth, _) => depth <= provedDepth &&
             active.size <= helperDepth
       then
@@ -873,7 +1344,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 sharedBudget,
                 reportErrors,
                 structuralDiagnostic,
-                sequentialDiagnostic
+                sequentialDiagnostic,
+                continuousRangeRestriction = continuousOnly
               )
             else this
             if proof ne this then
@@ -885,7 +1357,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             activeModules -= symbol
             if valid then
               checkedModules += symbol
-              if profile == Profile.Pure then
+              if profile == Profile.Pure && !continuousOnly then
                 enumPureProofs(symbol) =
                   (
                     sharedBudget.visitedNodes - before,
@@ -999,6 +1471,28 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     private def reference(tree: RefTree, depth: Int): Boolean =
       val symbol = tree.symbol
       if !symbol.exists then fail("UNKNOWN", "callback contains an unresolved reference", tree)
+      else if profile == Profile.ImmutableFsm && !symbol.is(Module) &&
+        List(
+          "nodal.Expr",
+          "nodal.Module",
+          "nodal.Area",
+          "nodal.FsmBindings",
+          "nodal.FsmControl",
+          "nodal.FsmGuardBinding",
+          "nodal.FsmActionBinding",
+          "nodal.FsmChildBinding",
+          "nodal.Stream"
+        )
+          .exists(name => tree.tpe.widen.dealias.finalResultType.derivesFrom(requiredClass(name)))
+      then
+        fail("EFFECT", "immutable graph callback cannot capture runtime hardware or bindings", tree)
+      else if continuousOnly && !pureMethods(symbol) &&
+        (sequentialMethods(symbol) || sequentialBranches(symbol) || sequentialFactories(symbol) ||
+          sequentialWrites(symbol) || rangeMethods(symbol) || areaInterfaceMethods(symbol) ||
+          areaConservativeMethods(symbol) || areaFamilyMethods(symbol) || ranges(symbol) ||
+          areaRanges(symbol) || areaRangeFactories(symbol))
+      then
+        fail("EFFECT", "guarded hdlRange admits only continuous digital assignments", tree)
       else if memoryReads(symbol) then
         fail(
           "MEMORY-READ",
@@ -1058,6 +1552,27 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       if !budget(tree, depth) then false
       else
         tree match
+          case Apply(function, List(closure))
+              if profile == Profile.Pure && (
+                (function.symbol == requiredMethod("nodal.DigitalCollectionCallback.checked1") &&
+                  callbackArity(closure) == 1) ||
+                  (function.symbol == requiredMethod("nodal.DigitalCollectionCallback.checked2") &&
+                    callbackArity(closure) == 2)
+              ) =>
+            // Source-authored factories are rejected before lowering. Parent callbacks can revisit
+            // this exact compiler-inserted wrapper, but must revalidate its original pure closure.
+            callback(closure, depth + 1)
+          case Apply(function, List(closure))
+              if profile == Profile.GeneratedArea &&
+                function.symbol == requiredMethod(
+                  "nodal.DigitalIterationCallback.checkedAreaRange"
+                ) =>
+            callback(closure, depth + 1)
+          case Apply(function, List(closure))
+              if profile == Profile.ContinuousRange &&
+                function.symbol == requiredMethod("nodal.DigitalIterationCallback.checkedRange") =>
+            // Recheck the original closure: the root-range attestation is deliberately broader.
+            callback(closure, depth + 1)
           case Inlined(_, bindings, expansion) =>
             bindings.forall(check(_, depth + 1)) && callback(expansion, depth + 1)
           case Typed(expression, _) => callback(expression, depth + 1)
@@ -1107,16 +1622,36 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
               tree
             )
 
-    private def nestedCallback(tree: Tree, nested: Profile, depth: Int): Boolean =
-      if nested == profile then callback(tree, depth)
+    private def inheritLexicalContext(validation: Validation): Unit =
+      validation.active ++= active
+      validation.activeModules ++= activeModules
+      validation.callbackAliases ++= callbackAliases
+      validation.constructionOwners = constructionOwners
+      validation.localInstances ++= localInstances
+
+    private def nestedCallback(
+        tree: Tree,
+        nested: Profile,
+        depth: Int,
+        statementArm: Boolean = false,
+        valueArm: Boolean = false
+    ): Boolean =
+      val forbidden = guardedRangeForbidden || valueArm
+      if nested == profile && statementArm == allowGuardedRange &&
+        forbidden == guardedRangeForbidden
+      then callback(tree, depth)
       else
         val validation = new Validation(
           nested,
           sharedBudget,
           reportErrors,
           structuralDiagnostic,
-          sequentialDiagnostic || profile == Profile.Sequential
+          sequentialDiagnostic || profile == Profile.Sequential,
+          allowGuardedRange = statementArm,
+          continuousRangeRestriction = continuousOnly,
+          guardedRangeForbidden = forbidden
         )
+        inheritLexicalContext(validation)
         val valid = validation.callback(tree, depth)
         importedDependencies ++= validation.importedDependencies
         valid &&
@@ -1159,13 +1694,18 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             // The original allocation profiles (1, 3) never attest a structural branch.
             // Profile 4 is read-only; 8 permits the bounded digital branch/write effects.
             val helperKind = kind == "helper" || kind == "singleton"
-            val compatible =
+            val compatible = if continuousOnly then helperKind && effects.contains(4)
+            else if profile == Profile.ImmutableFsm then
+              helperKind && effects.contains(64)
+            else
               (helperKind &&
-                (effects.contains(4) ||
+                (effects.contains(64) || effects.contains(4) ||
                   (effects.contains(8) && permitsWrites) ||
                   (effects.contains(16) && profile == Profile.Sequential))) ||
-                (kind != "helper" && permitsStructure &&
-                  (effects.contains(1) || (effects.contains(3) && permitsWrites)))
+              (effects.contains(32) && profile == Profile.GeneratedArea) ||
+              (effects.contains(128) && permitsAreaFamily) ||
+              (kind != "helper" && permitsStructure &&
+                (effects.contains(1) || (effects.contains(3) && permitsWrites)))
             val expected = expectedProfile.forall(profile => effects.contains(profile))
             if annotation.arguments.size != 5 || !version.contains(1) ||
               !effectKind(symbol).contains(kind) || !declaredKind.contains(kind) ||
@@ -1175,7 +1715,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             then
               fail("SUMMARY", "stale, malformed or incompatible constructor effect summary", tree)
             else
-              val profile = List(1, 3, 4, 8, 16).find(effects.contains).get
+              val profile = List(1, 3, 4, 8, 16, 32, 64, 128).find(effects.contains).get
               val records = if dependencyText.get.isEmpty then Nil
               else dependencyText.get.split("\n", -1).toList
               activeSummaries += symbol
@@ -1208,9 +1748,14 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
     private def constructor(symbol: Symbol, tree: Tree, depth: Int): Boolean =
       val cls = symbol.owner
-      if !permitsStructure || !cls.derivesFrom(requiredClass("nodal.Module")) ||
-        symbol != cls.primaryConstructor ||
-        !cls.info.parents.forall(_.typeSymbol == requiredClass("nodal.Module"))
+      val isArea = cls.derivesFrom(requiredClass("nodal.Area"))
+      if isArea && cls == requiredClass("nodal.Area") && profile == Profile.GeneratedArea then true
+      else if !permitsStructure ||
+        (if isArea then profile != Profile.GeneratedArea
+         else
+           !cls.derivesFrom(requiredClass("nodal.Module")) ||
+           !cls.info.parents.forall(_.typeSymbol == requiredClass("nodal.Module"))) ||
+        symbol != cls.primaryConstructor
       then
         fail(
           "EFFECT",
@@ -1223,15 +1768,32 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         templates.get(cls) match
           case Some(template) =>
             active += cls
-            val valid = template.body.forall:
+            constructionOwners = (cls, active.toSet, activeModules.toSet) :: constructionOwners
+            val parentsValid = !isArea || template.parents.forall(check(_, depth + 1))
+            val bodyValid = template.body.forall:
               case _: DefDef | _: TypeDef | _: Import => true
               case definition: ValDef if definition.rhs.isEmpty =>
                 immutable(definition.symbol, definition)
               case other => check(other, depth + 1)
+            constructionOwners = constructionOwners.tail
             active -= cls
+            val valid = parentsValid && bodyValid
             if valid then completed += cls
             valid
           case None => importedSummary(cls, "constructor", tree)
+
+    /** Scala inserts this cast for structural val selection. Admit only the exact refined member
+      * type, never an authored capability-changing or arbitrary Any cast.
+      */
+    private def areaMemberProjection(tree: Tree, result: Type): Boolean = tree match
+      case Apply(selection: Select, List(Literal(constant)))
+          if areaMemberMethods(selection.symbol) &&
+            constant.value.isInstanceOf[String] =>
+        val receiver = selection.qualifier.tpe.widen.dealias
+        val member = receiver.member(termName(constant.value.asInstanceOf[String]))
+        receiver.derivesFrom(requiredClass("nodal.Area")) && member.exists &&
+        (member.info.finalResultType.widen.dealias =:= result.widen.dealias)
+      case _ => false
 
     private def applied(tree: Tree, depth: Int): Boolean =
       if !budget(tree, depth) then false
@@ -1239,7 +1801,41 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         tree match
           case application: Apply =>
             val symbol = application.fun.symbol
-            if profile == Profile.Sequential && structuralBranches(symbol) &&
+            if continuousOnly && globalInterfaceInitializers(symbol) then
+              fail("EFFECT", "guarded hdlRange cannot initialize Interface effects", application)
+            else if globalInterfaceInitializers(symbol) then
+              application.args.size == 1 &&
+              nestedCallback(application.args.head, Profile.Pure, depth + 1)
+            else if instanceDomainMethods(symbol) then
+              val receiver = application.fun match
+                case selection: Select => Some(selection.qualifier)
+                case _ => None
+              if profile != Profile.GeneratedArea ||
+                !receiver.exists(localInstanceExpression)
+              then
+                fail(
+                  "EFFECT",
+                  "generated domain binding requires an actual local child instance",
+                  application
+                )
+              else
+                receiver.forall(check(_, depth + 1)) && application.args.forall: argument =>
+                  if callbackArity(argument) > 0 then
+                    nestedCallback(argument, Profile.Selection, depth + 1)
+                  else check(argument, depth + 1)
+            else if profile == Profile.ImmutableFsm &&
+              (immutableFsmSource(symbol) || immutableFsmRuntime(symbol) || collections(symbol) ||
+                structuralBranches(symbol) || structuralFactories(symbol) || sequentialBranches(
+                  symbol
+                ) ||
+                sequentialFactories(symbol))
+            then
+              fail(
+                "EFFECT",
+                "nested callbacks and unroll are outside immutable graph construction",
+                application
+              )
+            else if profile == Profile.Sequential && structuralBranches(symbol) &&
               symbol.name.toString == "statement"
             then
               fail(
@@ -1247,7 +1843,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 "behavioral callbacks admit only read-only structural value expressions",
                 application
               )
-            else if loops(symbol) || (ranges(symbol) && !permitsStructure) then
+            else if loops(symbol) || (ranges(symbol) && !permitsStructure && !guardedRange(symbol)) ||
+              (areaRanges(symbol) && !permitsAreaFamily)
+            then
               fail("EFFECT", "nested effectful digital iteration is unsupported", application)
             else
               applied(application.fun, depth + 1) && application.args.forall: argument =>
@@ -1267,20 +1865,34 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 else if (structuralBranches(symbol) || structuralFactories(symbol)) &&
                   argument.tpe.widen.dealias.derivesFrom(requiredClass("scala.Function0"))
                 then
+                  val statement = if structuralFactories(symbol) then allowGuardedRange
+                  else symbol.name.toString == "statement"
+                  val nested = if profile == Profile.Sequential || (continuousOnly && !statement)
+                  then Profile.Pure else profile
+                  val permitsGuarded = statement && !continuousOnly &&
+                    (profile == Profile.StructuralIf || profile == Profile.StructuralFamily)
                   argument match
                     case Apply(function, List(closure)) if structuralFactories(function.symbol) =>
-                      if profile == Profile.Sequential then
-                        nestedCallback(closure, Profile.Pure, depth + 1)
-                      else callback(closure, depth + 1)
-                    case _ =>
-                      if profile == Profile.Sequential then
-                        nestedCallback(argument, Profile.Pure, depth + 1)
-                      else callback(argument, depth + 1)
+                      nestedCallback(
+                        closure, nested, depth + 1, permitsGuarded,
+                        valueArm = structuralBranches(symbol) && !statement
+                      )
+                    case _ => nestedCallback(
+                        argument, nested, depth + 1, permitsGuarded,
+                        valueArm = structuralBranches(symbol) && !statement
+                      )
                 else if collections(symbol) && callbackArity(argument) > 0 then
                   nestedCallback(argument, Profile.Pure, depth + 1)
                 else if ranges(symbol) && callbackArity(argument) > 0 then
-                  nestedCallback(argument, Profile.StructuralRange, depth + 1)
-                else if permitsStructure && rangeClosures(symbol) && callbackArity(argument) > 0
+                  val nested = if guardedRange(symbol) then Profile.ContinuousRange
+                  else Profile.StructuralRange
+                  nestedCallback(argument, nested, depth + 1)
+                else if areaRanges(symbol) && callbackArity(argument) > 0 then
+                  nestedCallback(argument, Profile.GeneratedArea, depth + 1)
+                else if ((permitsStructure && rangeClosures(symbol)) ||
+                    (permitsAreaFamily && selectedInstanceClosures(symbol))) && callbackArity(
+                    argument
+                  ) > 0
                 then
                   nestedCallback(argument, Profile.Selection, depth + 1)
                 else if permitsStructure && constructorClosures(symbol) &&
@@ -1288,16 +1900,26 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 then
                   callback(argument, depth + 1)
                 else check(argument, depth + 1)
+          case TypeApply(cast: Select, result :: Nil)
+              if cast.symbol == defn.Any_typeCast &&
+                areaMemberProjection(cast.qualifier, result.tpe) =>
+            applied(cast.qualifier, depth + 1)
           case TypeApply(function, _) => applied(function, depth + 1)
           case selection: Select
               if selection.qualifier.isInstanceOf[New] && selection.symbol.isConstructor =>
             constructor(selection.symbol, selection, depth + 1)
           case selection: Select =>
             check(selection.qualifier, depth + 1) &&
-            (collections(selection.symbol) || (permitsStructure && ranges(selection.symbol)) ||
+            (collections(
+              selection.symbol
+            ) || (((permitsStructure || guardedRange(selection.symbol)) && ranges(
+              selection.symbol
+            )) || (permitsAreaFamily && areaRanges(selection.symbol))) ||
               reference(selection, depth + 1))
           case identifier: Ident => collections(identifier.symbol) ||
-            (permitsStructure && ranges(identifier.symbol)) || reference(identifier, depth + 1)
+            (((permitsStructure || guardedRange(identifier.symbol)) && ranges(identifier.symbol)) || (permitsAreaFamily && areaRanges(
+              identifier.symbol
+            ))) || reference(identifier, depth + 1)
           case _ => fail("UNKNOWN", "unsupported callback call target", tree)
 
     private def pureOperands(trees: List[Tree], depth: Int, sequential: Boolean): Boolean =
@@ -1306,7 +1928,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         sharedBudget,
         reportErrors,
         structuralDiagnostic = !sequential,
-        sequentialDiagnostic = sequential
+        sequentialDiagnostic = sequential,
+        continuousRangeRestriction = continuousOnly
       )
       val valid = trees.map(validation.check(_, depth)).forall(identity)
       importedDependencies ++= validation.importedDependencies
@@ -1319,7 +1942,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
     def flatCall(call: flatFsm.Call, depth: Int, graphBoundary: Boolean = false): Boolean =
       if !budget(call.original, depth) then false
-      else if !graphBoundary && (profile != Profile.Sequential || call.graphOnly) then
+      else if !graphBoundary && (profile != Profile.Sequential || call.graphOnly || call.binding)
+      then
         fail(
           "EFFECT",
           "FSM graph construction is unsupported in this callback profile",
@@ -1333,6 +1957,12 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
     def sequentialGuard(guard: behavioral.Guard, depth: Int): Boolean =
       if !budget(guard.original, depth) then false
+      else if profile == Profile.GeneratedArea || profile == Profile.StructuralIf || profile == Profile.StructuralFamily
+      then
+        val nested = new Validation(Profile.Sequential, sharedBudget, reportErrors)
+        val valid = nested.sequentialGuard(guard, depth + 1)
+        importedDependencies ++= nested.importedDependencies
+        valid && dependenciesWithinBudget
       else if profile != Profile.Sequential then
         fail("EFFECT", "behavioral guards are unsupported in this callback profile", guard.original)
       else
@@ -1370,9 +2000,26 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             false
         // Both authored arms are checked even when an earlier check fails. No runtime callback
         // exists until this shared validation has succeeded for the whole conditional.
-        val trueValid = check(tree.thenp, depth + 1)
-        val falseValid = check(tree.elsep, depth + 1)
-        resultValid && predicateValid && trueValid && falseValid
+        val statement = structural.resultType(tree).exists(_ =:= defn.UnitType)
+        val armProfile = if continuousOnly && !statement then Profile.Pure else profile
+        val arms = new Validation(
+          armProfile,
+          sharedBudget,
+          reportErrors,
+          structuralDiagnostic,
+          sequentialDiagnostic,
+          allowGuardedRange = statement && !continuousOnly &&
+            (profile == Profile.StructuralIf || profile == Profile.StructuralFamily),
+          continuousRangeRestriction = continuousOnly,
+          guardedRangeForbidden = guardedRangeForbidden || !statement
+        )
+        inheritLexicalContext(arms)
+        val trueValid = arms.check(tree.thenp, depth + 1)
+        val falseValid = arms.check(tree.elsep, depth + 1)
+        importedDependencies ++= arms.importedDependencies
+        resultValid && predicateValid && trueValid && falseValid &&
+        (dependenciesWithinBudget ||
+          fail("LIMIT", "structural arm dependencies exceed the bounded summary profile", tree))
 
     private def check(tree: Tree, depth: Int): Boolean =
       if !budget(tree, depth) then false
@@ -1399,7 +2046,17 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
               case other => check(other, depth + 1)
             && check(expression, depth + 1)
           case definition: ValDef =>
-            immutable(definition.symbol, definition) && check(definition.rhs, depth + 1)
+            val valid = immutable(definition.symbol, definition) && check(definition.rhs, depth + 1)
+            if valid && profile == Profile.GeneratedArea && localInstanceExpression(definition.rhs)
+            then
+              constructionOwners.headOption.foreach: (owner, _, _) =>
+                localInstances(definition.symbol) = owner
+            valid
+          case definition: TypeDef
+              if profile == Profile.GeneratedArea &&
+                definition.symbol.isClass && definition.symbol.derivesFrom(
+                  requiredClass("nodal.Area")
+                ) => true
           case _: DefDef => true
           case _: Assign => fail("MUTABLE", "callback assignments are unsupported", tree)
           // Scala lowers `val _ = expression` to a single irrefutable Unit match. It evaluates

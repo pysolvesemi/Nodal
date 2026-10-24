@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from native_toolchain.overlay import identity, load_overlay, validate_overlay
+
 from toolchain_lock import (
     MANIFEST_NAME,
     expected_install_id,
@@ -34,10 +36,11 @@ def default_prefix(lock: dict[str, Any], host: tuple[str, str] | None = None) ->
 
 
 def manifest_payload(
-    lock: dict[str, Any], *, mode: str, host: tuple[str, str] | None = None
+    lock: dict[str, Any], *, mode: str, host: tuple[str, str] | None = None,
+    overlay: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     os_name, arch = host or normalize_host()
-    return {
+    result = {
         "schema": 1,
         "lock_id": lock["lock_id"],
         "lock_sha256": lock_digest(lock),
@@ -47,6 +50,9 @@ def manifest_payload(
         "circt_commit": lock["native"]["circt"]["commit"],
         "llvm_commit": lock["native"]["llvm"]["commit"],
     }
+    if overlay is not None:
+        result["overlay"] = overlay
+    return result
 
 
 def write_manifest(
@@ -55,10 +61,11 @@ def write_manifest(
     *,
     mode: str,
     host: tuple[str, str] | None = None,
+    overlay: dict[str, Any] | None = None,
 ) -> Path:
     path = prefix / MANIFEST_NAME
     path.write_text(
-        json.dumps(manifest_payload(lock, mode=mode, host=host), indent=2, sort_keys=True)
+        json.dumps(manifest_payload(lock, mode=mode, host=host, overlay=overlay), indent=2, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )
@@ -70,6 +77,8 @@ def validate_install(
     lock: dict[str, Any],
     *,
     host: tuple[str, str] | None = None,
+    root: Path | None = None,
+    required_overlay: str | None = None,
 ) -> list[str]:
     prefix = prefix.expanduser().resolve()
     try:
@@ -108,6 +117,16 @@ def validate_install(
     if manifest.get("install_mode") not in {"prebuilt", "source"}:
         errors.append(f"{MANIFEST_NAME} install_mode must be prebuilt or source")
 
+    overlay = manifest.get("overlay")
+    if overlay is not None:
+        if manifest.get("install_mode") != "prebuilt" or selected_host != ("linux", "x86_64"):
+            errors.append("managed repair requires the Linux x86_64 prebuilt profile")
+        errors.extend(validate_overlay(prefix, root or Path(__file__).resolve().parents[2], lock, overlay))
+    elif (prefix / "share/nodal/overlays").exists():
+        errors.append("overlay receipts exist without installed overlay identity")
+    if required_overlay is not None and (not isinstance(overlay, dict) or overlay.get("id") != required_overlay):
+        errors.append(f"required managed overlay is missing: {required_overlay}")
+
     os_name = str(manifest_host.get("os", "")) or normalize_host()[0]
     for relative in required_install_paths(os_name):
         if not (prefix / relative).is_file():
@@ -121,14 +140,20 @@ def candidate_prefixes(
     *,
     explicit: Path | None = None,
     host: tuple[str, str] | None = None,
+    required_overlay: str | None = None,
 ) -> list[Path]:
     values: list[Path] = []
     if explicit is not None:
         values.append(explicit)
     if direct := os.environ.get("NODAL_NATIVE_TOOLCHAIN"):
         values.append(Path(direct))
-    values.append(root / ".toolchains/native" / expected_install_id(lock, host))
-    values.append(default_prefix(lock, host))
+    suffix = ""
+    if required_overlay is not None:
+        load_overlay(root, lock, required_overlay)
+        suffix = "-" + required_overlay
+    values.append(root / ".toolchains/native" / (expected_install_id(lock, host) + suffix))
+    base = default_prefix(lock, host)
+    values.append(base.with_name(base.name + suffix))
 
     result: list[Path] = []
     seen: set[Path] = set()
@@ -146,12 +171,13 @@ def discover(
     *,
     explicit: Path | None = None,
     host: tuple[str, str] | None = None,
+    required_overlay: str | None = None,
 ) -> tuple[Path | None, dict[str, list[str]]]:
     rejected: dict[str, list[str]] = {}
-    for prefix in candidate_prefixes(root, lock, explicit=explicit, host=host):
+    for prefix in candidate_prefixes(root, lock, explicit=explicit, host=host, required_overlay=required_overlay):
         if not prefix.exists():
             continue
-        errors = validate_install(prefix, lock, host=host)
+        errors = validate_install(prefix, lock, host=host, root=root, required_overlay=required_overlay)
         if not errors:
             return prefix, rejected
         rejected[str(prefix)] = errors
@@ -212,9 +238,14 @@ def plan_install(
     prefix: Path | None = None,
     host: tuple[str, str] | None = None,
     jobs: int | None = None,
+    overlay: str | None = None,
 ) -> dict[str, Any]:
     selected_host = host or normalize_host()
-    selected_prefix = (prefix or default_prefix(lock, selected_host)).expanduser().resolve()
+    profile = load_overlay(root, lock, overlay) if overlay is not None else None
+    base = default_prefix(lock, selected_host)
+    if profile is not None:
+        base = base.with_name(base.name + "-" + profile["id"])
+    selected_prefix = (prefix or base).expanduser().resolve()
     selected_mode = mode
     commands: list[list[str]] = []
 
@@ -232,7 +263,9 @@ def plan_install(
     else:
         raise BootstrapError(f"unsupported install mode: {mode}")
 
-    return {
+    if profile is not None and (selected_mode != "prebuilt" or selected_host != ("linux", "x86_64")):
+        raise BootstrapError("managed repair requires the Linux x86_64 prebuilt profile")
+    result = {
         "lock_id": lock["lock_id"],
         "host": {"os": selected_host[0], "arch": selected_host[1]},
         "mode": selected_mode,
@@ -240,3 +273,6 @@ def plan_install(
         "asset": _asset_summary(asset),
         "commands": commands,
     }
+    if profile is not None:
+        result["overlay"] = identity(profile)
+    return result

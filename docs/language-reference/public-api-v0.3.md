@@ -270,3 +270,32 @@ Statement consumers may share one captured fill; live control/event consumers
 currently admit only one occurrence of each retained fill per complete expression,
 including all primitive argument slots, and reject a fill shared across OR monitor
 occurrences. Ordinary scope, unit, event and definite-assignment rules still apply.
+
+## Additive Areas and structural conditionals
+
+The approved [StructuralIf](../design-gates/NodalStructuralIf-DG-v0.1.md),
+[AreasHierarchy](../design-gates/NodalAreasHierarchy-DG-v0.1.md) and
+[GeneratedAreas](../design-gates/NodalGeneratedAreas-DG-v0.1.md) gates extend this
+public contract without requiring `staticIf`, export or view boilerplate in
+common source. In supported construction contexts, ordinary `if` syntax captures
+exact Integer parameter/index comparisons and Boolean composition as structural
+IR. Ordinary Scala Boolean control is unchanged. Runtime values cannot select
+hardware structure; procedural indices are not generate constants. Read-only
+value joins preserve exact types and cannot return writable capabilities.
+
+`new Area` supports captured eager immutable members, nested/reusable/helper
+forms and separately compiled producers. An Area is a lexical owner, not a Module
+or Data value. Existing `for (i <- hdlRange(...)) yield new Area { ... }` syntax
+captures a typed family template; static ordinal selection preserves actual
+member capabilities, domain, scope and guarded existence. It does not flatten
+symbolic families, select a representative default, reflect over getters or
+make runtime hierarchy selection legal. Ordinary lexical external writes and
+selected generated external writes are different admissions: the latter remain
+required, unimplemented F-058.B.2.2 work, including selected Instance inputs and
+Interface drives requiring selection-qualified driver proof.
+
+The [F-058.A.1 crosswalk](../implementation/increment58-readiness.md#checkpoint-76-additive-area-contract-reconciliation)
+identifies maintained compile-positive/negative prototypes, separate-compilation
+and compatibility evidence, and later owner lineage. It accepts this bounded
+contract, not every historical fixture at current runtime, portable Verilog-2005
+emission, broader hierarchy completion or a larger construction capacity policy.

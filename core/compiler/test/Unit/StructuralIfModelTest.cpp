@@ -9,6 +9,7 @@
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/TargetCapabilities.h"
 #include "nodal/Support/BackendCapabilityRegistry.h"
 
@@ -77,7 +78,7 @@ std::string replace(std::string text, std::string from, std::string to) {
 }
 
 } // namespace
-int main() {
+int main(int argc, char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal("nodal-structural-if-model-unit-tests");
   DialectRegistry registry;
   registry.insert<nodal::NodalDialect>();
@@ -87,9 +88,25 @@ int main() {
   std::string diagnostics;
   ScopedDiagnosticHandler capture(&context, [&](Diagnostic &d) {
     llvm::raw_string_ostream out(diagnostics);
+    d.getLocation().print(out);
+    out << ": ";
     d.print(out);
     return success();
   });
+  // Verify actual bridge-produced input with the same native parser and verifier.
+  // This mode does not plan, materialize, evaluate or export the design.
+  if (argc != 1) {
+    if (argc != 3 || std::string(argv[1]) != "--verify-file") {
+      llvm::errs() << "usage: " << argv[0] << " [--verify-file PATH]\n";
+      return 2;
+    }
+    auto ir = parseSourceFile<mlir::ModuleOp>(argv[2], ParserConfig(&context, false));
+    bool valid = ir && succeeded(verify(*ir));
+    if (!valid)
+      llvm::errs() << diagnostics << '\n';
+    llvm::outs() << "STRUCTURAL_IF_FILE_" << (valid ? "PASS " : "FAIL ") << argv[2] << '\n';
+    return valid ? 0 : 1;
+  }
   auto parse = [&](std::string body, bool quality = false, std::string root = "") {
     // A direct module identity is canonical; no synthetic runtime carrier is used.
     std::string source =
@@ -118,6 +135,24 @@ int main() {
     bool valid = ir && succeeded(verify(*ir));
     check(name, ir && valid == expected);
   };
+  const std::string indexLiteral =
+      "%index = \"nodal.constant\"() <{value = 0 : index, metadata = {}}> : () -> index\n";
+  auto indexArm = [&](std::string producer) {
+    return replace(base(), yield("then", "x", "!nodal.uint<8>"),
+                   producer + yield("then", "x", "!nodal.uint<8>"));
+  };
+  verifyCase("closed-index-literal-in-structural-body", indexArm(indexLiteral), true);
+  verifyCase("closed-index-literal-wrong-attribute-type",
+             indexArm(replace(indexLiteral, "0 : index", "0 : i64")), false);
+  verifyCase("closed-index-literal-wrong-result-type",
+             indexArm(replace(indexLiteral, "-> index", "-> f64")), false);
+  verifyCase("index-arithmetic-is-not-static-Integer",
+             indexArm(replace(indexLiteral, "nodal.constant", "nodal.const_expr")), false);
+  verifyCase("runtime-index-producer-is-not-static-Integer",
+             indexArm(replace(indexLiteral, "nodal.constant", "nodal.digital_expr")), false);
+  verifyCase("closed-index-literal-unit-refused",
+             indexArm(replace(indexLiteral, "}> :", "}> {unit = \"s\"} :")), false);
+
   const std::string sparseEnum =
       "\"nodal.enum\"() <{sym_name = \"Mode\", underlying_type = !nodal.uint<3>, "
       "encoding = \"custom\", metadata = {abi_version = 1 : i64, semantic_type = \"Mode\", "
@@ -501,6 +536,402 @@ int main() {
             failed(nodal::verifyDigitalMaterializationReport(module)));
     }
   }
+  {
+    auto ir = parse(base());
+    nodal::StructuralIfOp owner;
+    if (ir)
+      ir->walk([&](nodal::StructuralIfOp operation) { owner = operation; });
+    Operation *left = owner ? &owner->getRegion(0).front().back() : nullptr;
+    Operation *right = owner ? &owner->getRegion(1).front().back() : nullptr;
+    check("actual-opposite-arm-exclusivity",
+          left && right && nodal::areOppositeStructuralArms(left, right));
+    check("same-arm-not-exclusive", left && !nodal::areOppositeStructuralArms(left, left));
+    std::string second = choice();
+    for (size_t at = 0; (at = second.find("choice", at)) != std::string::npos; at += 7)
+      second.replace(at, 6, "choice2");
+    second = replace(second, "%joined", "%joined2");
+    auto sameModule = parse(base() + second);
+    SmallVector<nodal::StructuralIfOp, 2> choices;
+    if (sameModule)
+      sameModule->walk([&](nodal::StructuralIfOp operation) { choices.push_back(operation); });
+    check("equal-predicate-distinct-choice-not-exclusive",
+          choices.size() == 2 &&
+              !nodal::areOppositeStructuralArms(&choices[0]->getRegion(0).front().back(),
+                                                &choices[1]->getRegion(1).front().back()));
+    auto independent = parse(base());
+    nodal::StructuralIfOp other;
+    if (independent)
+      independent->walk([&](nodal::StructuralIfOp operation) { other = operation; });
+    check("equal-predicate-foreign-owner-not-exclusive",
+          left && other &&
+              !nodal::areOppositeStructuralArms(left, &other->getRegion(1).front().back()));
+  }
+  {
+    const std::string scalar = "!nodal.uint<8>";
+    auto generate = [&](std::string name, std::string index, std::string upper, std::string body) {
+      return "%" + index + "Family = \"nodal.generate\"(%localLo, %" + upper +
+             ", %localStep) <{induction = \"" + index + "\", region_id = \"Fixture." + name +
+             "\", induction_path = \"Fixture." + name + "." + index +
+             "\", metadata = {semantic_path = \"Fixture." + name +
+             "\", maximum_trip_count = 2 : i64}}> ({^bb0(%" + index + ": i64):\n" + body + "%" +
+             index + "Stored = \"nodal.digital_storage\"() <{name = \"stored\", kind = \"wire\", " +
+             metadata(name + ".stored") + "}> : () -> " + scalar + "\n" +
+             "\"nodal.generated_export\"(%" + index +
+             "Stored) <{member = \"stored\", access = \"read\", " +
+             metadata(name + ".export.stored") + "}> : (" + scalar + ") -> ()\n" +
+             "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+    };
+    const std::string value =
+        "%used = \"nodal.digital_storage\"() <{name = \"used\", kind = \"wire\", " +
+        metadata("choice.then.used") + "}> : () -> " + scalar + "\n" +
+        "\"nodal.digital_assign\"(%used, %ax) <{kind = \"continuous\", " +
+        metadata("choice.then.assignA") + "}> : (" + scalar + ", " + scalar + ") -> ()\n" +
+        "%usedB = \"nodal.digital_storage\"() <{name = \"usedB\", kind = \"wire\", " +
+        metadata("choice.then.usedB") + "}> : () -> " + scalar + "\n" +
+        "\"nodal.digital_assign\"(%usedB, %bx) <{kind = \"continuous\", " +
+        metadata("choice.then.assignB") + "}> : (" + scalar + ", " + scalar + ") -> ()\n";
+    auto body = [&](bool nested) {
+      const std::string generated = generate(
+          "choice.then.outer", "outerIndex", "bound",
+          nested ? generate("choice.then.outer.inner", "innerIndex", "bound", value) : value);
+      return param() + compare() + literal("hi", 2) + port("a", scalar) + port("b", scalar) +
+             "\"nodal.structural_if\"(%pred, %hi, %a, %b) <{contract_version = "
+             "\"structural-if-v1\", "
+             "region_id = \"Fixture.choice\", operandSegmentSizes = array<i32: 1, 3, 0>, " +
+             metadata("choice") + "}> ({^bb0(%bound: i64, %ax: " + scalar + ", %bx: " + scalar +
+             "):\n" + literal("localLo", 0) + literal("localStep", 1) + generated + yield("then") +
+             "}, {^bb0:\n" + yield("else") + "}) : (!nodal.static_predicate, i64, " + scalar +
+             ", " + scalar + ") -> ()\n";
+    };
+    verifyCase("generate-bound-then-body-first-use", body(false), true);
+    verifyCase("nested-generate-first-use-preorder", body(true), true);
+    verifyCase(
+        "nested-generate-misordered-capture-reject",
+        replace(replace(body(true), "%used, %ax", "%used, %bx"), "%usedB, %bx", "%usedB, %ax"),
+        false);
+    verifyCase("nested-generate-duplicate-capture-reject",
+               replace(body(true), "%pred, %hi, %a, %b", "%pred, %hi, %a, %a"), false);
+    verifyCase("nested-generate-unused-capture-reject",
+               replace(body(true), "%usedB, %bx", "%usedB, %ax"), false);
+    auto repaired = parse(
+        replace(replace(body(true), "%used, %ax", "%used, %bx"), "%usedB, %bx", "%usedB, %ax"));
+    nodal::StructuralIfOp choiceOp;
+    if (repaired)
+      repaired->walk([&](nodal::StructuralIfOp value) { choiceOp = value; });
+    unsigned work = 0;
+    check("generated-capture-canonicalization-shares-preorder",
+          choiceOp && succeeded(nodal::canonicalizeStructuralIfCaptures(choiceOp, work, 65536)) &&
+              succeeded(verify(*repaired)));
+    work = 0;
+    check("generated-capture-inventory-budget-reject",
+          choiceOp && failed(nodal::canonicalizeStructuralIfCaptures(choiceOp, work, 1)));
+  }
+
+  {
+    const std::string scalar = "!nodal.uint<8>";
+    auto generate = [&](std::string name, std::string index, std::string upper, std::string body) {
+      return "%" + index + "Family = \"nodal.generate\"(%localLo, %" + upper +
+             ", %localStep) <{induction = \"" + index + "\", region_id = \"Fixture." + name +
+             "\", induction_path = \"Fixture." + name + "." + index +
+             "\", metadata = {semantic_path = \"Fixture." + name +
+             "\", maximum_trip_count = 2 : i64}}> ({^bb0(%" + index + ": i64):\n" + body + "%" +
+             index + "Stored = \"nodal.digital_storage\"() <{name = \"stored\", kind = \"wire\", " +
+             metadata(name + ".stored") + "}> : () -> " + scalar + "\n" +
+             "\"nodal.generated_export\"(%" + index +
+             "Stored) <{member = \"stored\", access = \"read\", " +
+             metadata(name + ".export.stored") + "}> : (" + scalar + ") -> ()\n" +
+             "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+    };
+    const std::string value =
+        "%used = \"nodal.digital_expr\"(%ax, %bx) <{operator_name = \"digital_xor\", " +
+        metadata("used") + "}> : (" + scalar + ", " + scalar + ") -> " + scalar + "\n";
+    auto body = [&](bool nested) {
+      const std::string generated = generate(
+          "choice.then.outer", "outerIndex", "bound",
+          nested ? generate("choice.then.outer.inner", "innerIndex", "bound", value) : value);
+      return param() + compare() + literal("hi", 2) + port("a", scalar) + port("b", scalar) +
+             "\"nodal.structural_if\"(%pred, %hi, %a, %b) <{contract_version = "
+             "\"structural-if-v1\", "
+             "region_id = \"Fixture.choice\", operandSegmentSizes = array<i32: 1, 3, 0>, " +
+             metadata("choice") + "}> ({^bb0(%bound: i64, %ax: " + scalar + ", %bx: " + scalar +
+             "):\n" + literal("localLo", 0) + literal("localStep", 1) + generated + yield("then") +
+             "}, {^bb0:\n" + yield("else") + "}) : (!nodal.static_predicate, i64, " + scalar +
+             ", " + scalar + ") -> ()\n";
+    };
+    verifyCase("scalar-generate-bound-then-body-first-use", body(false), true);
+    auto widthForgery = [&](std::string token) {
+      return replace(
+          body(true), "%used = ",
+          "%forgedWidth = \"nodal.digital_storage\"() <{name = \"forgedWidth\", kind = \"wire\", " +
+              metadata("choice.then.outer.inner.forgedWidth") +
+              "}> : () -> !nodal.digital<\"uint\", \"" + token + "\">\n%used = ");
+    };
+    verifyCase("generated-parent-context-does-not-bind-induction-as-width",
+               widthForgery("Fixture.choice.then.outer.outerIndex"), false);
+    verifyCase("generated-parent-context-rejects-foreign-width-owner",
+               widthForgery("Foreign.other.index"), false);
+
+    verifyCase("scalar-nested-generate-first-use-preorder", body(true), true);
+    verifyCase("scalar-nested-generate-misordered-capture-reject",
+               replace(body(true), "(%ax, %bx)", "(%bx, %ax)"), false);
+    verifyCase("scalar-nested-generate-duplicate-capture-reject",
+               replace(body(true), "%pred, %hi, %a, %b", "%pred, %hi, %a, %a"), false);
+    verifyCase("scalar-nested-generate-unused-capture-reject",
+               replace(body(true), "(%ax, %bx)", "(%ax, %ax)"), false);
+    auto repaired = parse(replace(body(true), "(%ax, %bx)", "(%bx, %ax)"));
+    nodal::StructuralIfOp choiceOp;
+    if (repaired)
+      repaired->walk([&](nodal::StructuralIfOp value) { choiceOp = value; });
+    unsigned work = 0;
+    check("scalar-generated-capture-canonicalization-shares-preorder",
+          choiceOp && succeeded(nodal::canonicalizeStructuralIfCaptures(choiceOp, work, 65536)) &&
+              succeeded(verify(*repaired)));
+    work = 0;
+    check("scalar-generated-capture-inventory-budget-reject",
+          choiceOp && failed(nodal::canonicalizeStructuralIfCaptures(choiceOp, work, 1)));
+  }
+
+  {
+    const std::string vec = loops::shape("2");
+    auto verifyGuardedCase = [&](std::string name, std::string source, bool expected) {
+      auto ir = parse(source);
+      bool valid = ir && succeeded(verify(*ir));
+      const std::string diagnostic = name == "guarded-legacy-empty-zero-step"
+                                         ? "NODAL-ITERATION-043-"
+                                         : "NODAL-DIGITAL-055-014";
+      check(name, ir && valid == expected &&
+                      (expected || diagnostics.find(diagnostic) != std::string::npos));
+    };
+    auto generated = [&](std::string body, std::string id = "guard.then.range", int maximum = 2,
+                         std::string index = "iv", std::string prefix = "") {
+      return "\"nodal.generate\"(%" + prefix + "lo, %" + prefix + "hi, %" + prefix +
+             "step) <{induction = \"i\", region_id = \"Fixture." + id +
+             "\", induction_path = \"Fixture." + id + ".i\", metadata = {semantic_path = \"Fixture." +
+             id + "\", maximum_trip_count = " + std::to_string(maximum) +
+             " : i64}}> ({^bb0(%" + index + ": i64):\n" + body +
+             "}) : (i64, i64, i64) -> ()\n";
+    };
+    auto scopedYield = [&](std::string owner, std::string arm) {
+      return replace(yield(arm), "Fixture.choice.", "Fixture." + owner + ".");
+    };
+    auto guarded = [&](std::string body, bool captures = false, int upper = 2, int step = 1) {
+      return param() + compare() +
+             (captures ? loops::port("out", vec, "output") + loops::port("in", vec) : "") +
+             "\"nodal.structural_if\"(%pred" + (captures ? ", %out, %in, %out, %in" : "") +
+             ") <{contract_version = \"structural-if-v1\", region_id = \"Fixture.guard\", "
+             "operandSegmentSizes = array<i32: 1, " + std::string(captures ? "2" : "0") +
+             ", " + std::string(captures ? "2" : "0") + ">, " + metadata("guard") + "}> ({^bb0(" +
+             (captures ? "%target: " + vec + ", %input: " + vec : "") + "):\n" +
+             literal("lo", 0) + literal("hi", upper) + literal("step", step) +
+             generated(body, "guard.then.range", step > 0 ? (upper + step - 1) / step : 0) +
+             scopedYield("guard", "then") + "}, {^bb0(" +
+             (captures ? "%elseTarget: " + vec + ", %elseInput: " + vec : "") + "):\n" +
+             (captures ? loops::assign("elseTarget", "elseInput", vec) : "") +
+             scopedYield("guard", "else") +
+             "}) : (!nodal.static_predicate" + (captures ? ", " + vec + ", " + vec + ", " + vec + ", " + vec : "") +
+             ") -> ()\n";
+    };
+    // Exercise the literal through actual projections and a continuous assignment,
+    // not merely as an unused operation in an otherwise valid structural arm.
+    auto projectedArm = [&](int index = 0) {
+      auto constant = replace(indexLiteral, "0 : index", std::to_string(index) + " : index");
+      auto projections = replace(loops::index("armDst", "target", "index", vec),
+                                 ", i64)", ", index)") +
+                         replace(loops::index("armSrc", "input", "index", vec),
+                                 ", i64)", ", index)");
+      auto source = replace(guarded("", true, 0), literal("lo", 0),
+                            constant + projections + loops::assign("armDst", "armSrc") +
+                                literal("lo", 0));
+      // The indexed then-arm write and whole else-arm write each cover the output.
+      for (auto at = source.find(vec); at != std::string::npos; at = source.find(vec))
+        source.replace(at, vec.size(), loops::shape("1"));
+      return source;
+    };
+    auto verifyProjection = [&](std::string name, int index, bool expected) {
+      auto ir = parse(projectedArm(index));
+      bool valid = ir && succeeded(verify(*ir));
+      check(name, ir && valid == expected &&
+                      (expected || diagnostics.find("NODAL-SHAPE-043-002") != std::string::npos));
+    };
+    verifyProjection("arm-index-projection-assignment", 0, true);
+    verifyProjection("arm-index-projection-negative-bound", -1, false);
+    verifyProjection("arm-index-projection-upper-bound", 1, false);
+    // Query the very same consumed selector after a local adversarial mutation.
+    // These independent-entry controls cannot pass because of parser rejection.
+    auto projectionProof = [&](std::string name, unsigned mutation, bool expected) {
+      auto source = projectedArm();
+      if (mutation == 1) {
+        // Preserve the existing canonical i64 literal path as a predecessor.
+        source = replace(source, indexLiteral, literal("index", 0));
+        for (auto at = source.find(", index)"); at != std::string::npos;
+             at = source.find(", index)"))
+          source.replace(at, std::string(", index)").size(), ", i64)");
+      }
+      auto ir = parse(source);
+      nodal::ShapeIndexOp projection;
+      if (ir)
+        ir->walk([&](nodal::ShapeIndexOp op) {
+          if (!projection)
+            projection = op;
+        });
+      bool valid = false;
+      if (projection) {
+        Value selector = projection->getOperand(1);
+        Operation *constant = selector.getDefiningOp();
+        auto owner = llvm::cast<nodal::StructuralIfOp>(constant->getParentOp());
+        OpBuilder builder(&context);
+        if (mutation == 2) {
+          constant->setAttr("unit", builder.getStringAttr("s"));
+        } else if (mutation == 3) {
+          Block &sibling = owner->getRegion(1).front();
+          constant->moveBefore(&sibling, sibling.begin());
+        } else if (mutation == 4) {
+          constant->moveAfter(projection);
+        } else if (mutation == 5) {
+          owner->setAttr("contract_version", builder.getStringAttr("invalid"));
+        } else if (mutation == 6) {
+          constant->setAttr("value", builder.getI64IntegerAttr(0));
+        }
+        auto proof = nodal::resolveShapeIndexProof(selector, projection);
+        valid = succeeded(proof);
+        if (valid && expected)
+          valid = proof->identity.kind == nodal::StaticShapeIndexIdentity::Literal &&
+                  proof->identity.literal == 0 && proof->identity.root == nullptr &&
+                  proof->attainedBounds && proof->attainedBounds->lower == 0 &&
+                  proof->attainedBounds->upper == 0;
+      }
+      check(name, ir && projection && valid == expected);
+    };
+    projectionProof("arm-index-projection-exact-proof", 0, true);
+    projectionProof("arm-index-projection-i64-predecessor", 1, true);
+    projectionProof("arm-index-projection-unit-refused", 2, false);
+    projectionProof("arm-index-projection-sibling-refused", 3, false);
+    projectionProof("arm-index-projection-forward-refused", 4, false);
+    projectionProof("arm-index-projection-malformed-owner-refused", 5, false);
+    projectionProof("arm-index-projection-attribute-type-refused", 6, false);
+    const std::string selected = loops::index("dst", "target", "iv", vec) +
+                                 loops::index("src", "input", "iv", vec);
+    const std::string assigned = selected + loops::assign("dst", "src");
+    verifyGuardedCase("guarded-legacy-continuous-indexed", guarded(assigned, true), true);
+    auto laneChoice = replace(choice(), "%a, %b", "%src, %src");
+    laneChoice = replace(laneChoice, "%pred", "%lanePred");
+    verifyGuardedCase("guarded-legacy-index-structural-value",
+               guarded(selected + compare("lanePred", "eq", "iv", "iv") + laneChoice +
+                           loops::assign("dst", "joined"), true), true);
+    verifyGuardedCase("guarded-legacy-checked-empty", guarded("", false, 0), true);
+    verifyGuardedCase("guarded-legacy-empty-zero-step", guarded("", false, 0, 0), false);
+    verifyGuardedCase("guarded-legacy-storage-refused", guarded(loops::wire("forbidden", loops::u8)), false);
+    verifyGuardedCase("guarded-legacy-state-refused",
+               guarded(selected + replace(loops::assign("dst", "src"), "continuous", "register_next"),
+                       true), false);
+    verifyGuardedCase("guarded-legacy-further-generate-refused",
+               guarded(generated("", "guard.then.range.nested", 2, "nestedIv")), false);
+    verifyGuardedCase("guarded-legacy-family-refused",
+               guarded(replace(generated("", "guard.then.range.nested", 2, "nestedIv"),
+                               "-> ()\n", "-> !nodal.generated_family\n")), false);
+    // The old attribute-domain form must not enter via the analog/empty exemption.
+    auto attributeDomain = replace(guarded("", false, 0), "\"nodal.generate\"(%lo, %hi, %step)",
+                                   "\"nodal.generate\"()");
+    attributeDomain = replace(attributeDomain, "induction = \"i\"",
+                              "lower = 0 : i64, upper = 0 : i64, step = 1 : i64, induction = \"i\"");
+    attributeDomain = replace(attributeDomain, "^bb0(%iv: i64)", "^bb0");
+    attributeDomain = replace(attributeDomain, "(i64, i64, i64) -> ()", "() -> ()");
+    verifyGuardedCase("guarded-legacy-attribute-domain-refused", attributeDomain, false);
+    // Use the direct owner entry point as well: malformed contents cannot be
+    // accepted merely because a zero-result body has no digital operations.
+    auto directGenerate = [&](std::string name, std::string source, bool expected) {
+      auto ir = parse(source);
+      nodal::GenerateOp owner;
+      if (ir)
+        ir->walk([&](nodal::GenerateOp op) {
+          if (!owner)
+            owner = op;
+        });
+      bool valid = owner && succeeded(nodal::verifyDigitalGenerateBody(owner));
+      check(name, owner && valid == expected &&
+                      (expected || diagnostics.find("NODAL-DIGITAL-055-014") != std::string::npos));
+    };
+    const std::string analog =
+        "%tap = \"nodal.node\"() <{name = \"tap\", source_path = \"Fixture.tap\", "
+        "metadata = {}}> : () -> !nodal.terminal<\"electrical\">\n";
+    verifyGuardedCase("guarded-legacy-analog-only-refused", guarded(analog), false);
+    directGenerate("guarded-legacy-analog-only-direct", guarded(analog), false);
+    directGenerate("guarded-legacy-attribute-domain-direct", attributeDomain, false);
+    directGenerate("guarded-legacy-empty-direct", guarded("", false, 0), true);
+    directGenerate("guarded-legacy-storage-direct", guarded(loops::wire("forbidden", loops::u8)), false);
+    directGenerate("guarded-legacy-nested-direct",
+                   guarded(generated("", "guard.then.range.nested", 2, "nestedIv")), false);
+    const std::string nested =
+        compare("innerPred", "eq", "iv", "iv") +
+        "\"nodal.structural_if\"(%innerPred) <{contract_version = \"structural-if-v1\", "
+        "region_id = \"Fixture.inner\", operandSegmentSizes = array<i32: 1, 0, 0>, " +
+        metadata("inner") + "}> ({^bb0:\n" + loops::wire("hidden", loops::u8) + scopedYield("inner", "then") +
+        "}, {^bb0:\n" + scopedYield("inner", "else") + "}) : (!nodal.static_predicate) -> ()\n";
+    verifyGuardedCase("guarded-legacy-nested-if-storage-refused", guarded(nested), false);
+    auto ir = parse(guarded(nested));
+    nodal::StructuralIfOp inner;
+    if (ir)
+      ir->walk([&](nodal::StructuralIfOp op) {
+        if (op->getAttrOfType<StringAttr>("region_id").getValue() == "Fixture.inner")
+          inner = op;
+      });
+    check("guarded-legacy-nested-if-independent-entry",
+          inner && failed(nodal::verifyStructuralIfOperation(inner)) &&
+              diagnostics.find("NODAL-DIGITAL-055-014") != std::string::npos);
+    // A value-producing enclosing arm is not the new statement-only admission.
+    auto valueArm = replace(base(), yield("then", "x", "!nodal.uint<8>"),
+                            literal("lo", 0) + literal("hi", 0) + literal("step", 1) +
+                                generated("", "guard.then.range", 0) + yield("then", "x", "!nodal.uint<8>"));
+    verifyGuardedCase("guarded-legacy-value-parent-refused", valueArm, false);
+    directGenerate("guarded-legacy-value-parent-direct", valueArm, false);
+    // The immediate statement arm cannot hide an enclosing value choice or
+    // generated family from either recursive or standalone verification.
+    auto localGuard = replace(guarded(""), param() + compare(),
+                              literal("guardZero", 0) +
+                                  compare("guardPred", "eq", "guardZero", "guardZero"));
+    localGuard = replace(localGuard, "\"nodal.structural_if\"(%pred",
+                         "\"nodal.structural_if\"(%guardPred");
+    auto outerValue = replace(base(), yield("then", "x", "!nodal.uint<8>"),
+                              localGuard + yield("then", "x", "!nodal.uint<8>"));
+    verifyGuardedCase("guarded-legacy-outer-value-ancestor-refused", outerValue, false);
+    directGenerate("guarded-legacy-outer-value-ancestor-direct", outerValue, false);
+    const std::string exported =
+        loops::wire("familyStorage", loops::u8) +
+        "\"nodal.generated_export\"(%familyStorage) <{member = \"stored\", access = \"read\", " +
+        metadata("outerFamily.export") + "}> : (!nodal.uint<8>) -> ()\n";
+    auto outerFamily = generated(localGuard + exported, "outerFamily", 2, "familyIv", "family");
+    // The last signature belongs to the outer owner, not the nested zero-result range.
+    auto signature = outerFamily.rfind("(i64, i64, i64) -> ()");
+    outerFamily.replace(signature, std::string("(i64, i64, i64) -> ()").size(),
+                        "(i64, i64, i64) -> !nodal.generated_family");
+    outerFamily = literal("familylo", 0) + literal("familyhi", 2) +
+                  literal("familystep", 1) + outerFamily;
+    verifyGuardedCase("guarded-legacy-outer-family-ancestor-refused", outerFamily, false);
+    directGenerate("guarded-legacy-outer-family-ancestor-direct", outerFamily, false);
+    auto wrapped = parse(guarded(""));
+    nodal::StructuralIfOp wrappedGuard;
+    nodal::GenerateOp wrappedRange;
+    if (wrapped) {
+      wrapped->walk([&](nodal::StructuralIfOp op) { wrappedGuard = op; });
+      wrapped->walk([&](nodal::GenerateOp op) { wrappedRange = op; });
+    }
+    if (wrappedGuard && wrappedRange) {
+      OpBuilder builder(&context);
+      builder.setInsertionPoint(wrappedGuard);
+      OperationState state(wrappedGuard.getLoc(), "test.unknown_region");
+      state.addRegion();
+      Operation *wrapper = builder.create(state);
+      wrapper->getRegion(0).push_back(new Block());
+      Block &body = wrapper->getRegion(0).front();
+      wrappedGuard->moveBefore(&body, body.end());
+    }
+    check("guarded-legacy-unknown-ancestor-independent-entry",
+          wrappedGuard && wrappedRange && failed(nodal::verifyDigitalGenerateBody(wrappedRange)) &&
+              diagnostics.find("NODAL-DIGITAL-055-014") != std::string::npos);
+
+
+  }
+
   llvm::outs() << "STRUCTURAL_IF_CASES " << cases << " FAILURES " << failures << '\n';
   return failures ? 1 : 0;
 }

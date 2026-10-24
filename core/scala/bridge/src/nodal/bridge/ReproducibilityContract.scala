@@ -355,6 +355,9 @@ private[nodal] object ReproducibilityContract:
     ))
   )
 
+  private def hasGeneratedDigitalFacts(value: KernelGeneratedRegionSnapshot): Boolean =
+    value.digitalBody.nonEmpty || value.yieldedArea.nonEmpty || value.exports.nonEmpty
+
   private def digitalGraph(snapshot: ConstructionSnapshot): JsonValue = JObject(Vector(
     "expressions" -> array(snapshot.digitalExpressions.sortBy(_.path).map(value =>
       JObject(Vector(
@@ -399,7 +402,30 @@ private[nodal] object ReproducibilityContract:
           "ordinal" -> evidence.ordinal.map(number).getOrElse(JNull),
           "name" -> optionalString(evidence.name)
         )
-      ))
+      ) ++ value.generatedMember.toVector.map(member =>
+        "generated_member" -> obj((Vector(
+          "family" -> string(member.family),
+          "ordinal" -> string(member.ordinal),
+          "member" -> string(member.member),
+          "access" -> string(member.access)
+        ) ++ member.familyInput.toVector.map(input =>
+          "family_input" -> string(input)
+        ) ++ Option.when(member.selectionPrefix.nonEmpty)(
+          "selection_prefix" -> array(member.selectionPrefix.map(frame =>
+            obj(
+              "family" -> string(frame.family),
+              "ordinal" -> string(frame.ordinal),
+              "member" -> string(frame.member)
+            )
+          ))
+        ).toVector)*)
+      ) ++ value.interfaceMember.toVector.map(member =>
+        "interface_member" -> obj(
+          "endpoint" -> string(member.endpoint),
+          "member" -> string(member.member),
+          "role" -> string(member.role)
+        )
+      ) ++ Option.when(value.hierarchyDriver)("hierarchy_driver" -> JBoolean(true)))
     )),
     "assignments" -> array(snapshot.digitalAssignments.sortBy(_.path).map(value =>
       JObject(Vector(
@@ -522,7 +548,7 @@ private[nodal] object ReproducibilityContract:
       )
     ))).toVector ++ Option.when(snapshot.flatFsms.nonEmpty)("flat_fsms" ->
     array(snapshot.flatFsms.sortBy(_.path).map(value =>
-      obj(
+      obj((Vector(
         "path" -> string(value.path),
         "owner" -> string(value.owner),
         "parent_region" -> optionalString(value.parentRegion),
@@ -551,13 +577,16 @@ private[nodal] object ReproducibilityContract:
           )
         )),
         "transitions" -> array(value.transitions.map(edge =>
-          obj(
+          obj((Vector(
             "source_case" -> string(edge.sourceCase),
-            "destination_case" -> string(edge.destinationCase),
+            "destination_case" -> optionalString(edge.destinationCase),
             "mode" -> string(edge.mode),
             "guard" -> string(edge.guard),
             "source_ordinal" -> number(edge.sourceOrdinal)
-          )
+          ) ++ Option.when(value.stack.nonEmpty)(Vector(
+            "kind" -> string(edge.kind),
+            "resume_case" -> optionalString(edge.resumeCase)
+          )).toVector.flatten)*)
         )),
         "actions" -> array(value.actions.map(action =>
           obj(
@@ -573,7 +602,95 @@ private[nodal] object ReproducibilityContract:
             "source_ordinal" -> number(action.sourceOrdinal)
           )
         ))
-      )
+      ) ++ value.stack.map(stack =>
+        "stack" -> obj(
+          "contract" -> string("flat-fsm-v5"),
+          "capacity" -> number(stack.capacity),
+          "pointer_width" -> number(stack.pointerWidth),
+          "pointer_storage" -> string(stack.pointerStorage),
+          "frame_storage" -> array(stack.frameStorage.map(string)),
+          "actual_stack_bits" -> number(stack.pointerWidth + stack.capacity * value.localWidth),
+          "overflow_trap" -> optionalString(stack.overflow),
+          "underflow_trap" -> optionalString(stack.underflow),
+          "invalid_frame_trap" -> optionalString(stack.invalidFrame),
+          "assert_hold" -> string(
+            "failed operation holds transitions and stack; active actions continue"
+          ),
+          "frame_initialization" -> string("uninitialized; pointer reset independently")
+        )
+      ) ++ value.control.map(control =>
+        "control" -> obj(
+          "storage" -> string(control.storage),
+          "restart" -> string(control.restart),
+          "cancel" -> string(control.cancel),
+          "enable" -> string(control.enable),
+          "entered" -> string(control.entered),
+          "exited" -> string(control.exited)
+        )
+      ) ++ Option.when(value.timerEdges.nonEmpty || value.transferEdges.nonEmpty)(
+        "timing" -> obj(
+          "contract" -> string("flat-fsm-v4"),
+          "timer_storage" -> optionalString(value.timerStorage),
+          "actual_timer_bits" -> number(value.timerStorage.size * FsmTimingRuntime.Width),
+          "timer_saturation" -> number(FsmTimingRuntime.Saturation),
+          "expiry" -> string("registered-elapsed >= cycles-1; enabled operational edges"),
+          "timer_edges" -> array(value.timerEdges.map(edge =>
+            obj(
+              "ordinal" -> number(edge.ordinal),
+              "cycles" -> number(edge.cycles),
+              "guard" -> string(edge.guard)
+            )
+          )),
+          "transfer_edges" -> array(value.transferEdges.map(edge =>
+            obj(
+              "ordinal" -> number(edge.ordinal),
+              "guard" -> string(edge.guard),
+              "payload" -> string(edge.payload),
+              "valid" -> string(edge.valid),
+              "ready" -> string(edge.ready)
+            )
+          ))
+        )
+      ) ++ value.composition.map(composition =>
+        "composition" -> obj(
+          "contract" -> string("fsm-composition-v1"),
+          "root" -> string(composition.root),
+          "parent" -> optionalString(composition.parent),
+          "owner_case" -> optionalString(composition.ownerCase),
+          "slot" -> optionalString(composition.slot),
+          "definition_name" -> string(composition.definitionName),
+          "definition_hash" -> string(composition.definitionHash),
+          "fragments" -> array(composition.fragments.map((name, cases) =>
+            obj("name" -> string(name), "cases" -> array(cases.map(string)))
+          )),
+          "occurrences" -> number(composition.occurrences),
+          "records" -> number(composition.records),
+          "depth" -> number(composition.depth),
+          "structural_completion_possible" -> bool(composition.completionPossible),
+          "inactive_observation" -> string(
+            "qualify-with-active; storage-may-be-retained-or-uninitialized"
+          ),
+          "establishment" -> string(composition.establishment),
+          "groups" -> array(composition.groups.map(group =>
+            obj(
+              "owner_case" -> string(group.ownerCase),
+              "children" -> array(group.children.map(string)),
+              "restart" -> string(group.restart),
+              "cancel" -> string(group.cancel),
+              "enable" -> string(group.enable)
+            )
+          )),
+          "joins" -> array(composition.joins.map(join =>
+            obj(
+              "result" -> string(join.result),
+              "owner_case" -> string(join.ownerCase),
+              "children" -> array(join.children.map(string)),
+              "mode" -> string(join.policy),
+              "selection" -> string(join.selection)
+            )
+          ))
+        )
+      ))*)
     ))).toVector ++ Option.when(snapshot.eventProcesses.nonEmpty)("event_processes" ->
     array(snapshot.eventProcesses.sortBy(_.path).map(value =>
       obj(
@@ -599,11 +716,10 @@ private[nodal] object ReproducibilityContract:
         "source_ordinal" -> number(value.sourceOrdinal),
         "root" -> string(value.root)
       )
-    ))).toVector ++ Option.when(snapshot.generatedRegions.exists(_.digitalBody.nonEmpty))(
-    "digital_generates" -> array(snapshot.generatedRegions.filter(_.digitalBody.nonEmpty)
+    ))).toVector ++ Option.when(snapshot.generatedRegions.exists(hasGeneratedDigitalFacts))(
+    "digital_generates" -> array(snapshot.generatedRegions.filter(hasGeneratedDigitalFacts)
       .sortBy(_.path).map(value =>
-        val body = value.digitalBody.get
-        obj(
+        JObject(Vector(
           "path" -> string(value.path),
           "owner" -> string(value.owner),
           "parent_region" -> optionalString(value.parent),
@@ -612,17 +728,31 @@ private[nodal] object ReproducibilityContract:
           "upper_exclusive" -> string(value.upperExclusive),
           "step" -> string(value.step),
           "maximum" -> value.maximum.map(number).getOrElse(JNull),
-          "maximum_trip_count" -> number(value.maximumTripCount),
-          "source_ordinal" -> number(body.sourceOrdinal),
-          "captures" -> array(body.captures.map(string)),
-          "arguments" -> array(body.arguments.map(argument =>
-            obj(
-              "path" -> string(argument.path),
-              "data_type" -> string(argument.dataType),
-              "role" -> string(argument.role)
-            )
-          ))
-        )
+          "maximum_trip_count" -> number(value.maximumTripCount)
+        ) ++ value.digitalBody.toVector.flatMap(body =>
+          Vector(
+            "source_ordinal" -> number(body.sourceOrdinal),
+            "captures" -> array(body.captures.map(string)),
+            "arguments" -> array(body.arguments.map(argument =>
+              obj(
+                "path" -> string(argument.path),
+                "data_type" -> string(argument.dataType),
+                "role" -> string(argument.role)
+              )
+            ))
+          ) ++ body.parentRegion.toVector.map(path => "body_parent_region" -> string(path))
+        ) ++ value.yieldedArea.toVector.map(path => "yielded_area" -> string(path)) ++
+          Option.when(value.exports.nonEmpty)(
+            "exports" -> array(value.exports.map(exported =>
+              obj((Vector(
+                "member" -> string(exported.member),
+                "target" -> string(exported.target),
+                "access" -> string(exported.access)
+              ) ++ Option.when(
+                exported.kind != "storage"
+              )("kind" -> string(exported.kind)).toVector)*)
+            ))
+          ).toVector)
       ))
   ).toVector ++ Option.when(snapshot.memoryWrites.nonEmpty)(
     "memory_writes" -> array(snapshot.memoryWrites.sortBy(_.path).map(value =>
@@ -948,7 +1078,7 @@ private[nodal] object ReproducibilityContract:
       "digital_graph" -> digitalGraph(snapshot),
       "modules" -> array(
         snapshot.modules.sortBy(_.path).map: module =>
-          obj(
+          obj((Vector(
             "path" -> string(module.path),
             "class_name" -> string(module.className),
             "domains" -> array(
@@ -972,6 +1102,22 @@ private[nodal] object ReproducibilityContract:
                   "data_type" -> optionalString(declaration.dataType),
                   "domain" -> optionalString(declaration.domain),
                   "attributes" -> attributes(declaration.attributes)
+                ) ++ declaration.instancePort.filter(_.selection.nonEmpty).toVector.map(boundary =>
+                  "instance_port" -> obj((Vector(
+                    "instance" -> string(boundary.instance),
+                    "port" -> string(boundary.port),
+                    "direction" -> string(boundary.direction),
+                    "selection" -> generatedSelection(boundary.selection.get)
+                  ) ++
+                    boundary.region.toVector.map(region => "region" -> string(region)))*)
+                ) ++ declaration.interfaceBoundary.toVector.map(boundary =>
+                  "interface_boundary" -> interfaceBoundary(boundary)
+                ) ++ declaration.resolvedBoundary.toVector.map(boundary =>
+                  "resolved_boundary" -> interfaceBoundary(boundary)
+                ) ++ declaration.resolvedMember.toVector.map(member =>
+                  "resolved_member" -> resolvedMember(member)
+                ) ++ declaration.conservativeMember.toVector.map(member =>
+                  "conservative_member" -> resolvedMember(member)
                 ) ++ Option.when(declaration.conservativeDimensions.nonEmpty)(
                   "conservative_dimensions" -> array(declaration.conservativeDimensions.map(string))
                 ).toVector ++ generatedScopeFields(declaration.generatedScope))*)
@@ -986,29 +1132,34 @@ private[nodal] object ReproducibilityContract:
                   "parameter_bindings" -> attributes(instance.parameterBindings)
                 ) ++ generatedScopeFields(instance.generatedScope))*)
             )
-          )
+          ) ++ module.externalName.toVector.map(name => "external_name" -> string(name)))*)
       ),
       "interface_abi" -> array(
         snapshot.interfaceAbi.sortBy(_.logicalPath).map: entry =>
-          obj(
+          obj((Vector(
             "logical_path" -> string(entry.logicalPath),
             "emitted_path" -> string(entry.emittedPath),
             "role" -> string(entry.role),
             "access" -> string(entry.access),
-            "data_type" -> string(entry.dataType),
-            "domain" -> string(entry.domain)
-          )
+            "data_type" -> string(entry.dataType)
+          ) ++ entry.domain.toVector.map(value => "domain" -> string(value)))*)
       ),
       "resolved_nets" -> array(
         snapshot.resolvedNets.sortBy(_.path).map: net =>
-          obj(
+          obj((Vector(
             "path" -> string(net.path),
             "data_type" -> string(net.dataType),
             "mode" -> string(net.mode),
-            "placement" -> string(net.placement),
-            "profile" -> string(net.profile),
             "operations" -> array(net.operations.sorted.map(string))
-          )
+          ) ++ (if net.member.nonEmpty then Vector.empty
+                else
+                  Vector(
+                    "placement" -> string(net.placement),
+                    "profile" -> string(net.profile)
+                  )) ++ net.boundary.toVector.map(boundary =>
+            "boundary" -> interfaceBoundary(boundary)
+          ) ++
+            net.member.toVector.map(member => "member" -> resolvedMember(member)))*)
       ),
       "topology" -> array(
         snapshot.topology.sortBy(edge => (edge.kind, edge.left, edge.right)).map: edge =>
@@ -1076,7 +1227,79 @@ private[nodal] object ReproducibilityContract:
           )
       ),
       "waivers" -> waiverInventory(snapshot)
-    ) ++ Option.when(nodeSelections.nonEmpty)(
+    ) ++ Option.when(snapshot.areas.nonEmpty)(
+      "areas" -> array(snapshot.areas.map(area =>
+        JObject(Vector(
+          "path" -> string(area.path),
+          "owner" -> string(area.owner),
+          "parent" -> optionalString(area.parent),
+          "source" -> source(Some(area.source)),
+          "domain" -> optionalString(area.domain),
+          "declarations" -> array(area.declarations.map(string)),
+          "members" -> array(area.members.map(member =>
+            obj(
+              "name" -> string(member.name),
+              "path" -> string(member.path),
+              "target" -> string(member.target)
+            )
+          ))
+        ) ++ generatedScopeFields(area.generatedScope))
+      ))
+    ).toVector ++ Option.when(snapshot.interfaceContracts.nonEmpty)(
+      "interface_contracts" -> array(snapshot.interfaceContracts.sortBy(_.path).map(endpoint =>
+        obj((Vector(
+          "path" -> string(endpoint.path),
+          "owner" -> string(endpoint.owner),
+          "identity" -> string(endpoint.identity),
+          "role" -> string(endpoint.role)
+        ) ++ endpoint.domain.toVector.map(value => "domain" -> string(value)) ++ Vector(
+          "dimensions" -> array(endpoint.dimensions.map(string)),
+          "members" -> array(endpoint.members.map(interfaceMember)),
+          "roles" -> array(endpoint.roles.sortBy(_.name).map(role =>
+            obj(
+              "name" -> string(role.name),
+              "members" -> array(role.members.map(interfaceMember))
+            )
+          )),
+          "boundary" -> endpoint.boundary.map(interfaceBoundary).getOrElse(JNull),
+          "actual_member_types" -> array(endpoint.actualMemberTypes.map((name, dataType) =>
+            obj("name" -> string(name), "data_type" -> string(dataType))
+          ))
+        ) ++ Option.when(endpoint.definitionContexts.nonEmpty)("definition_contexts" ->
+          array(endpoint.definitionContexts.map(context =>
+            obj(
+              "application" -> string(context.application),
+              "identity" -> string(context.identity),
+              "owner" -> string(context.owner),
+              "region" -> string(context.region),
+              "source_ordinal" -> number(context.sourceOrdinal)
+            )
+          ))).toVector)*)
+      ))
+    ).toVector ++ Option.when(snapshot.digitalConnectivity.nonEmpty)(
+      "digital_connectivity" -> array(snapshot.digitalConnectivity.sortBy(_.path).map(effect =>
+        obj((Vector(
+          "path" -> string(effect.path),
+          "owner" -> string(effect.owner),
+          "kind" -> string(effect.kind),
+          "target" -> string(effect.target),
+          "source" -> optionalString(effect.source),
+          "value" -> optionalString(effect.value),
+          "enable" -> optionalString(effect.enable),
+          "data_type" -> optionalString(effect.dataType),
+          "member" -> optionalString(effect.member),
+          "role" -> optionalString(effect.role),
+          "source_role" -> optionalString(effect.sourceRole),
+          "access" -> optionalString(effect.access),
+          "source_access" -> optionalString(effect.sourceAccess),
+          "nested_roles" -> interfaceRoles(effect.nestedRoles),
+          "source_nested_roles" -> interfaceRoles(effect.sourceNestedRoles),
+          "endpoint_role" -> optionalString(effect.endpointRole),
+          "source_endpoint_role" -> optionalString(effect.sourceEndpointRole)
+        ) ++ effect.region.toVector.map(region => "region" -> string(region)) ++
+          effect.sourceOrdinal.toVector.map(ordinal => "source_ordinal" -> number(ordinal)))*)
+      ))
+    ).toVector ++ Option.when(nodeSelections.nonEmpty)(
       "node_array_selections" -> array(nodeSelections.map: selection =>
         obj((Vector(
           "path" -> string(selection.path),
@@ -1107,6 +1330,56 @@ private[nodal] object ReproducibilityContract:
       Option.when(snapshot.conservativeArrayBindings.isEmpty &&
         snapshot.instanceArrayRoots.isEmpty &&
         snapshot.parameterExpressions.nonEmpty)(parameterExpressionInventory(snapshot)).toVector)
+
+  private def generatedSelection(value: KernelGeneratedMemberSnapshot): JsonValue =
+    obj((Vector(
+      "family" -> string(value.family),
+      "ordinal" -> string(value.ordinal),
+      "member" -> string(value.member),
+      "access" -> string(value.access)
+    ) ++
+      value.familyInput.toVector.map(input => "family_input" -> string(input)) ++
+      Option.when(value.selectionPrefix.nonEmpty)(
+        "selection_prefix" -> array(value.selectionPrefix.map(frame =>
+          obj(
+            "family" -> string(frame.family),
+            "ordinal" -> string(frame.ordinal),
+            "member" -> string(frame.member)
+          )
+        ))
+      ).toVector)*)
+
+  private def interfaceBoundary(value: KernelInterfaceBoundarySnapshot): JsonValue =
+    obj((value.instance.toVector.map(instance => "instance" -> string(instance)) ++
+      Vector("endpoint" -> string(value.endpoint)) ++
+      value.selection.toVector.map(selection => "selection" -> generatedSelection(selection)) ++
+      value.region.toVector.map(region => "region" -> string(region)))*)
+
+  private def resolvedMember(value: KernelInterfaceMemberOrigin): JsonValue =
+    obj(
+      "endpoint" -> string(value.endpoint),
+      "member" -> string(value.member),
+      "role" -> string(value.role)
+    )
+
+  private def interfaceRoles(values: Vector[(String, String)]): JsonValue =
+    array(values.map((path, role) => obj("path" -> string(path), "role" -> string(role))))
+
+  private def interfaceMember(value: KernelInterfaceMemberSnapshot): JsonValue =
+    obj(
+      "path" -> string(value.path),
+      "name" -> string(value.name),
+      "role" -> string(value.role),
+      "access" -> string(value.access),
+      "data_type" -> string(value.dataType),
+      "protocol" -> string(value.protocol),
+      "mode" -> optionalString(value.mode),
+      "nested_roles" -> interfaceRoles(value.nestedRoles),
+      "nested_interfaces" -> array(value.nestedInterfaces.map((path, identity) =>
+        obj("path" -> string(path), "identity" -> string(identity))
+      )),
+      "analog_attributes" -> attributes(value.analogAttributes)
+    )
 
   private def analogSemantics(snapshot: ConstructionSnapshot): JsonValue =
     val equations = snapshot.analogSemantics.equations.map: equation =>

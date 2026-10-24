@@ -3,19 +3,29 @@
 
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <memory>
 #include <optional>
 #include <string>
 
 namespace nodal {
+/// One original lexical Generate in the enclosing occurrence, never an enumerated lane.
+struct HierarchyGeneratedScope {
+  unsigned occurrence = 0;
+  mlir::Operation *family = nullptr;
+  GeneratedDomain domain;
+};
 struct HierarchyOccurrence {
   mlir::Operation *module = nullptr;
   mlir::Operation *instance = nullptr;
   unsigned parent = 0;
   std::string path;
+  /// Original outer-to-inner Generate ancestry, inherited by descendant instances.
+  llvm::SmallVector<HierarchyGeneratedScope, 0> generatedScopes;
 };
 struct ContextualValue {
   unsigned occurrence = 0;
@@ -67,11 +77,35 @@ private:
 };
 bool hasLocalHierarchyObligations(mlir::Operation *module);
 
+/// Check one actual authored instance and its exact Module/Generate lexical owner.
+/// Does not grant selected-family access or admit analog/resolved family endpoints.
+mlir::LogicalResult verifyHierarchyInstanceOperation(mlir::Operation *operation);
+
+/// Declaration-only external flavor of the existing Module identity. Pin order
+/// is authored order; no executable body or independent instance graph exists.
+struct ExternalModuleSignature {
+  mlir::Operation *module = nullptr;
+  mlir::StringAttr externalName;
+  llvm::SmallVector<mlir::Operation *, 4> pins;
+};
+mlir::FailureOr<ExternalModuleSignature> inspectExternalModuleSignature(mlir::Operation *module);
+
+/// Exact immediate-child definition lookup, shared by typed boundary owners.
+/// This grants no member access, direction, domain or connectivity permission.
+struct HierarchyInstance {
+  mlir::Operation *instance = nullptr;
+  mlir::Operation *module = nullptr;
+};
+mlir::FailureOr<HierarchyInstance> resolveHierarchyInstance(mlir::Operation *use,
+                                                            mlir::Attribute reference);
+
 /// Exact immediate-child boundary; the reference result remains parent-owned.
 struct InstancePort {
   mlir::Operation *instance;
   mlir::Operation *module;
   mlir::Operation *port;
+  /// Actual selected boundary operation; no cloned occurrence or serialized prefix.
+  mlir::Operation *selection = nullptr;
 };
 mlir::FailureOr<InstancePort> inspectInstancePort(mlir::Operation *operation);
 mlir::LogicalResult verifyRequirementProjection(mlir::Operation *operation);

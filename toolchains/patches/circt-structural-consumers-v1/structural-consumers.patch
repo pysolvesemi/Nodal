@@ -1,0 +1,128 @@
+--- a/lib/Dialect/HW/HWAttributes.cpp
++++ b/lib/Dialect/HW/HWAttributes.cpp
+@@ -1059,0 +1060,7 @@
++      .Case<hw::InOutType>([&](hw::InOutType inout) -> FailureOr<Type> {
++        auto element = evaluateParametricType(loc, parameters,
++                                             inout.getElementType(), emitErrors);
++        if (failed(element))
++          return failure();
++        return hw::InOutType::get(*element);
++      })
+@@ -1082,0 +1090,3 @@
++      .Case<hw::InOutType>([&](hw::InOutType inout) {
++        return isParametricType(inout.getElementType());
++      })
+--- a/test/Dialect/HW/parameters.mlir
++++ b/test/Dialect/HW/parameters.mlir
+@@ -250,0 +251,23 @@
++
++
++// CHECK-LABEL: hw.module @inoutChild<W: i32 = 4>
++hw.module @inoutChild<W: i32 = 4>
++  (inout %pad: !hw.int<#hw.param.decl.ref<"W">>) {
++  hw.output
++}
++
++// CHECK-LABEL: hw.module @inoutParent<P: i32 = 7>
++hw.module @inoutParent<P: i32 = 7>
++  (inout %pad: !hw.int<#hw.param.decl.ref<"P">>) {
++  // CHECK: hw.instance "child" @inoutChild<W: i32 = #hw.param.decl.ref<"P">>
++  hw.instance "child" @inoutChild<W: i32 = #hw.param.decl.ref<"P">>
++    (pad: %pad: !hw.inout<int<#hw.param.decl.ref<"P">>>) -> ()
++  hw.output
++}
++
++// CHECK-LABEL: hw.module @inoutFixedParent
++hw.module @inoutFixedParent(inout %pad: i7) {
++  // CHECK: hw.instance "child" @inoutChild<W: i32 = 7>(pad: %pad: !hw.inout<i7>) -> ()
++  hw.instance "child" @inoutChild<W: i32 = 7>(pad: %pad: !hw.inout<i7>) -> ()
++  hw.output
++}
+--- a/unittests/Dialect/HW/TypesTest.cpp
++++ b/unittests/Dialect/HW/TypesTest.cpp
+@@ -8,0 +9 @@
++#include "circt/Dialect/HW/HWAttributes.h"
+@@ -85,0 +87,55 @@
++// Instance signatures must substitute inside the capability wrapper, retaining
++// its electrical identity and rejecting absent bindings rather than defaults.
++TEST(TypesTest, EvaluateParametricInOut) {
++  MLIRContext context;
++  context.loadDialect<HWDialect>();
++  Builder builder(&context);
++  auto formal =
++      ParamDeclRefAttr::get(builder.getStringAttr("W"), builder.getI32Type());
++  auto actual =
++      ParamDeclRefAttr::get(builder.getStringAttr("P"), builder.getI32Type());
++  auto type = InOutType::get(IntType::get(formal));
++  auto parameters = builder.getArrayAttr(
++      {ParamDeclAttr::get(builder.getStringAttr("W"), actual)});
++  auto result =
++      evaluateParametricType(builder.getUnknownLoc(), parameters, type);
++  ASSERT_TRUE(succeeded(result));
++  EXPECT_EQ(*result, InOutType::get(IntType::get(actual)));
++  EXPECT_TRUE(isParametricType(type));
++  EXPECT_TRUE(isParametricType(*result));
++  EXPECT_TRUE(failed(evaluateParametricType(builder.getUnknownLoc(),
++                                            builder.getArrayAttr({}), type,
++                                            /*emitErrors=*/false)));
++  auto concrete = builder.getArrayAttr({ParamDeclAttr::get(
++      builder.getStringAttr("W"), builder.getI32IntegerAttr(7))});
++  result = evaluateParametricType(builder.getUnknownLoc(), concrete, type);
++  ASSERT_TRUE(succeeded(result));
++  EXPECT_EQ(*result, InOutType::get(builder.getIntegerType(7)));
++  EXPECT_FALSE(isParametricType(*result));
++}
++
++TEST(TypesTest, EvaluateParametricInOutArrayElements) {
++  MLIRContext context;
++  context.loadDialect<HWDialect>();
++  Builder builder(&context);
++  auto formal =
++      ParamDeclRefAttr::get(builder.getStringAttr("W"), builder.getI32Type());
++  auto parameters = builder.getArrayAttr({ParamDeclAttr::get(
++      builder.getStringAttr("W"), builder.getI32IntegerAttr(7))});
++  auto packed = InOutType::get(ArrayType::get(IntType::get(formal), 3));
++  auto unpacked =
++      InOutType::get(UnpackedArrayType::get(IntType::get(formal), 2));
++  auto packedResult =
++      evaluateParametricType(builder.getUnknownLoc(), parameters, packed);
++  auto unpackedResult =
++      evaluateParametricType(builder.getUnknownLoc(), parameters, unpacked);
++  ASSERT_TRUE(succeeded(packedResult));
++  ASSERT_TRUE(succeeded(unpackedResult));
++  EXPECT_TRUE(isParametricType(packed));
++  EXPECT_TRUE(isParametricType(unpacked));
++  EXPECT_EQ(*packedResult,
++            InOutType::get(ArrayType::get(builder.getIntegerType(7), 3)));
++  EXPECT_EQ(*unpackedResult, InOutType::get(UnpackedArrayType::get(
++                                 builder.getIntegerType(7), 2)));
++}
++
+--- a/lib/Dialect/SV/Transforms/PrettifyVerilog.cpp
++++ b/lib/Dialect/SV/Transforms/PrettifyVerilog.cpp
+@@ -27,0 +28 @@
++#include "mlir/IR/RegionKindInterface.h"
+@@ -539 +540,4 @@
+-  if (!instances.empty()) {
++  // The module body is a graph region, but nested generate blocks can have
++  // SSA dominance. Moving an instance past an earlier result use is invalid
++  // there; preserve its existing placement instead of changing dependencies.
++  if (!instances.empty() && !mlir::mayHaveSSADominance(*body.getParent())) {
+@@ -541 +545 @@
+-      if (instance != &body.back())
++      if (instance != &body.back() && instance->getNextNode() != &body.back()) {
+@@ -542,0 +547,2 @@
++        anythingChanged = true;
++      }
+--- a/lib/Conversion/ExportVerilog/PrepareForEmission.cpp
++++ b/lib/Conversion/ExportVerilog/PrepareForEmission.cpp
+@@ -28,0 +29 @@
++#include "mlir/IR/RegionKindInterface.h"
+@@ -173,2 +174,5 @@
+-        // Move assign op after instance to resolve cyclic dependencies.
+-        assign->moveAfter(op);
++        // Graph regions can contain cyclic dependencies. In an SSA region,
++        // the existing assignment already follows both the instance and its
++        // destination; moving it can introduce a forward lvalue reference.
++        if (!mlir::mayHaveSSADominance(*op->getParentRegion()))
++          assign->moveAfter(op);

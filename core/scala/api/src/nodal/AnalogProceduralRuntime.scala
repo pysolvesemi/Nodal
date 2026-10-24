@@ -639,6 +639,12 @@ private[nodal] object AnalogProceduralRuntime:
     private var scopeStack = Vector.empty[String]
     private var scopeSerial = 0
 
+    /** Read-only empty-profile proof; caller charges nine fixed field inspections. */
+    def publicationEmpty: Boolean =
+      variables.isEmpty && coverage.roots.isEmpty && assignments.isEmpty && statements.isEmpty &&
+        !procedureActive && !procedureSeen && scopeStack.isEmpty && scopeSerial == 0 &&
+        identityPrefix.isEmpty
+
     private val knownAnalyses = Set(
       "initialization",
       "operating-point",
@@ -927,8 +933,10 @@ private[nodal] object AnalogProceduralRuntime:
       statements += canonicalStatement
       coverage = coverage.write(target)
 
-    def snapshot: Snapshot = Snapshot(
-      owner,
-      variables.valuesIterator.map(_.record).toVector,
-      assignments.toVector
-    )
+    def snapshot: Snapshot =
+      ConstructionKernel.chargePublicationWork(6L) // Dispatch, empty iterator/copies and record.
+      Snapshot(
+        owner,
+        variables.valuesIterator.map(_.record).toVector,
+        assignments.toVector
+      )

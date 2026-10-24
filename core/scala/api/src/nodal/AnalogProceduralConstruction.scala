@@ -275,6 +275,7 @@ private[nodal] object AnalogProceduralConstruction:
     case other => other.toString
 
   private def finalizeEvents(module: ModuleState): Unit =
+    ConstructionKernel.chargePublicationWork(2L) // Dispatch and empty controlSnapshot map.
     def resolved(value: String): String =
       module.eventBindings.foldLeft(value): (text, entry) =>
         val (token, reference) = entry
@@ -1252,6 +1253,7 @@ private[nodal] object AnalogProceduralConstruction:
       module: ModuleState,
       snapshot: AnalogProceduralRuntime.Snapshot
   ): AnalogProceduralRuntime.Snapshot =
+    ConstructionKernel.chargePublicationWork(5L) // Four empty field maps and snapshot copy.
     def text(value: String): String =
       module.eventBindings.foldLeft(value): (rendered, entry) =>
         val (token, reference) = entry
@@ -1295,6 +1297,8 @@ private[nodal] object AnalogProceduralConstruction:
       snapshot: AnalogProceduralRuntime.Snapshot,
       owner: String
   ): AnalogProceduralRuntime.Snapshot =
+    // Empty variables map/toMap, optional identity maps, field maps and snapshot copy.
+    ConstructionKernel.chargePublicationWork(10L)
     val oldOwner = snapshot.owner
 
     def remapIdentity(identity: String): String =
@@ -1360,9 +1364,14 @@ private[nodal] object AnalogProceduralConstruction:
       resolveOwner: Module => String,
       resolveGeneratedOwnership: ((String, String)) => (String, String)
   ): Vector[AnalogProceduralRuntime.Snapshot] =
+    ConstructionKernel.chargePublicationWork(3L) // Dispatch and existing outer vector/flatMap.
     Option(current.get()).toVector.flatMap: value =>
-      value.modules.foreach(finalizeEvents)
+      ConstructionKernel.chargePublicationWork(2L) // Both actual module traversals.
+      value.modules.foreach: module =>
+        ConstructionKernel.chargePublicationWork(1L)
+        finalizeEvents(module)
       value.modules.flatMap: module =>
+        ConstructionKernel.chargePublicationWork(3L) // Visit, owner dispatch and branch test.
         val owner = resolveOwner(module.module)
         val sourceSnapshot =
           if module.controlSnapshot.nonEmpty then
@@ -1374,6 +1383,7 @@ private[nodal] object AnalogProceduralConstruction:
               module.controlExpressions.toVector
             )
           else module.recorder.snapshot
+        ConstructionKernel.chargePublicationWork(5L) // Context maps, prefix read and copy.
         val generatedContext = module.generatedContext.map(resolveGeneratedOwnership)
         val contextual = sourceSnapshot.copy(
           generatedOwner = generatedContext.map(_._1),
@@ -1381,7 +1391,67 @@ private[nodal] object AnalogProceduralConstruction:
           identityPrefix = module.identityPrefix
         )
         val retained = remapSnapshot(resolvePayloads(module, contextual), owner)
+        ConstructionKernel.chargePublicationWork(5L) // Four retained tests and optional result.
         Option.when(
           retained.variables.nonEmpty || retained.assignments.nonEmpty ||
             retained.controlFlow.nonEmpty || retained.controlExpressions.nonEmpty
         )(retained)
+
+  /** Called only by eligibility within the existing bound construction/withSession scope. Never
+    * calls lazy state/activeModule, allocates an owner, finalizes events or mutates facts. Caller
+    * charges six State checks, seventeen ModuleState checks and nine Recorder checks.
+    */
+  def publicationEmpty(root: Module): Boolean =
+    val value = current.get()
+    if value == null then false
+    else if value.modules.size != 1 || value.stack.size != 1 || !value.eventResources.isEmpty then
+      false
+    else
+      val module = value.modules.head
+      (value.stack.head eq module) &&
+      (module.module eq root) && module.identityPrefix.isEmpty &&
+      module.pending.isEmpty && module.variables.isEmpty && module.variableRecords.isEmpty &&
+      module.controlExpressions.isEmpty && module.statementSerial == 0 && module.scopeSerial == 0 &&
+      module.procedureDepth == 0 && !module.procedureComplete && !module.procedureStarted &&
+      module.generatedContext.isEmpty && module.eventBindings.isEmpty && module.eventDepth == 0 &&
+      module.controlBuilder.isEmpty && module.controlSnapshot.isEmpty &&
+      module.controlScope.isEmpty &&
+      module.recorder.publicationEmpty
+
+  /** Exact-pair absence observer for the separately admitted bound-domain accounting profile. Reads
+    * only the current owner. No lazy creation, finalization, cache or state mutation. Fixed field
+    * checks are prepaid; every retained ModuleState visit is separately charged. The legacy
+    * single-module observer above deliberately remains unchanged.
+    */
+  def boundPairPublicationEmpty(root: Module, child: Module, debit: Long => Unit): Boolean =
+    debit(6L)
+    val value = current.get()
+    if value == null || (root eq child) || value.modules.size != 2 ||
+      value.stack.size != 1 || !value.eventResources.isEmpty
+    then false
+    else
+      var rootState = Option.empty[ModuleState]
+      var childState = Option.empty[ModuleState]
+      debit(1L)
+      val iterator = value.modules.iterator
+      var valid = true
+      while valid && iterator.hasNext do
+        // One visit, two identity checks, seventeen ModuleState and nine Recorder fields.
+        debit(29L)
+        val module = iterator.next()
+        if (module.module eq root) && rootState.isEmpty then rootState = Some(module)
+        else if (module.module eq child) && childState.isEmpty then childState = Some(module)
+        else valid = false
+        if valid then
+          valid = module.identityPrefix.isEmpty && module.pending.isEmpty &&
+            module.variables.isEmpty && module.variableRecords.isEmpty &&
+            module.controlExpressions.isEmpty && module.statementSerial == 0 &&
+            module.scopeSerial == 0 && module.procedureDepth == 0 &&
+            !module.procedureComplete && !module.procedureStarted &&
+            module.generatedContext.isEmpty && module.eventBindings.isEmpty &&
+            module.eventDepth == 0 && module.controlBuilder.isEmpty &&
+            module.controlSnapshot.isEmpty && module.controlScope.isEmpty &&
+            module.recorder.publicationEmpty
+      debit(3L)
+      valid && rootState.nonEmpty && childState.nonEmpty &&
+      (value.stack.head eq rootState.get)

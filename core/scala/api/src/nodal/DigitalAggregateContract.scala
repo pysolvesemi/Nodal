@@ -60,39 +60,43 @@ private[nodal] object DigitalAggregateContract:
       operation: String,
       result: KernelTypeDescriptor,
       operands: Vector[Expr[?]],
-      metadata: StructOperationMetadata
+      metadata: StructOperationMetadata,
+      typeIntent: Option[KernelResultTypeIntent]
   ): Expr[A] =
     val value = new KernelExpr[A](
       operands :+ metadata,
       resultType = Some(result),
-      operation = Some(operation)
+      operation = Some(operation),
+      typeIntent = typeIntent
     )
     ConstructionKernel.expression(value)
     value
 
   def get[A <: Data](value: Expr[Struct], member: StructMember[A]): Expr[A] =
-    val actual = descriptor(value)
-    val declared = fields(actual)
-    if !DigitalEnumContract.sameWidthFamily(
-        CandidateRuntime.typeDescriptor(member.schema),
-        actual
-      ) ||
-      member.ordinal < 0 || member.ordinal >= declared.size ||
-      declared(member.ordinal).name != member.declaration.name
-    then fail("field handle does not belong to the receiver's exact semantic width family")
-    DigitalCombinationalContract.validateValueType(
-      CandidateRuntime.typeDescriptor(declared(member.ordinal).dataType)
-    )
-    // The actual receiver, not the handle's original width, determines the complete result.
+    def result: KernelTypeDescriptor =
+      val actual = descriptor(value)
+      val declared = fields(actual)
+      if !DigitalEnumContract.sameWidthFamily(
+          CandidateRuntime.typeDescriptor(member.schema),
+          actual
+        ) ||
+        member.ordinal < 0 || member.ordinal >= declared.size ||
+        declared(member.ordinal).name != member.declaration.name
+      then fail("field handle does not belong to the receiver's exact semantic width family")
+      val selected = CandidateRuntime.typeDescriptor(declared(member.ordinal).dataType)
+      DigitalCombinationalContract.validateValueType(selected)
+      selected
+    // Actual receiver type is authoritative, including a once-finalized hierarchy substitution.
     emit(
       "digital_struct_get",
-      CandidateRuntime.typeDescriptor(declared(member.ordinal).dataType),
+      result,
       Vector(value),
       StructOperationMetadata(
         member.schema,
         Some(member.ordinal),
         Some(member.declaration.name)
-      )
+      ),
+      DeferredResultType.intent(Vector(value))(result)
     )
 
   def make(schema: DataType[Struct], bindings: Vector[StructBinding[? <: Data]]): Expr[Struct] =
@@ -100,17 +104,29 @@ private[nodal] object DigitalAggregateContract:
     val declared = fields(base)
     if bindings.size != declared.size then fail("Struct value requires every field exactly once")
     if bindings.size > 4098 then fail("Struct value exceeds the shared value-DAG operand budget")
-    val actual = bindings.zipWithIndex.map: (binding, index) =>
+    // Member identity is independent of boundary width substitution and is checked now.
+    bindings.zipWithIndex.foreach: (binding, index) =>
       if binding.member.ordinal != index ||
         binding.member.declaration.name != declared(index).name ||
         !DigitalEnumContract.sameType(base, CandidateRuntime.typeDescriptor(binding.member.schema))
       then fail("Struct bindings must belong to this semantic schema in declared order")
-      val result = descriptor(binding.expression)
-      if !DigitalEnumContract.sameWidthFamily(
-          CandidateRuntime.typeDescriptor(declared(index).dataType),
-          result
-        )
-      then fail("Struct value changes a field kind, enum ABI, layout or inner dimension")
-      StructField(declared(index).name, new KernelDataType[Data](result))
-    val result = base.copy(arguments = Vector(base.arguments.head, actual))
-    emit("digital_struct_make", result, bindings.map(_.expression), StructOperationMetadata(schema))
+    def result: KernelTypeDescriptor =
+      val actual = bindings.zipWithIndex.map: (binding, index) =>
+        val selected = descriptor(binding.expression)
+        DigitalCombinationalContract.validateValueType(selected)
+        if !DigitalEnumContract.sameWidthFamily(
+            CandidateRuntime.typeDescriptor(declared(index).dataType),
+            selected
+          )
+        then fail("Struct value changes a field kind, enum ABI, layout or inner dimension")
+        StructField(declared(index).name, new KernelDataType[Data](selected))
+      base.copy(arguments = Vector(base.arguments.head, actual))
+    val operands = bindings.map(_.expression)
+    val intent = DeferredResultType.intent(operands)(result)
+    emit(
+      "digital_struct_make",
+      if intent.nonEmpty then base else result,
+      operands,
+      StructOperationMetadata(schema),
+      intent
+    )

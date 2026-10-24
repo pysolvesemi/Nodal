@@ -84,7 +84,8 @@ def Nodal_PlaceholderOp : Nodal_Op<"placeholder"> {
 def Nodal_ModuleOp : Nodal_Op<"module",
     [IsolatedFromAbove, Symbol, SymbolTable, NoTerminator]> {
   let summary = "Target-neutral Nodal hardware module";
-  let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$metadata);
+  let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$metadata,
+                       OptionalAttr<StrAttr>:$external_name);
   let regions = (region SizedRegion<1>:$body);
   let hasVerifier = 1;
 }
@@ -135,10 +136,12 @@ def Nodal_ParameterOp : Nodal_Op<"parameter",
 
 // Exact F54 declaration/connection carriers. Clocked update execution, memory
 // access operations and target layout remain with their later semantic owners.
-def Nodal_DigitalStorageOp : Nodal_Op<"digital_storage", [HasParent<"ModuleOp">]> {
+def Nodal_DigitalStorageOp : Nodal_Op<"digital_storage",
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Owned typed structural wire or domain-owned register";
   let arguments = (ins Variadic<AnyType>:$initial, StrAttr:$name,
-    StrAttr:$kind, OptionalAttr<FlatSymbolRefAttr>:$domain, DictionaryAttr:$metadata);
+    StrAttr:$kind, OptionalAttr<FlatSymbolRefAttr>:$domain,
+    OptionalAttr<StrAttr>:$initializer_policy, DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
@@ -208,15 +211,15 @@ def Nodal_InstanceOp : Nodal_Op<"instance",
 }
 
 // F57: actual immediate-child data boundaries, distinct from conservative terminals.
-def Nodal_InstancePortOp : Nodal_Op<"instance_port", [HasParent<"ModuleOp">]> {
+def Nodal_InstancePortOp : Nodal_Op<"instance_port", [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Parent-owned exact immediate-child digital port reference";
-  let arguments = (ins FlatSymbolRefAttr:$instance, StrAttr:$port,
-    StrAttr:$direction, DictionaryAttr:$metadata);
+  let arguments = (ins Variadic<AnyType>:$selection, FlatSymbolRefAttr:$instance, StrAttr:$port,
+    StrAttr:$direction, DictionaryAttr:$metadata, OptionalAttr<StrAttr>:$member);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 def Nodal_InstanceDomainBindingOp : Nodal_Op<"instance_domain_binding",
-    [HasParent<"ModuleOp">]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Actual parent-owned capabilities bound to one child requirement";
   let arguments = (ins AnyType:$clock, Variadic<AnyType>:$reset,
     FlatSymbolRefAttr:$instance, FlatSymbolRefAttr:$requirement,
@@ -264,7 +267,7 @@ def Nodal_InstanceTerminalArrayOp : Nodal_Op<"instance_terminal_array",
 //===----------------------------------------------------------------------===//
 
 def Nodal_InterfaceOp : Nodal_Op<"interface",
-    [IsolatedFromAbove, Symbol, SymbolTable, NoTerminator]> {
+    [IsolatedFromAbove, SymbolTable, NoTerminator]> {
   let summary = "Logical non-storable Interface definition";
   let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$metadata);
   let regions = (region SizedRegion<1>:$body);
@@ -296,7 +299,7 @@ def Nodal_InterfaceMemberOp : Nodal_Op<"interface_member",
 }
 
 def Nodal_InterfaceInstanceOp : Nodal_Op<"interface_instance",
-    [HasParent<"ModuleOp">, Symbol]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>, Symbol]> {
   let summary = "Physical instance of one logical Interface definition";
   let arguments = (ins
     SymbolNameAttr:$sym_name,
@@ -304,6 +307,16 @@ def Nodal_InterfaceInstanceOp : Nodal_Op<"interface_instance",
     StrAttr:$role,
     DictionaryAttr:$metadata
   );
+  let hasVerifier = 1;
+}
+
+// F58: a projection of an actual immediate-child endpoint, not another Interface instance.
+def Nodal_InterfaceBoundaryOp : Nodal_Op<"interface_boundary",
+    [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
+  let summary = "Parent-owned projection of one exact child Interface endpoint";
+  let arguments = (ins Variadic<AnyType>:$selection, SymbolNameAttr:$sym_name,
+    OptionalAttr<FlatSymbolRefAttr>:$instance, StrAttr:$endpoint, DictionaryAttr:$metadata,
+    OptionalAttr<StrAttr>:$member);
   let hasVerifier = 1;
 }
 
@@ -319,7 +332,7 @@ def Nodal_MemberAccessOp : Nodal_Op<"member_access"> {
 }
 
 def Nodal_InterfaceAbiOp : Nodal_Op<"interface_abi",
-    [HasParent<"ModuleOp">]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Target-neutral logical Interface ABI metadata";
   let arguments = (ins
     StrAttr:$logical_path,
@@ -331,17 +344,17 @@ def Nodal_InterfaceAbiOp : Nodal_Op<"interface_abi",
 }
 
 // Fully typed connectivity uses existing Interface/Role/Member identities.
-def Nodal_InterfaceConnectOp : Nodal_Op<"interface_connect", [HasParent<"ModuleOp">]> {
+def Nodal_InterfaceConnectOp : Nodal_Op<"interface_connect", [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Connect two exact role-qualified Interface leaves";
   let arguments = (ins AnyType:$left, AnyType:$right, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
-def Nodal_InterfaceDriveOp : Nodal_Op<"interface_drive", [HasParent<"ModuleOp">]> {
+def Nodal_InterfaceDriveOp : Nodal_Op<"interface_drive", [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Drive an explicitly writable Interface leaf";
   let arguments = (ins AnyType:$member, AnyType:$value, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
-def Nodal_InterfaceObserveOp : Nodal_Op<"interface_observe", [HasParent<"ModuleOp">]> {
+def Nodal_InterfaceObserveOp : Nodal_Op<"interface_observe", [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Observe a role-qualified digital Interface leaf";
   let arguments = (ins AnyType:$member, DictionaryAttr:$metadata);
   let hasVerifier = 1;
@@ -637,7 +650,25 @@ def Nodal_GenerateOp : Nodal_Op<"generate", [SymbolTable, NoTerminator]> {
     OptionalAttr<StrAttr>:$induction_path,
     DictionaryAttr:$metadata
   );
+  let results = (outs Optional<Nodal_GeneratedFamilyType>:$family);
   let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_GeneratedExportOp : Nodal_Op<"generated_export", [HasParent<"GenerateOp">]> {
+  let summary = "Exact existing storage export from one generated family template";
+  let arguments = (ins Optional<AnyType>:$value, StrAttr:$member, StrAttr:$access,
+    DictionaryAttr:$metadata, OptionalAttr<StrAttr>:$kind,
+    OptionalAttr<FlatSymbolRefAttr>:$target);
+  let hasVerifier = 1;
+}
+
+def Nodal_GeneratedMemberOp : Nodal_Op<"generated_member"> {
+  let summary = "Checked static ordinal and member projection from an exact family";
+  let arguments = (ins Nodal_GeneratedFamilyType:$family, I64:$ordinal,
+    StrAttr:$member, StrAttr:$access, DictionaryAttr:$metadata,
+    OptionalAttr<StrAttr>:$kind);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
@@ -686,26 +717,51 @@ def Nodal_ResolvedNetOp : Nodal_Op<"resolved_net",
   let hasVerifier = 1;
 }
 
+// Exact child reference, never another resolved-net allocation.
+def Nodal_ResolvedBoundaryOp : Nodal_Op<"net_boundary",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Parent-owned alias of an exact immediate-child resolved net";
+  let arguments = (ins FlatSymbolRefAttr:$instance, StrAttr:$endpoint,
+    DictionaryAttr:$metadata);
+  let results = (outs Nodal_ResolvedType:$result);
+  let hasVerifier = 1;
+}
+
+// Whole Interface families keep one ordered shape around the scalar capability.
+// Nested wrappers and arbitrary payloads are not capability carriers.
+def Nodal_ResolvedCarrier : Type<CPred<
+  "::llvm::isa<::nodal::ResolvedType>($_self) || "
+  "(::llvm::isa<::nodal::ShapedType>($_self) && "
+  "::llvm::isa<::nodal::ResolvedType>("
+  "::llvm::cast<::nodal::ShapedType>($_self).getElementType()))">,
+  "scalar resolved capability or one shaped resolved family">;
+def Nodal_DriverCarrier : Type<CPred<
+  "::llvm::isa<::nodal::DriverType>($_self) || "
+  "(::llvm::isa<::nodal::ShapedType>($_self) && "
+  "::llvm::isa<::nodal::DriverType>("
+  "::llvm::cast<::nodal::ShapedType>($_self).getElementType()))">,
+  "scalar driver capability or one shaped driver family">;
+
 def Nodal_NetReadOp : Nodal_Op<"net_read"> {
   let summary = "Read the resolved value of a digital net";
-  let arguments = (ins Nodal_ResolvedType:$net, DictionaryAttr:$metadata);
+  let arguments = (ins Nodal_ResolvedCarrier:$net, DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
 def Nodal_NetDriverOp : Nodal_Op<"net_driver"> {
   let summary = "Create one stable typed driver identity";
-  let arguments = (ins Nodal_ResolvedType:$net, StrAttr:$driver_id,
+  let arguments = (ins Nodal_ResolvedCarrier:$net, StrAttr:$driver_id,
                        DictionaryAttr:$metadata);
-  let results = (outs Nodal_DriverType:$result);
+  let results = (outs Nodal_DriverCarrier:$result);
   let hasVerifier = 1;
 }
 
 def Nodal_NetDriveOp : Nodal_Op<"net_drive"> {
   let summary = "Drive a resolved net through one explicit driver";
   let arguments = (ins
-    Nodal_ResolvedType:$net,
-    Nodal_DriverType:$driver,
+    Nodal_ResolvedCarrier:$net,
+    Nodal_DriverCarrier:$driver,
     AnyType:$value,
     AnyType:$enable,
     StrAttr:$mode,
@@ -717,25 +773,26 @@ def Nodal_NetDriveOp : Nodal_Op<"net_drive"> {
 
 def Nodal_NetReleaseOp : Nodal_Op<"net_release", [HasParent<"ModuleOp">]> {
   let summary = "Explicit inactive high-impedance driver";
-  let arguments = (ins Nodal_ResolvedType:$net, Nodal_DriverType:$driver,
+  let arguments = (ins Nodal_ResolvedCarrier:$net, Nodal_DriverCarrier:$driver,
                        DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 def Nodal_NetDriveLevelOp : Nodal_Op<"net_drive_level", [HasParent<"ModuleOp">]> {
   let summary = "Conditional low or high drive with no fabricated bit-vector constant";
-  let arguments = (ins Nodal_ResolvedType:$net, Nodal_DriverType:$driver,
+  let arguments = (ins Nodal_ResolvedCarrier:$net, Nodal_DriverCarrier:$driver,
                        AnyType:$enable, StrAttr:$level, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 def Nodal_NetPassThroughOp : Nodal_Op<"net_pass_through", [HasParent<"ModuleOp">]> {
   let summary = "Exact resolved-net identity connection";
-  let arguments = (ins Nodal_ResolvedType:$left, Nodal_ResolvedType:$right,
+  let arguments = (ins Nodal_ResolvedCarrier:$left, Nodal_ResolvedCarrier:$right,
                        DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 def Nodal_NetSplitOp : Nodal_Op<"net_split", [HasParent<"ModuleOp">]> {
   let summary = "Typed write and enable views of one unique authored conditional driver";
-  let arguments = (ins Nodal_ResolvedType:$net, DictionaryAttr:$metadata);
+  let arguments = (ins Nodal_ResolvedCarrier:$net, OptionalAttr<UnitAttr>:$hierarchy_driver,
+                       DictionaryAttr:$metadata);
   let results = (outs AnyType:$value, AnyType:$enable);
   let hasVerifier = 1;
 }
@@ -1989,19 +2046,55 @@ def Nodal_BehavioralIfOp : Nodal_Op<"behavioral_if",
   let regions = (region SizedRegion<1>:$true_body, SizedRegion<1>:$false_body);
   let hasVerifier = 1;
 }
-def Nodal_SequentialSelectOp : Nodal_Op<"sequential_select", [HasParent<"ModuleOp">]> {
+def Nodal_SequentialSelectOp : Nodal_Op<"sequential_select",
+    [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Exact typed priority selection with explicit hold alternatives";
   let arguments = (ins AnyType:$predicate, AnyType:$true_value, AnyType:$false_value,
     DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
-def Nodal_SequentialUpdateOp : Nodal_Op<"sequential_update", [HasParent<"ModuleOp">]> {
+def Nodal_SequentialUpdateOp : Nodal_Op<"sequential_update",
+    [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Normalized clocked next state; reset dominates next-state enable";
   let arguments = (ins AnyType:$target, AnyType:$next, AnyType:$clock,
     Variadic<AnyType>:$reset_and_initial, FlatSymbolRefAttr:$domain,
-    StrAttr:$edge, StrAttr:$reset_policy, StrAttr:$reset_polarity,
+    OptionalAttr<StrAttr>:$edge, OptionalAttr<StrAttr>:$reset_policy,
+    OptionalAttr<StrAttr>:$reset_polarity, OptionalAttr<StrAttr>:$initializer_policy,
     StrAttr:$root_id, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+// F58: pure composition ingress, expanded through the shared sequential owner.
+def Nodal_FsmJoinOp : Nodal_Op<"fsm_join", [HasParent<"ModuleOp">]> {
+  let summary = "Registered completion join with exact composition ownership";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$composition_contract,
+    FlatSymbolRefAttr:$domain, StrAttr:$owner_case, StrAttr:$mode,
+    StrAttr:$selection, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_FsmActivationOp : Nodal_Op<"fsm_activation", [HasParent<"ModuleOp">]> {
+  let summary = "Pure owned child activation from canonical parent FSM events";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$composition_contract,
+    FlatSymbolRefAttr:$domain, StrAttr:$owner_case, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$restart, AnyType:$cancel, AnyType:$enable);
+  let hasVerifier = 1;
+}
+
+// F58: closed read-only predicates retain exact owning transition tables.
+def Nodal_FsmElapsedOp : Nodal_Op<"fsm_elapsed", [HasParent<"ModuleOp">]> {
+  let summary = "Registered elapsed-edge predicate owned by one timed FSM";
+  let arguments = (ins AnyType:$elapsed, I64Attr:$cycles, FlatSymbolRefAttr:$domain,
+    OptionalAttr<DictionaryAttr>:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_FsmTransferOp : Nodal_Op<"fsm_transfer", [HasParent<"ModuleOp">]> {
+  let summary = "Read-only valid-ready conjunction owned by one FSM transition";
+  let arguments = (ins AnyType:$valid, AnyType:$ready, FlatSymbolRefAttr:$domain,
+    OptionalAttr<DictionaryAttr>:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
@@ -2014,8 +2107,10 @@ def Nodal_FlatFSMOp : Nodal_Op<"flat_fsm", [HasParent<"ModuleOp">,
     StrAttr:$initial_case, StrAttr:$requested_encoding, StrAttr:$resolved_encoding,
     I64Attr:$local_width, ArrayAttr:$case_ids, ArrayAttr:$local_codes,
     StrAttr:$illegal_policy, ArrayAttr:$states, ArrayAttr:$transitions,
-    ArrayAttr:$actions, DenseI32ArrayAttr:$action_capture_counts, DictionaryAttr:$metadata);
-  let results = (outs AnyType:$next, AnyType:$taken);
+    ArrayAttr:$actions, DenseI32ArrayAttr:$action_capture_counts, DictionaryAttr:$metadata,
+    OptionalAttr<StrAttr>:$lifecycle_mode, OptionalAttr<ArrayAttr>:$timer_edges,
+    OptionalAttr<ArrayAttr>:$transfer_edges, OptionalAttr<DictionaryAttr>:$stack);
+  let results = (outs Variadic<AnyType>:$results);
   let regions = (region VariadicRegion<AnyRegion>:$action_bodies);
   let hasVerifier = 1;
 }
@@ -2029,15 +2124,15 @@ def Nodal_EnumSwitchOp : Nodal_Op<"enum_switch", [IsolatedFromAbove, NoTerminato
 }
 def Nodal_ResetAssertedOp : Nodal_Op<"reset_asserted", [HasParent<"ModuleOp">]> {
   let summary = "Actual bound reset capability and polarity as a Boolean";
-  let arguments = (ins AnyType:$reset, FlatSymbolRefAttr:$domain,
-    StrAttr:$reset_polarity, DictionaryAttr:$metadata);
+  let arguments = (ins Variadic<AnyType>:$reset, FlatSymbolRefAttr:$domain,
+    OptionalAttr<StrAttr>:$reset_polarity, DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 def Nodal_SequentialAssertOp : Nodal_Op<"sequential_assert", [HasParent<"ModuleOp">]> {
   let summary = "Actual clock sampled property with exact owning domain";
   let arguments = (ins AnyType:$property, AnyType:$clock, FlatSymbolRefAttr:$domain,
-    StrAttr:$edge, StrAttr:$root_id, DictionaryAttr:$metadata);
+    OptionalAttr<StrAttr>:$edge, StrAttr:$root_id, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 

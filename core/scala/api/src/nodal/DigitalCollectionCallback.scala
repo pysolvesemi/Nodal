@@ -7,6 +7,10 @@ package nodal
   * The compiler rejects authored references to the checked factories before injecting its calls.
   */
 private[nodal] object DigitalCollectionCallback:
+  /** Compiler-authored global immutable Interface initializer, not a factory call marker. */
+  def initializeGlobalInterface[A](initializer: () => A): A =
+    ConstructionKernel.initializeGlobalInterface(initializer)
+
   // Structural callbacks carry a distinct profile. A checked collection function cannot attest
   // a branch, and an ordinary Function0 cannot bypass validation of either authored arm.
   private final class Checked0[A](function: () => A) extends (() => A):
@@ -50,4 +54,37 @@ private[nodal] object DigitalCollectionCallback:
       scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
         "NODAL-COLLECTION-CALLBACK-MISSING",
         "collection callback requires typed effect validation by the Nodal compiler plugin"
+      ))).get
+
+  /** Preserve the exact compiler carrier across the vector-argument adapter. */
+  final class ReductionBody private[DigitalCollectionCallback] (
+      val checked: AnyRef,
+      invoke: Vector[Expr[?]] => Expr[?]
+  ) extends (Vector[Expr[?]] => Expr[?]):
+    def apply(arguments: Vector[Expr[?]]): Expr[?] = invoke(arguments)
+
+  def reductionBody[A <: Data](function: (Expr[A], Expr[A]) => Expr[A]): ReductionBody =
+    function match
+      case _: Checked2[?, ?, ?] => ()
+      case _ => requireChecked(new Object)
+    new ReductionBody(
+      function,
+      arguments =>
+        function(arguments(0).asInstanceOf[Expr[A]], arguments(1).asInstanceOf[Expr[A]])
+    )
+
+  // Immutable graph construction is strictly narrower than ordinary expression purity.
+  private final class CheckedFsmGraph2[S](function: (Int, FsmDef[S]) => FsmDef[S])
+      extends ((Int, FsmDef[S]) => FsmDef[S]):
+    def apply(level: Int, previous: FsmDef[S]): FsmDef[S] = function(level, previous)
+
+  def checkedFsmGraph2[S](function: (Int, FsmDef[S]) => FsmDef[S])
+      : (Int, FsmDef[S]) => FsmDef[S] = new CheckedFsmGraph2(function)
+
+  def requireImmutableFsmChecked(function: AnyRef): Unit = function match
+    case _: CheckedFsmGraph2[?] => ()
+    case _ =>
+      scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-FSM-058-UNROLL-MISSING",
+        "immutable graph unroll requires typed effect validation by the Nodal compiler plugin"
       ))).get

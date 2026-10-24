@@ -9,11 +9,14 @@ private[nodal] object DigitalValueContract:
 
   def validateLiteral(kind: String, value: BigInt, width: Long): Unit =
     if width <= 0 then fail(1, "digital width must be positive")
-    val required = kind match
+    val required = literalRequiredWidth(kind, value)
+    if required > width then
+      fail(2, s"$kind literal $value does not fit width $width")
+
+  def literalRequiredWidth(kind: String, value: BigInt): Long =
+    kind match
       case "UInt" | "Bits" =>
         if value < 0 then fail(2, "unsigned digital literal cannot be negative")
         math.max(1, value.bitLength).toLong
       case "SInt" => value.bitLength.toLong + 1L
       case _ => fail(3, s"unsupported digital literal kind '$kind'")
-    if required > width then
-      fail(2, s"$kind literal $value does not fit width $width")

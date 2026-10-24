@@ -1,4 +1,3 @@
-#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 
 #include "mlir/IR/SymbolTable.h"
@@ -6,9 +5,12 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
+#include "nodal/Dialect/Nodal/DomainModel.h"
+#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/StringSet.h"
 
@@ -27,9 +29,34 @@ StringRef text(Operation *operation, StringRef name) {
   return attribute ? attribute.getValue() : StringRef();
 }
 
+// A family is a retained lexical template, never one occurrence per lane.
+// Only structural Generate/if ancestry is admitted here; behavioral/procedural
+// regions cannot manufacture declaration ownership.
+bool ownedFamilyScope(Operation *family) {
+  unsigned depth = 0;
+  for (Operation *scope = family; scope; scope = scope->getParentOp()) {
+    if (llvm::isa<ModuleOp>(scope))
+      return true;
+    if (++depth > 128)
+      return false;
+    if (llvm::isa<StructuralIfOp>(scope))
+      continue; // Exact arm ownership is retained by the existing lexical scope verifier.
+    if (!llvm::isa<GenerateOp>(scope) || scope->getNumResults() != 1 ||
+        !llvm::isa<GeneratedFamilyType>(scope->getResult(0).getType()))
+      return false;
+  }
+  return false;
+}
+
 LogicalResult verifyDeclaration(Operation *operation) {
-  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(operation->getParentOp()))
-    return reject(operation, "digital storage must be declared directly in its owning module");
+  Operation *parent = operation->getParentOp();
+  bool family = llvm::isa_and_nonnull<GenerateOp>(parent) && parent->getNumResults() == 1 &&
+                llvm::isa<GeneratedFamilyType>(parent->getResult(0).getType()) &&
+                ownedFamilyScope(parent) && llvm::isa<DigitalStorageOp>(operation) &&
+                succeeded(resolveGeneratedDomain(parent));
+  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(parent) && !family)
+    return reject(operation,
+                  "digital storage must be declared directly in its owning module or family");
   StringRef name = text(operation, llvm::isa<MemoryOp>(operation) ? SymbolTable::getSymbolAttrName()
                                                                   : StringRef("name"));
   if (name.empty() || name != name.trim() || name.size() > digitalTypeMaximumIdentifierBytes)
@@ -43,7 +70,7 @@ LogicalResult verifyDomain(Operation *operation) {
   auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("domain");
   if (!reference)
     return reject(operation, "stateful storage requires an explicit owned clock/reset domain");
-  Operation *module = operation->getParentOp();
+  Operation *module = operation->getParentOfType<ModuleOp>();
   Operation *domain = SymbolTable::lookupSymbolIn(module, reference);
   if (!llvm::isa_and_nonnull<DomainOp, DomainRequirementOp>(domain) ||
       domain->getParentOp() != module)
@@ -61,6 +88,287 @@ bool canonicalDepth(StringRef depth) {
 }
 } // namespace
 
+Operation *resolveGeneratedLocalRootFamily(Operation *root) {
+  Operation *family = root ? root->getParentOp() : nullptr;
+  if (!llvm::isa_and_nonnull<GenerateOp>(family) || root->getNumResults() != 1 ||
+      family->getNumResults() != 1 ||
+      !llvm::isa<GeneratedFamilyType>(family->getResult(0).getType()) ||
+      failed(verifyGeneratedFamilyOperation(family)))
+    return nullptr;
+  if (llvm::isa<DigitalStorageOp>(root))
+    return succeeded(verifyDigitalStorageOperation(root)) ? family : nullptr;
+  if (llvm::isa<InstancePortOp>(root))
+    return succeeded(inspectInstancePort(root)) ? family : nullptr;
+  return nullptr;
+}
+
+FailureOr<Operation *> inspectGeneratedExportSymbol(Operation *operation) {
+  Operation *family = operation ? operation->getParentOp() : nullptr;
+  if (!isa_and_nonnull<GeneratedExportOp>(operation) || !isa_and_nonnull<GenerateOp>(family) ||
+      operation->getNumOperands() || text(operation, "access") != "read")
+    return failure();
+  auto target = operation->getAttrOfType<FlatSymbolRefAttr>("target");
+  StringRef kind = text(operation, "kind");
+  if (!target || (kind != "instance" && kind != "interface"))
+    return failure();
+  Operation *found = nullptr;
+  unsigned work = 65536;
+  for (Operation &candidate : *operation->getBlock()) {
+    if (!work--)
+      return failure();
+    if (candidate.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName()) != target.getAttr())
+      continue;
+    if (found || !candidate.isBeforeInBlock(operation) ||
+        (kind == "instance" ? !isa<InstanceOp>(candidate) : !isa<InterfaceInstanceOp>(candidate)))
+      return failure();
+    found = &candidate;
+  }
+  return found ? FailureOr<Operation *>(found) : FailureOr<Operation *>(failure());
+}
+
+LogicalResult verifyGeneratedExportOperation(Operation *operation) {
+  Operation *family = operation->getParentOp();
+  if (!llvm::isa_and_nonnull<GenerateOp>(family) || family->getNumResults() != 1 ||
+      operation->getNumOperands() > 1 || operation->getNumResults() || operation->getNumRegions() ||
+      operation->getNumSuccessors())
+    return reject(operation,
+                  "generated export requires its direct actual family and exact payload");
+  for (NamedAttribute attribute : operation->getAttrs())
+    if (!llvm::is_contained(ArrayRef<StringRef>{"member", "access", "kind", "metadata", "target"},
+                            attribute.getName().getValue()))
+      return reject(operation, "generated export has unsupported metadata authority");
+  StringRef member = text(operation, "member"), access = text(operation, "access");
+  if (member.empty() || member.size() > 1024 || member != member.trim() ||
+      llvm::any_of(member, [](unsigned char c) { return c <= 32 || c == 127; }))
+    return reject(operation, "generated export requires an exact bounded member key");
+  StringRef kind = text(operation, "kind");
+  if (kind == "instance" || kind == "interface")
+    return succeeded(inspectGeneratedExportSymbol(operation))
+               ? success()
+               : reject(operation,
+                        "symbol export requires its preceding direct exact typed target");
+  if ((!kind.empty() && kind != "family") || operation->getNumOperands() != 1 ||
+      operation->hasAttr("target"))
+    return reject(operation, "generated value export has unknown kind or mismatched payload");
+  if (kind == "family") {
+    Operation *nested = operation->getOperand(0).getDefiningOp();
+    if (access != "read" || !llvm::isa_and_nonnull<GenerateOp>(nested) ||
+        nested->getParentOp() != family || nested->getNumResults() != 1 ||
+        !llvm::isa<GeneratedFamilyType>(operation->getOperand(0).getType()) ||
+        !ownedFamilyScope(nested) || failed(resolveGeneratedDomain(nested)) ||
+        failed(verifyDigitalValueScope(operation->getOperand(0), operation)))
+      return reject(operation,
+                    "family export requires its preceding direct nested family and read access");
+    return success();
+  }
+  Operation *storage = operation->getOperand(0).getDefiningOp();
+  if (!llvm::isa_and_nonnull<DigitalStorageOp>(storage) || storage->getParentOp() != family ||
+      failed(verifyDigitalValueScope(operation->getOperand(0), operation)) ||
+      failed(verifyDigitalStorageOperation(storage)))
+    return reject(operation, "generated export must retain preceding direct family storage");
+  if (access != "read" && access != text(storage, "kind"))
+    return reject(operation, "generated export access cannot expand actual storage capability");
+  return success();
+}
+
+LogicalResult verifyGeneratedFamilyOperation(Operation *operation) {
+  if (operation->getNumResults() == 0) {
+    for (Operation &child : operation->getRegion(0).front())
+      if (child.getName().getStringRef() == "nodal.generated_export")
+        return reject(&child, "export requires an actual family handle");
+    return success();
+  }
+  if (operation->getNumResults() != 1 ||
+      !llvm::isa<GeneratedFamilyType>(operation->getResult(0).getType()) ||
+      !ownedFamilyScope(operation) || operation->getNumOperands() != 3 ||
+      failed(resolveGeneratedDomain(operation)))
+    return reject(operation, "family requires one typed handle and a direct owned SSA domain");
+  llvm::StringSet<> members, storageNames;
+  unsigned count = 0;
+  for (Operation &child : operation->getRegion(0).front()) {
+    if (++count > 65536)
+      return reject(operation, "family template exceeds finite authored operation budget");
+    if (llvm::isa<DigitalStorageOp>(child) && !storageNames.insert(text(&child, "name")).second)
+      return reject(&child, "family storage names must be unique in their actual scope");
+    if (child.getName().getStringRef() != "nodal.generated_export")
+      continue;
+    if (!members.insert(text(&child, "member")).second ||
+        failed(verifyGeneratedExportOperation(&child)))
+      return reject(&child, "family exports must have unique verified member keys");
+  }
+  for (OpOperand &use : operation->getResult(0).getUses()) {
+    Operation *user = use.getOwner();
+    if (isStructuralIfFamilyCapture(use))
+      continue;
+    if (llvm::isa<GeneratedExportOp>(user) && text(user, "kind") == "family" &&
+        succeeded(verifyGeneratedExportOperation(user)))
+      continue;
+    if (!llvm::isa<GeneratedMemberOp, InstancePortOp, InterfaceBoundaryOp>(user) ||
+        user->getNumOperands() != 2 || user->getOperand(0) != operation->getResult(0))
+      return reject(user, "family handle is not a runtime payload or arbitrary capability");
+  }
+  return success();
+}
+
+namespace {
+FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, unsigned &work,
+                                         llvm::SmallVectorImpl<Operation *> *selectionUses);
+FailureOr<GeneratedSelectionProof>
+inspectSelection(Value handle, Value ordinal, StringRef member, Operation *operation,
+                 unsigned depth, unsigned &work,
+                 llvm::SmallVectorImpl<Operation *> *selectionUses) {
+  auto rejectSelection = [&](StringRef reason) -> FailureOr<GeneratedSelectionProof> {
+    (void)reject(operation, reason);
+    return failure();
+  };
+  if (depth > 128 || !work || !handle || !ordinal || !ordinal.getType().isSignlessInteger(64))
+    return rejectSelection("generated selection requires an exact bounded family and ordinal");
+  --work;
+  if (!llvm::isa<GeneratedFamilyType>(handle.getType()) ||
+      failed(verifyDigitalValueScope(handle, operation)))
+    return rejectSelection("generated member must retain its actual dominating family");
+  Operation *captureUse = operation;
+  while (auto argument = llvm::dyn_cast<BlockArgument>(handle)) {
+    if (++depth > 128 || !work)
+      return rejectSelection("generated selection chain exceeds finite depth or work budget");
+    --work;
+    Operation *owner = argument.getOwner()->getParentOp();
+    auto h = inspectStructuralIfHeader(owner);
+    if (failed(h) || failed(verifyDigitalValueScope(handle, captureUse)))
+      return rejectSelection("family capture must retain its exact structural arm provenance");
+    unsigned arm = argument.getOwner() == h->bodies[0] ? 0 : 1;
+    if (argument.getOwner() != h->bodies[arm] || argument.getArgNumber() >= h->captureCounts[arm])
+      return rejectSelection("family capture must identify an actual structural capture slot");
+    OpOperand &capture = owner->getOpOperand(h->captureOffsets[arm] + argument.getArgNumber());
+    if (!isStructuralIfFamilyCapture(capture))
+      return rejectSelection("family capture must retain exact type and structural ancestry");
+    handle = capture.get();
+    captureUse = owner;
+  }
+  Operation *family = handle.getDefiningOp();
+  llvm::SmallVector<GeneratedSelection, 2> selections;
+  if (llvm::isa_and_nonnull<GeneratedMemberOp>(family)) {
+    auto parent = inspectMember(family, depth + 1, work, selectionUses);
+    if (failed(parent) || !parent->familyView)
+      return rejectSelection("nested family selection requires a checked immutable family view");
+    selections = std::move(parent->selections);
+    family = parent->storage.getDefiningOp();
+  }
+  if (!llvm::isa_and_nonnull<GenerateOp>(family) || family->getNumRegions() != 1 ||
+      !llvm::hasSingleElement(family->getRegion(0)))
+    return rejectSelection("generated member must retain an actual family declaration");
+  for (Operation &child : family->getRegion(0).front()) {
+    (void)child;
+    if (!work)
+      return rejectSelection("generated selection inventory exceeds finite work budget");
+    --work;
+  }
+  if (failed(verifyGeneratedFamilyOperation(family)))
+    return failure();
+  Operation *exported = nullptr;
+  for (Operation &child : family->getRegion(0).front())
+    if (llvm::isa<GeneratedExportOp>(child) && text(&child, "member") == member)
+      exported = &child;
+  if (!exported)
+    return rejectSelection(
+        "generated member key is absent from the actual closed export inventory");
+  auto coordinate = selectionUses
+                        ? resolveGeneratedOrdinal(family, ordinal, operation, selections, work)
+                        : resolveGeneratedOrdinal(family, ordinal, operation, selections);
+  if (failed(coordinate))
+    return rejectSelection("generated ordinal lacks an all-legal existence proof");
+  selections.push_back({family, ordinal, *coordinate});
+  if (selectionUses)
+    selectionUses->push_back(operation);
+  return GeneratedSelectionProof{family, exported, std::move(selections)};
+}
+FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, unsigned &work,
+                                         llvm::SmallVectorImpl<Operation *> *selectionUses) {
+  auto rejectMember = [&](StringRef reason) -> FailureOr<GeneratedMember> {
+    (void)reject(operation, reason);
+    return failure();
+  };
+  if (depth > 128 || !work)
+    return rejectMember("generated selection chain exceeds finite depth or work budget");
+  if (!llvm::isa<GeneratedMemberOp>(operation) || operation->getNumOperands() != 2 ||
+      operation->getNumResults() != 1 || operation->getNumRegions() ||
+      operation->getNumSuccessors())
+    return rejectMember("generated member requires one exact family and ordinal");
+  for (NamedAttribute attribute : operation->getAttrs())
+    if (!llvm::is_contained(ArrayRef<StringRef>{"member", "access", "kind", "metadata"},
+                            attribute.getName().getValue()))
+      return rejectMember("generated member has unsupported proof metadata");
+  auto proof = inspectSelection(operation->getOperand(0), operation->getOperand(1),
+                                text(operation, "member"), operation, depth, work, selectionUses);
+  if (failed(proof))
+    return failure();
+  Operation *family = proof->family, *exported = proof->exportOperation;
+  if (exported->getNumOperands() != 1)
+    return rejectMember("generated value member cannot project a structural symbol export");
+  auto selections = std::move(proof->selections);
+  auto coordinate = selections.back().coordinate;
+  Value storage = exported->getOperand(0);
+  StringRef access = text(operation, "access"), kind = text(operation, "kind");
+  bool familyView = kind == "family";
+  if ((!kind.empty() && !familyView) || kind != text(exported, "kind") ||
+      (familyView && access != "read") ||
+      (access != "read" && access != text(exported, "access")) ||
+      (access != "read" && access != "wire" && access != "register") ||
+      operation->getResult(0).getType() != storage.getType())
+    return rejectMember(
+        "generated member must retain exact kind, type and monotonic export access");
+  if (familyView)
+    for (OpOperand &use : operation->getResult(0).getUses()) {
+      Operation *user = use.getOwner();
+      if (isStructuralIfFamilyCapture(use))
+        continue;
+      if (!llvm::isa<GeneratedMemberOp, InstancePortOp, InterfaceBoundaryOp>(user) ||
+          user->getNumOperands() != 2 || user->getOperand(0) != operation->getResult(0))
+        return rejectMember("family view is immutable structure, not a runtime payload or export");
+    }
+  return GeneratedMember{family,
+                         exported,
+                         storage,
+                         coordinate,
+                         std::move(selections),
+                         familyView,
+                         access == "wire"       ? GeneratedMember::Access::Wire
+                         : access == "register" ? GeneratedMember::Access::Register
+                                                : GeneratedMember::Access::Read};
+}
+} // namespace
+
+FailureOr<GeneratedSelectionProof> inspectGeneratedSelection(Value familyHandle, Value ordinal,
+                                                             StringRef member, Operation *use) {
+  unsigned work = 65536;
+  return inspectSelection(familyHandle, ordinal, member, use, 0, work, nullptr);
+}
+
+FailureOr<GeneratedMember> inspectGeneratedMember(Operation *operation) {
+  unsigned work = 65536;
+  return inspectMember(operation, 0, work, nullptr);
+}
+
+FailureOr<GeneratedSelectionProof>
+inspectGeneratedSelection(Value familyHandle, Value ordinal, StringRef member, Operation *use,
+                          llvm::SmallVectorImpl<Operation *> &selectionUses,
+                          unsigned &remainingWork) {
+  llvm::SmallVector<Operation *, 2> checked;
+  auto result = inspectSelection(familyHandle, ordinal, member, use, 0, remainingWork, &checked);
+  if (succeeded(result))
+    selectionUses.assign(checked.begin(), checked.end());
+  return result;
+}
+FailureOr<GeneratedMember> inspectGeneratedMember(Operation *operation,
+                                                  llvm::SmallVectorImpl<Operation *> &selectionUses,
+                                                  unsigned &remainingWork) {
+  llvm::SmallVector<Operation *, 2> checked;
+  auto result = inspectMember(operation, 0, remainingWork, &checked);
+  if (succeeded(result))
+    selectionUses.assign(checked.begin(), checked.end());
+  return result;
+}
+
 LogicalResult verifyDigitalStorageModel(Operation *module) {
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
     return failure();
@@ -77,9 +385,16 @@ LogicalResult verifyDigitalStorageOperation(Operation *operation) {
   if (operation->getNumResults() != 1 || operation->getNumOperands() > 1)
     return reject(operation, "wire/register requires one typed value and at most one initializer");
   Type type = operation->getResult(0).getType();
-  if (failed(inferDigitalStorageMaximumBits(type, operation)))
+  if (failed(inspectDigitalStorageType(type, operation)))
     return reject(operation, "wire/register requires an owned finite directionless storage type");
   StringRef kind = text(operation, "kind");
+  if (operation->hasAttr("initializer_policy") &&
+      (text(operation, "initializer_policy") != "if_reset" || kind != "register" ||
+       operation->getNumOperands() != 1 ||
+       !DomainModel(operation).unresolvedRequirement(operation->getAttr("domain")) ||
+       !hasLocalHierarchyObligations(operation->getParentOfType<ModuleOp>())))
+    return reject(operation, "if_reset requires initialized register storage in an exact "
+                             "unresolved local requirement");
   if (kind == "wire") {
     if (operation->getNumOperands() || operation->hasAttr("domain"))
       return reject(operation, "a structural wire has neither a state initializer nor a domain");
@@ -89,11 +404,15 @@ LogicalResult verifyDigitalStorageOperation(Operation *operation) {
     if (operation->getNumOperands()) {
       Value initial = operation->getOperand(0);
       Operation *definition = initial.getDefiningOp();
-      if (!equivalentDigitalStorageTypes(initial.getType(), type, operation->getParentOp()))
+      // Initializer validity needs no attained footprint. Both complete types are
+      // checked at this exact use; canonical identity is not numeric inference.
+      if (failed(inspectDigitalStorageType(initial.getType(), operation)) ||
+          (initial.getType() != type &&
+           !equivalentDigitalStorageTypes(initial.getType(), type,
+                                          operation->getParentOfType<ModuleOp>())))
         return reject(operation,
                       "register initializer must have exactly the declared recursive type");
-      if (!definition || definition->getParentOp() != operation->getParentOp() ||
-          definition == operation || !definition->isBeforeInBlock(operation))
+      if (!definition || failed(verifyDigitalValueScope(initial, operation)))
         return reject(operation, "register initializer must be a value owned by the same module");
     }
   } else {
@@ -167,10 +486,18 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
   if (failed(projection))
     return reject(operation, "digital assignment target has no verified structural root");
   Operation *root = projection->root.getDefiningOp();
-  if (!root || root->getParentOp() != module)
+  if (!root || root->getParentOfType<ModuleOp>() != module ||
+      (root->getParentOp() != module &&
+       !((llvm::isa<DigitalStorageOp>(root) && succeeded(verifyDigitalStorageOperation(root))) ||
+         (llvm::isa<InstancePortOp>(root) && succeeded(inspectInstancePort(root))))))
     return reject(operation, "digital assignment target root belongs to another module");
+  const bool staticStateScope = (llvm::isa<StructuralIfOp>(parent) ||
+                                 (llvm::isa<GenerateOp>(parent) && parent->getNumResults() == 1)) &&
+                                !operation->getParentOfType<CollectionOp>() &&
+                                !operation->getParentOfType<HardwareLoopOp>();
   if (scoped && !llvm::isa<BehavioralIfOp, FlatFSMOp, EnumSwitchOp>(parent) &&
-      (control || text(operation, "kind") != "continuous"))
+      (control || (text(operation, "kind") != "continuous" &&
+                   !(staticStateScope && text(operation, "kind") == "register_next"))))
     return reject(operation, "bounded loop writes require continuous ordinary digital storage");
   if (control) {
     auto source = resolveStaticShapeProjection(value, operation);

@@ -46,7 +46,14 @@ private[nodal] object DigitalMaterializationContract:
       Vector(value),
       resultType = Some(descriptor),
       operation = Some(Operation),
-      materializationIntent = Some(intent)
+      materializationIntent = Some(intent),
+      typeIntent = DeferredResultType.intent(Vector(value)):
+        val actual = CandidateRuntime.expressionDataType(value)
+          .map(CandidateRuntime.typeDescriptor).getOrElse(
+            fail("digital alias lost its finalized operand type")
+          )
+        DigitalCombinationalContract.validateValueType(actual)
+        actual
     )
     ConstructionKernel.expression(expression)
     expression

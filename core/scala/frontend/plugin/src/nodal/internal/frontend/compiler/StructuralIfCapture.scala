@@ -4,6 +4,7 @@ import dotty.tools.dotc.ast.tpd
 import dotty.tools.dotc.ast.tpd.*
 import dotty.tools.dotc.core.Constants.Constant
 import dotty.tools.dotc.core.Contexts.*
+import dotty.tools.dotc.core.DenotTransformers.DenotTransformer
 import dotty.tools.dotc.core.Names.*
 import dotty.tools.dotc.core.Symbols.*
 import dotty.tools.dotc.core.Types.*
@@ -164,7 +165,9 @@ private[compiler] final class StructuralIfCapture:
     var owner = ctx.owner
     var found = false
     while owner.exists && !found do
-      found = owner.isClass && owner.derivesFrom(requiredClass("nodal.Module"))
+      found = owner.isClass &&
+        (owner.derivesFrom(requiredClass("nodal.Module")) ||
+          owner.derivesFrom(requiredClass("nodal.Area")))
       owner = owner.owner
     found
 
@@ -189,9 +192,13 @@ private[compiler] final class StructuralIfCapture:
       tree.getAttachment(expectedReadOnly).getOrElse(tree.tpe.widenUnion.widenSingletons())
     Option.when(result =:= defn.UnitType || readOnly(result))(result)
 
-  def lower(tree: If, predicate: Predicate, result: Type)(using Context): Tree =
+  def lower(tree: If, predicate: Predicate, result: Type, phase: DenotTransformer)(using
+      Context
+  ): Tree =
     def branch(body: Tree): Tree =
-      val closure = Lambda(MethodType(Nil)(_ => Nil, _ => result), _ => body)
+      val method = newAnonFun(ctx.owner, MethodType(Nil)(_ => Nil, _ => result))
+      val moved = body.changeOwnerAfter(ctx.owner, method, phase)
+      val closure = Closure(method, _ => moved)
       ref(requiredMethod("nodal.DigitalCollectionCallback.checked0"))
         .appliedToType(result).appliedTo(closure)
     val arguments = List(predicate.lower(), branch(tree.thenp), branch(tree.elsep))

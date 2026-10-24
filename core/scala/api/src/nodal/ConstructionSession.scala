@@ -246,17 +246,57 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     streamTransaction("Stream"):
       ownedStreamValue(payload, "Stream payload")
       ownedStreamValue(valid, "Stream valid", bool = true)
-      val result = new Stream(payload, valid, newStreamReady())
-      val reference = declarationIds.get(result.readyWire)
-      val module = records(reference.module)
-      val declaration = module.declarations(reference.index)
-      module.declarations.update(
-        reference.index,
-        declaration.copy(attributes =
-          declaration.attributes ++ Vector("stream_payload" -> payload, "stream_valid" -> valid)
-        )
+      registerStream(payload, valid, newStreamReady())
+
+  private def registerStream[A <: Data](
+      payload: Expr[A],
+      valid: Expr[Bool],
+      ready: Signal[Bool]
+  ): Stream[A] =
+    val reference = declarationIds.get(ready)
+    val module = records(reference.module)
+    val declaration = module.declarations(reference.index)
+    module.declarations(reference.index) = declaration.copy(attributes =
+      declaration.attributes ++ Vector("stream_payload" -> payload, "stream_valid" -> valid)
+    )
+    new Stream(payload, valid, ready)
+
+  /** Read-only transfer observation shares the existing carrier/ready declaration owner. */
+  def fsmTransfer[A <: Data](carrier: Stream[A]): Expr[Bool] =
+    streamTransaction("FSM transfer wait"):
+      if carrier == null then
+        FsmDefinitionRuntime.fail("transfer binding requires an actual Stream")
+      ownedStreamValue(carrier.payload, "Stream payload")
+      ownedStreamValue(carrier.valid, "Stream valid", bool = true)
+      ownedStreamValue(carrier.ready, "Stream ready", bool = true)
+      val tuple = fsmTransferTuple(carrier.valid, carrier.ready)
+      if valueReference(tuple) != valueReference(carrier.payload) then
+        FsmDefinitionRuntime.fail("transfer binding differs from its actual Stream carrier")
+      // A binding retains explicit operands, never a captured predicate shared by machines.
+      // Every occurrence rechecks these identities and creates its own actual predicate.
+      new KernelExpr[Bool](
+        Vector(carrier.valid, carrier.ready),
+        resultType = Some(KernelTypeDescriptor("Bool")),
+        operation = Some(FsmTimingRuntime.TransferOperation)
       )
-      result
+
+  private def fsmTransferTuple(valid: Expr[Bool], ready: Expr[Bool]): Expr[?] =
+    val reference = Option(
+      declarationIds.get(ready)
+    ).getOrElse(FsmDefinitionRuntime.fail("transfer ready requires its actual Stream wire"))
+    if reference.module != currentModule.handle then
+      FsmDefinitionRuntime.fail("transfer carrier belongs to another Module")
+    val attributes = records(reference.module).declarations(reference.index).attributes
+    val payload = attributes.collectFirst { case ("stream_payload", value: Expr[?]) => value }
+    val actualValid = attributes.collectFirst { case ("stream_valid", value: Expr[?]) => value }
+    if payload.isEmpty || !actualValid.exists(value =>
+        valueReference(value) == valueReference(valid)
+      ) || !attributes.exists(_._1 == "stream_ready_default")
+    then
+      FsmDefinitionRuntime.fail(
+        "transfer predicate requires its exact existing Stream valid/ready pair"
+      )
+    payload.get
 
   def acceptStream[A <: Data](stream: Stream[A], ready: Expr[Bool]): Unit =
     streamTransaction("Stream.accept"):
@@ -275,6 +315,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     * separate connectivity graph: duplicate drivers reject and unattached sinks receive false.
     */
   private def finalizeStreamReady(): Unit =
+    if boundaryWorkActive then
+      closureCharge(records.size.toLong + operations.size.toLong)
+      records.valuesIterator.foreach: module =>
+        closureCharge(module.declarations.size.toLong)
+        module.declarations.foreach(value => closureCharge(value.attributes.size.toLong))
     val readyDeclarations = records.valuesIterator.flatMap(_.declarations).filter(
       _.attributes.exists(_._1 == "stream_ready_default")
     ).map(value => value.reference -> value).toMap
@@ -289,10 +334,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             if count > 1 then crossingFailure("Stream ready has more than one owner")
             counts.update(reference, count)
         case _ => ()
+    closureCharge(readyDeclarations.size.toLong * readyDeclarations.size.toLong * 2L)
     readyDeclarations.toVector.sortBy((reference, _) =>
       (reference.module, reference.index)
     ).foreach: (reference, declaration) =>
       if !counts.contains(reference) then
+        closureCharge(1L + declaration.attributes.size.toLong)
         val default = declaration.attributes.collectFirst:
           case ("stream_ready_default", value: Expr[?]) => value
         .get
@@ -353,7 +400,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       record.results.foreach((reference, _) => executableCrossings.update(reference, record))
       crossingStateBits += stateBits
       acceptStream(input, sourceReady)
-      new Stream(payload, valid, ready)
+      registerStream(payload, valid, ready)
 
   def levelSync(bit: Expr[Bool], to: ClockDomain, stages: Int): Expr[Bool] =
     executableCrossing(bit, to, stages, "sync")
@@ -417,7 +464,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         scala.util.Failure[Nothing](failure).get
 
   private def executableCrossingSnapshot(expression: KernelExpr[?])
-      : Option[KernelExecutableCrossingSnapshot] =
+      : Option[KernelExecutableCrossingSnapshot] = publicationProbe:
     if expression.operation.exists(ExecutableCrossingContract.Operations) then
       val record = executableCrossings.getOrElse(
         expressionIds.get(expression),
@@ -489,7 +536,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       result
 
   private def executableWaiverSnapshot(expression: KernelExpr[?])
-      : Option[KernelExecutableWaiverSnapshot] =
+      : Option[KernelExecutableWaiverSnapshot] = publicationProbe:
     Option.when(expression.operation.contains(ExecutableWaiverContract.Operation)):
       val record = executableWaivers.getOrElse(
         expressionIds.get(expression),
@@ -540,6 +587,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   /** A derived producer is distinct from every physical input and from every other producer. */
   private def clockIdentity(value: Expr[Clock], owner: Long, depth: Int = 0)
       : Either[(DeclarationRef, Long), ExpressionRef] =
+    publicationCharge(1L)
     if depth > 128 then clockFailure("clock graph exceeds depth budget")
     if !CandidateRuntime.expressionDataType(value).exists(dataType =>
         CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Clock")
@@ -570,6 +618,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Left(physical)
 
   private def clockResetSafe(value: Expr[Reset], receiving: ClockDomain): Boolean =
+    boundDomainCharge()
     val memo = new IdentityHashMap[Expr[Reset], java.lang.Boolean]()
     val owner = domainRef(receiving).module
     val identity = clockIdentity(receiving.clock.get, owner)
@@ -583,6 +632,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ) == identity &&
         inheritedClockEdge(other) == edge
     def visit(input: Expr[Reset], depth: Int): Boolean =
+      boundDomainCharge()
       clockProofWork += 1
       if depth > 128 || clockProofWork > 524288 then
         clockFailure("parent reset proof exceeds budget")
@@ -730,6 +780,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
 
   private def relationshipSnapshot(domain: DomainRecord): Option[KernelClockRelationshipSnapshot] =
+    publicationCharge(1L)
     Option.when(domain.domain.executableRelationship):
       val actual = domain.domain
       val parent = actual.parent.get
@@ -756,17 +807,29 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
 
   private def relationshipIndex(): ClockRelationshipModel.Index =
+    publicationCharge(1L)
     val actual = if stimulusOnly then Vector.empty
     else
-      records.valuesIterator.flatMap(_.domains).filter(value =>
+      publicationElements(records.valuesIterator).flatMap(module =>
+        publicationElements(module.domains)
+      ).filter(value =>
         value.kind != KernelDomainKind.Required && value.domain.clock.nonEmpty
       ).toVector
+    publicationCharge(actual.size.toLong)
     val endpoints = actual.map: record =>
+      publicationCharge(1L)
       val domain = record.domain
       val identity = clockIdentity(domain.clock.get, record.reference.module)
       val physical = identity match
-        case Left((reference, offset)) => "physical:" + declarationPath(reference) + ":" + offset
-        case Right(reference) => "derived:" + expressionPath(reference)
+        case Left((reference, offset)) =>
+          val path = declarationPath(reference)
+          val suffix = offset.toString
+          publicationCharge(10L + path.length.toLong + suffix.length.toLong)
+          "physical:" + path + ":" + suffix
+        case Right(reference) =>
+          val path = expressionPath(reference)
+          publicationCharge(8L + path.length.toLong)
+          "derived:" + path
       ClockRelationshipModel.Endpoint(
         domainPath(record.reference),
         modulePath(record.reference.module),
@@ -778,8 +841,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
     new ClockRelationshipModel.Index(
       endpoints,
-      actual.flatMap(relationshipSnapshot),
-      (message, path) => fail(ClockRelationshipModel.Code, message, Some(path))
+      actual.flatMap(record => publicationProbe(relationshipSnapshot(record))),
+      (message, path) => fail(ClockRelationshipModel.Code, message, Some(path)),
+      publicationCharge
     )
 
   def clockGate(domain: ClockDomain, enable: Expr[Bool], testEnable: Expr[Bool], name: String)
@@ -796,19 +860,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     else ownedClock("mux", domains, Vector(select), name)
 
   private def clockSnapshot(expression: KernelExpr[?]): Option[KernelClockSnapshot] =
-    clockRecords.get(expressionIds.get(expression)).map: record =>
-      if record.controlKinds.size != record.controls.size then
-        clockFailure("clock control provenance was not validated")
-      KernelClockSnapshot(
-        record.kind,
-        record.parents.map(value => domainPath(domainRef(value))),
-        domainPath(domainRef(record.destination.get)),
-        clockEdgeName(inheritedClockEdge(record.parents.head).get),
-        record.controlKinds,
-        record.controlDomains,
-        OwnedClockContract.contract(record.kind),
-        OwnedClockContract.obligations(record.kind)
-      )
+    publicationProbe:
+      clockRecords.get(expressionIds.get(expression)).map: record =>
+        if record.controlKinds.size != record.controls.size then
+          clockFailure("clock control provenance was not validated")
+        KernelClockSnapshot(
+          record.kind,
+          publicationVector(record.parents).map(value => domainPath(domainRef(value))),
+          domainPath(domainRef(record.destination.get)),
+          clockEdgeName(inheritedClockEdge(record.parents.head).get),
+          record.controlKinds,
+          record.controlDomains,
+          OwnedClockContract.contract(record.kind),
+          OwnedClockContract.obligations(record.kind)
+        )
 
   private final case class ResetRecord(
       kind: String,
@@ -823,6 +888,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private val physicalResetBoundaries = mutable.Map.empty[(DeclarationRef, Long), Expr[Reset]]
 
   private def physicalControlIdentity(value: Expr[?]): (DeclarationRef, Long) =
+    publicationCharge(1L)
     import StructuralShapeCoordinates.{Coordinate, Projection}
     var reference = assignmentReference(value)
     var projections = Vector.empty[Projection]
@@ -883,6 +949,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     }
     if tokens.exists(_.toLongOption.isEmpty) then
       resetFailure("physical control execution requires fixed literal shape coordinates")
+    // The admitted publication profile proves direct scalar controls: both vectors are empty.
+    // This debit covers the existing bounded empty-coordinate helper dispatch, not projected work.
+    publicationCharge(1L)
     val region = StructuralShapeCoordinates.scalarRegion(dimensions, projections)
     (region.cardinality, region.rootOrdinal) match
       case (Coordinate.Literal(1), Coordinate.Literal(offset))
@@ -903,6 +972,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     then resetFailure("reset structures require direct module-level construction")
 
   private def actualReset(value: Expr[Reset]): Expr[Reset] =
+    publicationCharge(1L)
     if resetRecords.containsKey(value) then value
     else
       Option(
@@ -910,6 +980,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ).orElse(physicalResetBoundaries.get(physicalControlIdentity(value))).getOrElse(value)
 
   private def resetRecord(value: Expr[Reset]): ResetRecord =
+    publicationCharge(1L)
     resetRecords.get(actualReset(value)) match
       case null =>
         resetFailure("reset requires an actual owned producer or declared reset boundary")
@@ -1100,21 +1171,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           effectiveResets.put(domain, reset)
 
   private def resetSnapshot(expression: KernelExpr[?]): Option[KernelResetSnapshot] =
-    Option(resetRecords.get(expression.asInstanceOf[Expr[Reset]])).map: record =>
-      val inputs = record.inputs.map(domainSourcePath)
-      val clock = if record.kind == "sync" then
-        Vector(record.destination.flatMap(_.clock).map(domainSourcePath).getOrElse(
-          resetFailure("construction-form reset synchronizer has no receiving domain")
-        ))
-      else Vector.empty
-      KernelResetSnapshot(
-        record.kind,
-        resetPolarityName(record.polarity),
-        record.release,
-        record.destination.map(value => domainPath(domainRef(value))),
-        record.stages,
-        inputs ++ clock
-      )
+    publicationProbe:
+      Option(resetRecords.get(expression.asInstanceOf[Expr[Reset]])).map: record =>
+        val inputs = publicationVector(record.inputs).map(domainSourcePath)
+        val clock = if record.kind == "sync" then
+          Vector(record.destination.flatMap(_.clock).map(domainSourcePath).getOrElse(
+            resetFailure("construction-form reset synchronizer has no receiving domain")
+          ))
+        else Vector.empty
+        KernelResetSnapshot(
+          record.kind,
+          resetPolarityName(record.polarity),
+          record.release,
+          record.destination.map(value => domainPath(domainRef(value))),
+          record.stages,
+          inputs ++ clock
+        )
 
   private val userFunctions = new AnalogUserFunctionRuntime.Registry
   private var nextModule: Long = 0L
@@ -1132,6 +1204,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private val staticPredicates = mutable.LinkedHashMap.empty[ExpressionRef, StaticPredicate]
   private val structuralIfs = mutable.LinkedHashMap.empty[ExpressionRef, StructuralIfRecord]
   private val structuralArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private var capturingStructuralValue = false
   private val behavioralIfs = mutable.LinkedHashMap.empty[ExpressionRef, BehavioralIfRecord]
   private val behavioralArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
   private val flatFsms = mutable.LinkedHashMap.empty[ExpressionRef, FlatFsmRecord[?]]
@@ -1140,7 +1213,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private val fsmResults = mutable.HashMap.empty[ExpressionRef, (FlatFsmRecord[?], String)]
   private val fsmObservations = new IdentityHashMap[AnyRef, FlatFsmObservation]()
   private val openFsms = mutable.ArrayBuffer.empty[FlatFsmRecord[?]]
+  private var compositionObservationRoot: Option[ExpressionRef] = None
   private val privateFsmStorage = mutable.HashSet.empty[DeclarationRef]
+  private var auxiliaryFsmStateBits = 0
+  private def contextualFsmInitializer(declaration: DeclarationRecord): Boolean =
+    privateFsmStorage(declaration.reference) &&
+      declaration.attributes.contains("initializer_policy" -> "if_reset") &&
+      declarationCandidate(declaration).exists: domain =>
+        val reference = domainRef(domain)
+        reference.module == declaration.reference.module &&
+        records(reference.module).domains(reference.index).kind == KernelDomainKind.Required
   private val enumSwitches = mutable.LinkedHashMap.empty[ExpressionRef, EnumSwitchRecord[?]]
   private val enumSwitchArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
   private val behavioralChains =
@@ -1172,11 +1254,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       pending.removeLast() match
         case reference: Expr[?] =>
           Option(fsmObservations.get(reference)).foreach: observation =>
-            if !observation.record.open || observation.record.reference.module != currentModule.handle
+            if (!observation.record.open && !compositionObservationRoot.exists(root =>
+                observation.record.composition.exists(_.root == root)
+              )) || observation.record.reference.module != currentModule.handle
             then
               FlatFsmRuntime.fail("machine observation escaped its open builder scope")
             result.foreach: previous =>
-              if previous.record ne observation.record then
+              if (previous.record ne observation.record) && !compositionObservationRoot.exists(
+                  root =>
+                    previous.record.composition.exists(
+                      _.root == root
+                    ) && observation.record.composition.exists(_.root == root)
+                )
+              then
                 FlatFsmRuntime.fail("observations belong to different open machine scopes")
             result = Some(FlatFsmObservation(
               observation.record,
@@ -1204,6 +1294,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       FlatFsmRuntime.fail("machine builder is closed or belongs to another construction")
     record
 
+  private def requireFsmObservation[S](builder: FsmBuilder[S]): FlatFsmRecord[S] =
+    val record = builder.record
+    if compositionObservationRoot.exists(root => record.composition.exists(_.root == root)) &&
+      record.reference.module == currentModule.handle && flatFsms.get(
+        record.reference
+      ).contains(record)
+    then record
+    else requireFsm(builder)
+
   private def requireFsmState[S](builder: StateBuilder[S]): FlatFsmRecord[S] =
     val record = requireFsm(builder.machine)
     if !builder.record.open || !record.states.contains(builder.record) || activeValueRegion.nonEmpty
@@ -1218,15 +1317,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         poisonConstructor(failure, "flat FSM/action switch")
         scala.util.Failure[Nothing](failure).get
 
-  def captureFlatFsm[S](
+  private def allocateFlatFsm[S](
       definition: FsmDefinition[S],
       initial: S,
       encoding: FsmEncoding,
       custom: Option[FsmLocalEncoding[S]],
       illegalState: IllegalStatePolicy,
-      body: FsmBuilder[S] => Unit,
-      evidence: HwEnum[S]
-  ): Unit = fsmTransaction:
+      evidence: HwEnum[S],
+      control: Option[FsmControl],
+      composed: Boolean
+  ): FsmBuilder[S] =
     if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty || analogStack.nonEmpty ||
       analogSemanticContext.nonEmpty || openFsms.nonEmpty || flatFsms.size >= 4096
     then
@@ -1238,13 +1338,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val module = currentModule
     val domain =
       currentDomain.getOrElse(FlatFsmRuntime.fail("machine requires an actual local clock domain"))
-    if domain.clock.isEmpty || !domain.resetPolicy.exists(Set(
+    val domainReference = domainRef(domain)
+    val contextual = domainReference.module == module.handle &&
+      module.domains(domainReference.index).kind == KernelDomainKind.Required
+    if !contextual && (domain.clock.isEmpty || !domain.resetPolicy.exists(Set(
         ResetPolicy.None,
         ResetPolicy.Sync,
         ResetPolicy.Async
-      ).contains)
+      ).contains))
     then
-      FlatFsmRuntime.fail("machine requires an actual supported local Clock/Reset binding")
+      FlatFsmRuntime.fail("machine requires a supported local binding or exact local requirement")
+    val boundControl = control.map: value =>
+      val _ = FsmDefinitionRuntime.control(value.restart, value.cancel, value.enable)
+      val _ = validateFsmObservations(Vector(value.restart, value.cancel, value.enable))
+      def bind(value: Expr[Bool]): Expr[Bool] =
+        bindCollectionValue(value, None, module.handle).asInstanceOf[Expr[Bool]]
+      new FsmControl(bind(value.restart), bind(value.cancel), bind(value.enable))
     val canonical = DigitalEnumContract.abi(definition.canonicalType)
     val initialId = DigitalEnumContract.selectedCase(initial, evidence, canonical)
     val (resolvedEncoding, local) = FlatFsmRuntime.localCodes(encoding, custom, evidence)
@@ -1254,7 +1363,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val initialCode = local.cases.find(_.id == initialId).get.code
     val storage = if domain.resetPolicy.contains(ResetPolicy.None) then Reg.uninitialized(localType)
     else Reg(FlatFsmRuntime.bits(initialCode, local.width))
-    val reference = ExpressionRef(module.handle, module.expressionCount)
+    val statusStorage = boundControl.map: _ =>
+      if domain.resetPolicy.contains(ResetPolicy.None) then Reg.uninitialized(Bits(2))
+      else Reg(FlatFsmRuntime.bits(0, 2))
+    if contextual then
+      (Vector(storage) ++ statusStorage).foreach: value =>
+        val reference = declarationIds.get(value)
+        val declaration = module.declarations(reference.index)
+        module.declarations(reference.index) = declaration.copy(
+          attributes = declaration.attributes :+ ("initializer_policy" -> "if_reset")
+        )
+    val reference = allocateExpressionReference(module)
     module.expressionCount += 1
     def projection[A <: Data](operation: String, dataType: KernelTypeDescriptor): KernelExpr[A] =
       val value =
@@ -1266,6 +1385,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       KernelTypeDescriptor("Bits", Vector(local.width))
     )
     val taken = projection[Bool](FlatFsmRuntime.TakenOperation, KernelTypeDescriptor("Bool"))
+    val lifecycle = boundControl.map(value =>
+      FlatFsmLifecycleRecord(
+        statusStorage.get,
+        value,
+        projection[Bool](FlatFsmRuntime.EnteredOperation, KernelTypeDescriptor("Bool")),
+        projection[Bool](FlatFsmRuntime.ExitedOperation, KernelTypeDescriptor("Bool")),
+        Option.when(composed)(projection[Bool](
+          FlatFsmRuntime.EstablishmentOperation,
+          KernelTypeDescriptor("Bool")
+        ))
+      )
+    )
     val record = new FlatFsmRecord(
       reference,
       definition,
@@ -1280,15 +1411,33 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       storage,
       next,
       taken,
-      nextEffectOrdinal()
+      nextEffectOrdinal(),
+      lifecycle
     )
     flatFsms.update(reference, record)
     fsmResults.update(expressionIds.get(next), record -> "next")
     fsmResults.update(expressionIds.get(taken), record -> "taken")
-    privateFsmStorage += declarationIds.get(storage)
-    semanticOrigin.captureExpression(module.handle, reference.index, record, Vector(storage))
+    lifecycle.foreach: value =>
+      fsmResults.update(expressionIds.get(value.entered), record -> "entered")
+      fsmResults.update(expressionIds.get(value.exited), record -> "exited")
+      value.establishment.foreach(result =>
+        fsmResults.update(expressionIds.get(result), record -> "establishment")
+      )
+    record.privateStorage.foreach(value => privateFsmStorage += declarationIds.get(value))
+    new FsmBuilder(definition, initial, encoding, illegalState, record)
+
+  private def captureAllocatedFlatFsm[S](
+      builder: FsmBuilder[S],
+      body: FsmBuilder[S] => Unit
+  ): Unit =
+    val record = builder.record
+    semanticOrigin.captureExpression(
+      record.reference.module,
+      record.reference.index,
+      record,
+      record.privateStorage ++ record.controlInputs
+    )
     openFsms += record
-    val builder = new FsmBuilder(definition, initial, encoding, illegalState, record)
     try
       body(builder)
       FlatFsmGraphContract.validate(record, pathOf)
@@ -1297,6 +1446,246 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       record.states.foreach(_.open = false)
       val removed = openFsms.remove(openFsms.size - 1)
       if removed ne record then FlatFsmRuntime.fail("machine builder stack is corrupt")
+
+  def captureFlatFsm[S](
+      definition: FsmDefinition[S],
+      initial: S,
+      encoding: FsmEncoding,
+      custom: Option[FsmLocalEncoding[S]],
+      illegalState: IllegalStatePolicy,
+      body: FsmBuilder[S] => Unit,
+      evidence: HwEnum[S],
+      control: Option[FsmControl]
+  ): Unit = fsmTransaction:
+    captureAllocatedFlatFsm(
+      allocateFlatFsm(
+        definition,
+        initial,
+        encoding,
+        custom,
+        illegalState,
+        evidence,
+        control,
+        false
+      ),
+      body
+    )
+
+  def captureFsmComposition[S](
+      spec: FsmInstanceSpec[S],
+      control: FsmControl,
+      observe: FsmRun[S] => Unit
+  ): Unit = fsmTransaction:
+    val root = new FsmOccurrence(spec)
+    val plan = mutable.ArrayBuffer[FsmOccurrence[?]](root)
+    var cursor = 0
+    def prepare[T](occurrence: FsmOccurrence[T]): Unit =
+      FsmCompositionRuntime.validateBindings(occurrence.spec)
+      val bySlot = occurrence.spec.bindings.children.map(value => value.slot -> value).toMap
+      occurrence.children = occurrence.spec.definition.children.map: slot =>
+        val binding = bySlot(slot)
+        FsmChildOccurrence(binding.slot, new FsmOccurrence(binding.instance))
+      occurrence.children.foreach(value => plan += value.occurrence)
+    while cursor < plan.size do
+      if plan.size > 4096 then FlatFsmRuntime.fail("composition exceeds 4096 occurrences")
+      prepare(plan(cursor))
+      cursor += 1
+    if flatFsms.size.toLong + plan.size > 4096 then
+      FlatFsmRuntime.fail("module machines exceed 4096 occurrences")
+    def allocate[T](occurrence: FsmOccurrence[T]): Unit =
+      val value = occurrence.spec
+      occurrence.builder = Some(allocateFlatFsm(
+        value.definition.definition,
+        value.definition.initial,
+        value.encoding,
+        value.custom,
+        value.illegalState,
+        value.definition.evidence,
+        Some(control),
+        true
+      ))
+    plan.foreach(allocate)
+    val rootReference = root.builder.get.record.reference
+    def attach[T](value: FsmOccurrence[T]): Unit =
+      val definition = value.spec.definition
+      val record = value.builder.get.record
+      val fragments = definition.fragments.map(fragment =>
+        fragment.name -> fragment.states.map(state =>
+          DigitalEnumContract.selectedCase(state.value, definition.evidence, record.canonical)
+        )
+      )
+      record.composition = Some(new FlatFsmCompositionRecord(
+        rootReference,
+        definition.definition.name,
+        definition.semanticHash,
+        fragments,
+        definition.compositionCost,
+        definition.compositionCost.completionPossible
+      ))
+    plan.foreach(attach)
+    def capture[T](occurrence: FsmOccurrence[T]): Unit =
+      val spec = occurrence.spec
+      val builder = occurrence.builder.get
+      val record = builder.record
+      val guards = spec.bindings.guards.map(value => value.slot -> value.value).toMap
+      val actions = spec.bindings.actions.map(value => value.slot -> value.body).toMap
+      val children =
+        occurrence.children.map(value => value.slot -> value.occurrence.builder.get.record).toMap
+      captureAllocatedFlatFsm(
+        builder,
+        machine =>
+          spec.definition.stack.foreach(captureFlatFsmStack(machine, _))
+          spec.definition.fragments.foreach: fragment =>
+            fragment.states.foreach: state =>
+              captureFlatFsmState(
+                machine,
+                state.value,
+                stateBuilder =>
+                  state.commands.foreach:
+                    case edge: FsmDefinitionEdge[T] =>
+                      captureFlatFsmTransition(
+                        stateBuilder,
+                        guards(edge.guard),
+                        edge.mode,
+                        edge.destination,
+                        edge.action.map(actions)
+                      )
+                    case call: FsmDefinitionCall[T] =>
+                      captureFlatFsmProcedure(
+                        stateBuilder,
+                        guards(call.guard),
+                        call.mode,
+                        Some(call.entry),
+                        Some(call.resume)
+                      )
+                    case returning: FsmDefinitionReturn[T] =>
+                      captureFlatFsmProcedure(
+                        stateBuilder,
+                        guards(returning.guard),
+                        returning.mode,
+                        None,
+                        None
+                      )
+                    case timer: FsmDefinitionTimer[T] =>
+                      captureFlatFsmTimer(stateBuilder, timer.cycles, timer.mode, timer.destination)
+                    case transfer: FsmDefinitionTransfer[T] =>
+                      captureFlatFsmTransferTransition(
+                        stateBuilder,
+                        guards(transfer.slot.guard),
+                        transfer.mode,
+                        transfer.destination
+                      )
+                    case action: FsmDefinitionAction[T] =>
+                      captureFlatFsmAction(stateBuilder, action.phase, actions(action.slot))
+                    case join: FsmDefinitionJoin[T] =>
+                      val selected = join.child.toVector match
+                        case values if values.nonEmpty => values
+                        case _ => state.childSlots
+                      val actual = selected.map(children)
+                      val result = new KernelExpr[Bool](
+                        actual.map(_.lifecycle.get.storage),
+                        resultType = Some(KernelTypeDescriptor("Bool")),
+                        operation = Some(FlatFsmRuntime.JoinOperation)
+                      )
+                      val _ = captureExpression(result)
+                      record.composition.get.joins += FlatFsmJoinRecord(
+                        result,
+                        stateBuilder.record.caseId,
+                        actual,
+                        join.policy,
+                        if join.child.nonEmpty then "one_child" else "all_children"
+                      )
+                      captureFlatFsmTransition(
+                        stateBuilder,
+                        result,
+                        join.mode,
+                        join.destination,
+                        None
+                      )
+                  if state.isTerminal then captureFlatFsmTerminal(stateBuilder)
+              )
+      )
+      spec.definition.fragments.flatMap(_.states).filter(_.childSlots.nonEmpty).foreach: state =>
+        val ownerCase =
+          DigitalEnumContract.selectedCase(state.value, record.evidence, record.canonical)
+        val owned = state.childSlots.map(slot => (slot: AnyRef) -> children(slot))
+        val lifecycle = record.lifecycle.get
+        val operands = Vector(
+          record.storage,
+          lifecycle.storage,
+          record.nextLocal,
+          record.taken,
+          lifecycle.entered,
+          lifecycle.exited,
+          lifecycle.establishment.get,
+          lifecycle.control.enable
+        )
+        def result(operation: String, role: String): KernelExpr[Bool] =
+          val value = new KernelExpr[Bool](
+            operands,
+            resultType = Some(KernelTypeDescriptor("Bool")),
+            operation = Some(operation)
+          )
+          val _ = captureExpression(value)
+          val ordinal = record.local.cases.indexWhere(_.id == ownerCase)
+          fsmResults.update(expressionIds.get(value), record -> s"children.$ordinal.$role")
+          value
+        val childControl = new FsmControl(
+          result(FlatFsmRuntime.RestartOperation, "restart"),
+          result(FlatFsmRuntime.CancelOperation, "cancel"),
+          result(FlatFsmRuntime.EnableOperation, "enable")
+        )
+        record.composition.get.groups += FlatFsmChildGroup(ownerCase, owned, childControl)
+        owned.foreach: (slot, child) =>
+          child.lifecycle.get.control = childControl
+          child.composition.get.parent =
+            Some((record, ownerCase, slot.asInstanceOf[FsmChild[T, ?]].name))
+    plan.foreach(capture)
+    compositionObservationRoot = Some(rootReference)
+    try observe(new FsmRun(root.builder.get))
+    finally compositionObservationRoot = None
+
+  def fsmChild[P, C](builder: FsmBuilder[P], slot: FsmChild[P, C]): FsmChildRun[C] =
+    val record = requireFsmObservation(builder)
+    if slot == null || (slot.owner ne record.definition) || compositionObservationRoot.isEmpty then
+      FsmDefinitionRuntime.fail(
+        "child observation requires its exact composition callback and slot owner"
+      )
+    val child = record.composition.toVector.flatMap(_.groups).flatMap(_.children)
+      .find((candidate, _) => candidate eq slot).map(_._2)
+      .getOrElse(FsmDefinitionRuntime.fail("child observation names a missing or foreign slot"))
+    // The exact typed slot is the identity witness for this one existential child record.
+    val typed = child.asInstanceOf[FlatFsmRecord[C]]
+    if typed.definition ne slot.definition.definition then
+      FsmDefinitionRuntime.fail("child definition identity mismatch")
+    var active: Expr[Bool] = true.B
+    var current = child
+    while current.composition.flatMap(_.parent).nonEmpty do
+      val (parent, ownerCase, _) = current.composition.get.parent.get
+      val code = parent.local.cases.find(_.id == ownerCase).get.code
+      val owner = DigitalCombinationalContract.compare(
+        "digital_eq",
+        parent.storage,
+        FlatFsmRuntime.bits(code, parent.local.width)
+      )
+      val running = DigitalCombinationalContract.compare(
+        "digital_eq",
+        parent.lifecycle.get.storage,
+        FlatFsmRuntime.bits(1, 2)
+      )
+      active = SequentialRuntime.and(active, SequentialRuntime.and(owner, running))
+      current = parent
+    val observed = markFsmObservation(record, active, future = false)
+    new FsmChildRun(
+      observed,
+      new FsmRun(new FsmBuilder(
+        typed.definition,
+        slot.definition.initial,
+        typed.encoding,
+        typed.illegalState,
+        typed
+      ))
+    )
 
   def captureFlatFsmState[S](
       builder: FsmBuilder[S],
@@ -1373,7 +1762,82 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       body: Option[() => Unit]
   ): Unit = fsmTransaction:
     val record = requireFsmState(builder)
-    if Option(mode).isEmpty || CandidateRuntime.expressionDataType(
+    val bound = captureFsmGuard(record, condition, mode)
+    val destination = DigitalEnumContract.selectedCase(to, record.evidence, record.canonical)
+    val transition =
+      FlatFsmTransitionRecord(
+        builder.record.caseId,
+        Some(destination),
+        mode,
+        bound,
+        record.nextOrdinal()
+      )
+    record.transitions += transition
+    body.foreach(callback =>
+      captureFsmAction(record, "transition", None, Some(transition.ordinal), callback)
+    )
+
+  def captureFlatFsmStack[S](builder: FsmBuilder[S], config: FsmStackConfig[S]): Unit =
+    fsmTransaction:
+      val record = requireFsm(builder)
+      if record.stack.nonEmpty || record.states.nonEmpty || record.transitions.nonEmpty then
+        FlatFsmRuntime.fail("stack must be configured once before machine states")
+      if record.encoding == FsmEncoding.Gray then
+        FlatFsmRuntime.fail("bounded dynamic return does not support Gray local encoding")
+      val contract = FsmStackRuntime.contract(
+        config,
+        value =>
+          DigitalEnumContract.selectedCase(value, record.evidence, record.canonical)
+      )
+      val width = FsmStackRuntime.pointerWidth(contract.capacity)
+      val bits = width.toLong + contract.capacity.toLong * record.local.width
+      if auxiliaryFsmStateBits + bits > FsmTimingRuntime.MaximumStateBits then
+        FlatFsmRuntime.fail("FSM timer and stack private storage exceed 65536 actual bits")
+      val pointer = if record.domain.resetPolicy.contains(ResetPolicy.None) then
+        Reg.uninitialized(UInt(width))
+      else Reg(0.U(width))
+      val domain = domainRef(record.domain)
+      val module = currentModule
+      if module.domains(domain.index).kind == KernelDomainKind.Required then
+        val reference = declarationIds.get(pointer)
+        val declaration = module.declarations(reference.index)
+        module.declarations(reference.index) = declaration.copy(
+          attributes = declaration.attributes :+ ("initializer_policy" -> "if_reset")
+        )
+      val frames = Vector.fill(contract.capacity)(Reg.uninitialized(Bits(record.local.width)))
+      record.stack = Some(FlatFsmStackRecord(contract, pointer, frames, width))
+      (Vector(pointer) ++ frames).foreach(value => privateFsmStorage += declarationIds.get(value))
+      auxiliaryFsmStateBits += bits.toInt
+
+  def captureFlatFsmProcedure[S](
+      builder: StateBuilder[S],
+      condition: Expr[Bool],
+      mode: TransitionMode,
+      entry: Option[S],
+      resume: Option[S]
+  ): Unit = fsmTransaction:
+    val record = requireFsmState(builder)
+    if record.stack.isEmpty || entry.nonEmpty != resume.nonEmpty then
+      FlatFsmRuntime.fail("call/return requires one admitted stack and exact entry/resume shape")
+    val bound = captureFsmGuard(record, condition, mode)
+    def caseId(value: S): String =
+      DigitalEnumContract.selectedCase(value, record.evidence, record.canonical)
+    record.transitions += FlatFsmTransitionRecord(
+      builder.record.caseId,
+      entry.map(caseId),
+      mode,
+      bound,
+      record.nextOrdinal(),
+      if entry.nonEmpty then "call" else "return",
+      resume.map(caseId)
+    )
+
+  private def captureFsmGuard[S](
+      record: FlatFsmRecord[S],
+      condition: Expr[Bool],
+      mode: TransitionMode
+  ): Expr[Bool] =
+    if mode == null || CandidateRuntime.expressionDataType(
         condition
       ).map(CandidateRuntime.typeDescriptor) !=
         Some(KernelTypeDescriptor("Bool"))
@@ -1383,22 +1847,82 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       FlatFsmRuntime.fail("next-state/event feedback into transition selection is cyclic")
     if record.actions.size.toLong + record.transitions.size >= FlatFsmRuntime.MaximumRecords then
       FlatFsmRuntime.fail("machine transitions/actions exceed 65536 records")
-    val bound = bindCollectionValue(condition, None, currentModule.handle).asInstanceOf[Expr[Bool]]
-    val destination = DigitalEnumContract.selectedCase(to, record.evidence, record.canonical)
-    val transition =
-      FlatFsmTransitionRecord(builder.record.caseId, destination, mode, bound, record.nextOrdinal())
-    record.transitions += transition
-    body.foreach(callback =>
-      captureFsmAction(record, "transition", None, Some(transition.ordinal), callback)
+    bindCollectionValue(condition, None, currentModule.handle).asInstanceOf[Expr[Bool]]
+
+  def captureFlatFsmTimer[S](
+      builder: StateBuilder[S],
+      cycles: Int,
+      mode: TransitionMode,
+      to: S
+  ): Unit = fsmTransaction:
+    FsmTimingRuntime.cycles(cycles)
+    val record = requireFsmState(builder)
+    val storage = record.timer.getOrElse {
+      if auxiliaryFsmStateBits.toLong + FsmTimingRuntime.Width > FsmTimingRuntime.MaximumStateBits
+      then
+        FsmDefinitionRuntime.fail("FSM timer state exceeds 65536 actual bits")
+      val value = if record.domain.resetPolicy.contains(ResetPolicy.None) then
+        Reg.uninitialized(UInt(FsmTimingRuntime.Width))
+      else Reg(0.U(FsmTimingRuntime.Width))
+      val reference = declarationIds.get(value)
+      val domainReference = domainRef(record.domain)
+      if records(
+          domainReference.module
+        ).domains(domainReference.index).kind == KernelDomainKind.Required
+      then
+        val module = records(reference.module)
+        val declaration = module.declarations(reference.index)
+        module.declarations(reference.index) = declaration.copy(attributes =
+          declaration.attributes :+ ("initializer_policy" -> "if_reset")
+        )
+      record.timer = Some(value)
+      auxiliaryFsmStateBits += FsmTimingRuntime.Width
+      privateFsmStorage += reference
+      value
+    }
+    val result = new KernelExpr[Bool](
+      Vector(storage),
+      resultType = Some(KernelTypeDescriptor("Bool")),
+      operation = Some(FsmTimingRuntime.ElapsedOperation)
     )
+    val _ = captureExpression(result)
+    captureFlatFsmTransition(builder, result, mode, to, None)
+    record.timerEdges += FlatFsmTimerEdge(record.transitions.last.ordinal, cycles, result)
+
+  def captureFlatFsmTransferTransition[S](
+      builder: StateBuilder[S],
+      condition: Expr[Bool],
+      mode: TransitionMode,
+      to: S
+  ): Unit = fsmTransaction:
+    val record = requireFsmState(builder)
+    val expression = condition match
+      case value: KernelExpr[?]
+          if value.operation.contains(
+            FsmTimingRuntime.TransferOperation
+          ) && value.operands.size == 2 => value
+      case _ =>
+        FsmDefinitionRuntime.fail("transfer edge requires an explicit actual Stream binding")
+    val valid = expression.operands(0).asInstanceOf[Expr[Bool]]
+    val ready = expression.operands(1).asInstanceOf[Expr[Bool]]
+    val payload = fsmTransferTuple(valid, ready)
+    val predicate = new KernelExpr[Bool](
+      Vector(valid, ready),
+      resultType = Some(KernelTypeDescriptor("Bool")),
+      operation = Some(FsmTimingRuntime.TransferOperation)
+    )
+    val _ = captureExpression(predicate)
+    captureFlatFsmTransition(builder, predicate, mode, to, None)
+    record.transferEdges +=
+      FlatFsmTransferEdge(record.transitions.last.ordinal, predicate, payload, valid, ready)
 
   private def flatFsmLocal[S](builder: FsmBuilder[S], next: Boolean): Expr[Bits] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     fsmActionRegion(record).map(_.arguments(if next then 1 else 0)._1.asInstanceOf[Expr[Bits]])
       .getOrElse(if next then record.nextLocal else record.storage)
 
   def flatFsmStateView[S](builder: FsmBuilder[S], next: Boolean): DecodedEnum[Expr[EnumValue[S]]] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     record.views.getOrElseUpdate(
       activeValueRegion.map(_.reference) -> next, {
         val local = flatFsmLocal(builder, next)
@@ -1436,20 +1960,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
 
   def flatFsmTaken[S](builder: FsmBuilder[S]): Expr[Bool] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     val value = fsmActionRegion(
       record
     ).map(_.arguments(2)._1.asInstanceOf[Expr[Bool]]).getOrElse(record.taken)
     markFsmObservation(record, value, future = true)
 
   def flatFsmEvent[S](builder: FsmBuilder[S], state: S, entering: Boolean): Expr[Bool] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     val view = flatFsmStateView(builder, entering)
     val matches = DigitalEnumContract.isOneOf(view.value, Vector(state), record.evidence)
-    markFsmObservation(record, SequentialRuntime.and(flatFsmTaken(builder), matches), future = true)
+    val event = record.lifecycle.map(value => if entering then value.entered else value.exited)
+      .getOrElse(flatFsmTaken(builder))
+    markFsmObservation(record, SequentialRuntime.and(event, matches), future = true)
 
   def flatFsmCompleted[S](builder: FsmBuilder[S]): Expr[Bool] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     val current = flatFsmStateView(builder, next = false)
     val membership = new KernelExpr[Bool](
       Vector(current.value, FlatFsmCompletionMetadata(record)),
@@ -1457,7 +1983,23 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       operation = Some(FlatFsmRuntime.CompletedOperation)
     )
     val _ = captureExpression(membership)
-    markFsmObservation(record, SequentialRuntime.and(current.valid, membership), future = false)
+    val completed = SequentialRuntime.and(current.valid, membership)
+    val result = if record.lifecycle.nonEmpty then
+      SequentialRuntime.and(completed, flatFsmStatus(builder).value.isOneOf(FsmStatus.Completed))
+    else completed
+    markFsmObservation(record, result, future = false)
+
+  def flatFsmStatus[S](builder: FsmBuilder[S]): DecodedEnum[Expr[EnumValue[FsmStatus]]] =
+    val record = requireFsmObservation(builder)
+    val lifecycle =
+      record.lifecycle.getOrElse(FlatFsmRuntime.fail("ordinary machine has no lifecycle"))
+    val storage = bindCollectionValue(lifecycle.storage, activeValueRegion, currentModule.handle)
+      .asInstanceOf[Expr[Bits]]
+    val decoded = decodeEnum(storage, EnumType[FsmStatus](), FsmStatus.Dormant)
+    DecodedEnum(
+      markFsmObservation(record, decoded.value, future = false),
+      markFsmObservation(record, decoded.valid, future = false)
+    )
 
   def captureEnumSwitch[S](
       selector: Expr[EnumValue[S]],
@@ -1477,7 +2019,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val canonical = DigitalEnumContract.abi(selector)
     val bound =
       bindCollectionValue(selector, parent, module.handle).asInstanceOf[Expr[EnumValue[S]]]
-    val reference = ExpressionRef(module.handle, module.expressionCount)
+    val reference = allocateExpressionReference(module)
     module.expressionCount += 1
     val ordinal = parent.map: region =>
       val result = region.assignmentCount
@@ -1553,7 +2095,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             value.destinationCase,
             if value.mode == TransitionMode.Exclusive then "exclusive" else "priority",
             pathOf(value.guard).get,
-            value.ordinal
+            value.ordinal,
+            value.kind,
+            value.resumeCase
           )
         ),
         record.actions.toVector.map: region =>
@@ -1571,7 +2115,75 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         ,
         pathOf(record.nextLocal).get,
         pathOf(record.taken).get,
-        record.sourceOrdinal
+        record.sourceOrdinal,
+        record.lifecycle.map(value =>
+          KernelFlatFsmControl(
+            pathOf(value.storage).get,
+            pathOf(value.control.restart).get,
+            pathOf(value.control.cancel).get,
+            pathOf(value.control.enable).get,
+            pathOf(value.entered).get,
+            pathOf(value.exited).get
+          )
+        ),
+        record.composition.map(value =>
+          KernelFsmCompositionSnapshot(
+            expressionPath(value.root),
+            value.parent.map(parent => expressionPath(parent._1.reference)),
+            value.parent.map(_._2),
+            value.parent.map(_._3),
+            pathOf(record.lifecycle.get.establishment.get).get,
+            value.groups.toVector.map(group =>
+              KernelFsmChildGroup(
+                group.ownerCase,
+                group.children.map(child => expressionPath(child._2.reference)),
+                pathOf(group.control.restart).get,
+                pathOf(group.control.cancel).get,
+                pathOf(group.control.enable).get
+              )
+            ),
+            value.joins.toVector.map(join =>
+              KernelFsmJoinSnapshot(
+                pathOf(join.result).get,
+                join.ownerCase,
+                join.children.map(child => expressionPath(child.reference)),
+                join.policy,
+                join.selection
+              )
+            ),
+            value.definitionName,
+            value.definitionHash,
+            value.fragments,
+            value.cost.occurrences,
+            value.cost.records,
+            value.cost.depth,
+            value.completionPossible
+          )
+        ),
+        record.timer.map(value => pathOf(value).get),
+        record.timerEdges.toVector.map(value =>
+          KernelFsmTimerEdge(value.ordinal, value.cycles, pathOf(value.guard).get)
+        ),
+        record.transferEdges.toVector.map(value =>
+          KernelFsmTransferEdge(
+            value.ordinal,
+            pathOf(value.guard).get,
+            pathOf(value.payload).get,
+            pathOf(value.valid).get,
+            pathOf(value.ready).get
+          )
+        ),
+        record.stack.map(value =>
+          KernelFsmStack(
+            value.contract.capacity,
+            value.pointerWidth,
+            pathOf(value.pointer).get,
+            value.frames.map(frame => pathOf(frame).get),
+            value.contract.overflow,
+            value.contract.underflow,
+            value.contract.invalidFrame
+          )
+        )
       )
   .toVector
 
@@ -1700,7 +2312,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       : mutable.ArrayBuffer[(ExpressionRef, String, String, Vector[Expr[Real]], String)] =
     mutable.ArrayBuffer.empty
   private var waveformForbiddenDepth = 0
-  private val semanticOrigin = new SemanticOriginBuilder
+  private val semanticOrigin = new SemanticOriginBuilder(areaAliasNames)
   private var semanticResult: Option[SemanticOriginResult] = None
   private val rootParameterBindings: mutable.ArrayBuffer[(Any, Any)] =
     mutable.ArrayBuffer.empty
@@ -1714,13 +2326,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     (DeclarationRef | ExpressionRef, Option[GeneratedRegionRecord]),
     mutable.LinkedHashMap[StructuralShapeCoordinates.Region, ExpressionRef]
   ]
-  private val instanceSelectionStack = mutable.ArrayBuffer.empty[Instance[?]]
+  private val instanceSelectionStack = mutable.ArrayBuffer.empty[InstanceSelectionRecord]
+  private val areas = mutable.ArrayBuffer.empty[AreaRecord]
+  private val areaStack = mutable.ArrayBuffer.empty[AreaRecord]
+  private val areaRecords = new java.util.IdentityHashMap[Area, AreaRecord]()
   private var constructorFailure: Option[(Throwable, String)] = None
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
-    scala.util.Failure[Nothing](
-      new ConstructionException(KernelDiagnostic(code, message, path))
-    ).get
+    val failure = new ConstructionException(KernelDiagnostic(code, message, path))
+    if guardedLegacyGeneration then poisonConstructor(failure, path.getOrElse("guarded hdlRange"))
+    scala.util.Failure[Nothing](failure).get
 
   private def moduleName(module: Module): String =
     val name = module.getClass.getSimpleName.stripSuffix("$")
@@ -1765,13 +2380,32 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     if activeEventProcess.nonEmpty && !assignment then
       eventFailure(s"$role is not permitted inside a digital event process")
     collectionStack.reverseIterator.find(region =>
-      !region.isLoop && !(assignment && region.permitsAssignment)
+      moduleStack.lastOption.exists(_.handle == region.reference.module) &&
+        !region.isLoop && !(assignment && region.permitsAssignment)
     ).foreach: region =>
       rejectCollection(
         "NODAL-COLLECTION-055-006",
         s"$role is not permitted in this lexical value region",
         Some(expressionPath(region.reference))
       )
+
+  /** Generated storage is admitted only in an actual family body. Structural arms may enclose that
+    * body, but cannot themselves acquire storage, behavioral or procedural allocation rights.
+    */
+  private def requireAreaFamilyScope(role: String, requireBody: Boolean): Unit =
+    if activeEventProcess.nonEmpty then eventFailure(s"$role is not permitted in an event process")
+    val module = currentModule.handle
+    var current = activeValueRegion
+    val visited = mutable.HashSet.empty[DigitalValueRegionRecord]
+    if requireBody && !current.exists(_.loop.exists(_.generated.exists(_.areaFamily))) then
+      collectionFailure(s"$role requires its actual generated Area body")
+    while current.nonEmpty do
+      val region = current.get
+      if !visited.add(region) || visited.size > 128 || region.reference.module != module ||
+        !(region.structuralArm.nonEmpty || region.loop.exists(_.generated.exists(_.areaFamily)))
+      then
+        collectionFailure(s"$role requires only actual generated and structural lexical ancestry")
+      current = region.parent
 
   private def requireLoopEffect(role: String): Unit =
     activeLoop.filter(_.loop.get.generated.isEmpty).foreach: region =>
@@ -1781,16 +2415,41 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Some(expressionPath(region.reference))
       )
 
-  private def valueReference(value: Expr[?]): DeclarationRef | ExpressionRef =
+  private def valueReference(value: Expr[?]): DeclarationRef | ExpressionRef = publicationProbe:
     Option(declarationIds.get(value)).map(value => value: DeclarationRef | ExpressionRef)
       .orElse(Option(expressionIds.get(value)).map(value => value: DeclarationRef | ExpressionRef))
       .getOrElse(collectionFailure("collection value has no captured construction identity"))
 
   private def valueRegion(reference: DeclarationRef | ExpressionRef)
-      : Option[DigitalValueRegionRecord] =
+      : Option[DigitalValueRegionRecord] = publicationProbe:
     reference match
-      case expression: ExpressionRef => expressionRegions.get(expression)
-      case _ => None
+      case expression: ExpressionRef => expressionRegions.get(expression).orElse(
+          records.get(expression.module).flatMap(_.generatedRegions.find(region =>
+            region.owner == expression.module && region.induction == expression
+          )).flatMap(_.digitalRegion)
+        )
+      case declaration: DeclarationRef =>
+        instanceDigitalPorts.get(declaration).flatMap(_.scope)
+          .orElse(instanceInterfacePorts.get(declaration).flatMap(_.scope)).orElse(
+            records(declaration.module).generatedRegions.find(region =>
+              region.areaFamily && region.declarations.contains(declaration)
+            ).flatMap(_.digitalRegion)
+          )
+
+  private def generatedRegionFor(region: Option[DigitalValueRegionRecord])
+      : Option[GeneratedRegionRecord] =
+    var current = region
+    var depth = 0
+    while current.nonEmpty do
+      depth += 1
+      if depth > 128 then collectionFailure("generated lexical ancestry exceeds its depth budget")
+      val generated = current.get.loop.flatMap(_.generated)
+      if generated.nonEmpty then return generated
+      current = current.get.parent
+    None
+
+  private def assignmentGeneratedScope(operation: Operation): Option[GeneratedRegionRecord] =
+    operation.generatedScope.orElse(generatedRegionFor(operation.digitalRegion))
 
   /** Physical Integer values are storage data, never proof-time parameter atoms. Follow the
     * existing value/capture edges without interpreting a host default as a static value.
@@ -1813,7 +2472,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             collectionArguments.get(reference) match
               case Some((region, ordinal)) => region.arguments(ordinal)._2 == "capture"
               case None => current match
-                  case expression: KernelExpr[?] if expression.literal.nonEmpty => false
+                  case expression: KernelExpr[?]
+                      if requireConstructionPayload(expression) && expression.literal.nonEmpty =>
+                    false
                   case expression: KernelExpr[?]
                       if expression.operation.contains("generate_index") => false
                   case expression: KernelExpr[?]
@@ -1837,31 +2498,182 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def newScaffoldReference(module: ModuleRecord): ExpressionRef =
     if module.scaffoldExpressionCount == Int.MaxValue then
       collectionFailure("private iteration scaffold identity space is exhausted")
-    val reference = ExpressionRef(module.handle, -module.scaffoldExpressionCount - 1)
+    val reference = allocateScaffoldReference(module)
     module.scaffoldExpressionCount += 1
     reference
+
+  private def dataArgument(value: DigitalRegionArgument): KernelExpr[?] = value match
+    case expression: KernelExpr[?] => expression
+    case _ => collectionFailure("non-Data family argument cannot enter a Data-only consumer")
+
+  private def dataCapture(value: DigitalCaptureValue): Expr[?] = value match
+    case expression: Expr[?] => expression
+    case _ => collectionFailure("non-Data family capture cannot enter a Data-only consumer")
+
+  /** The ordinary formal signature is determined by registered inputs/seed, never captures. */
+  private def collectionFormalSource(
+      region: DigitalValueRegionRecord,
+      position: Int,
+      role: String
+  ): Expr[?] =
+    if !collectionRegions.get(region.reference).contains(region) ||
+      region.regionKind != DigitalRegionKind.Collection ||
+      !(DigitalCollectionContract.OrdinaryKinds(region.kind) || DigitalReductionContract.Kinds(
+        region.kind
+      ))
+    then collectionFailure("deferred formal requires an actual registered collection")
+    if DigitalReductionContract.Kinds(region.kind) then
+      val (left, right) = reductionSignature(region, complete = false)
+      val side = role match
+        case "left" => 0
+        case "right" => 1
+        case _ => collectionFailure("reduction whole-value formal has an invalid role")
+      val expected = left.size + right.size + side
+      if position != expected then
+        collectionFailure("reduction formal has the wrong original position")
+      return region.inputs.head
+    val signature = DigitalCollectionContract.constructionArguments(
+      region.kind,
+      region.inputs,
+      region.seed
+    )
+    if position < 0 || position >= signature.size || signature(position)._2 != role then
+      collectionFailure("deferred formal role or position differs from its actual signature")
+    if role == "accumulator" then region.seed.get
+    else region.inputs(if region.seed.nonEmpty then position - 1 else position)
+
+  private def reductionSignature(region: DigitalValueRegionRecord, complete: Boolean)
+      : (Vector[KernelExpr[?]], Vector[KernelExpr[?]]) =
+    if !collectionRegions.get(region.reference).contains(region) ||
+      region.regionKind != DigitalRegionKind.Collection ||
+      !DigitalReductionContract.Kinds(
+        region.kind
+      ) || region.inputs.size != 1 || region.seed.nonEmpty
+    then collectionFailure("deferred reduction requires its actual registered input and region")
+    val widthCount = DigitalReductionContract.widths(
+      CandidateRuntime.typeDescriptor(DigitalCollectionContract.vector(region.inputs.head)._1)
+    ).size
+    val roles = (0 until widthCount).map(index => s"left_width:$index").toVector ++
+      (0 until widthCount).map(index => s"right_width:$index") ++ Vector("left", "right")
+    val invalid = region.arguments.zipWithIndex.exists:
+      case ((argument, role), index) =>
+        val expression = dataArgument(argument)
+        val registered = Option(expressionIds.get(expression)).exists(ref =>
+          collectionArguments.get(ref).contains(region -> index) &&
+            expressionRegions.get(ref).contains(region)
+        )
+        !registered || !expression.operation.contains(DigitalCollectionContract.Argument) ||
+        expression.operands.nonEmpty || (if index < roles.size then
+                                           role != roles(index) || (index < widthCount * 2 &&
+                                             expression.resultDescriptor != Some(
+                                               KernelTypeDescriptor("Integer")
+                                             ))
+                                         else
+                                           !Set(
+                                             "capture",
+                                             "static_capture",
+                                             "index_capture"
+                                           )(role) ||
+                                           !region.captures.valuesIterator.exists(
+                                             _._2.eq(argument)
+                                           ) ||
+                                           (role != "capture" && expression.resultDescriptor != Some(
+                                             KernelTypeDescriptor("Integer")
+                                           )))
+    if (complete && region.arguments.size < roles.size) || invalid then
+      collectionFailure("reduction formal role or position differs from its original signature")
+    (
+      region.arguments.take(widthCount).map(value => dataArgument(value._1)).toVector,
+      region.arguments.slice(widthCount, widthCount * 2).map(value =>
+        dataArgument(value._1)
+      ).toVector
+    )
+
+  private def reductionFormalType(region: DigitalValueRegionRecord, role: String)
+      : KernelTypeDescriptor =
+    val (left, right) = reductionSignature(region, complete = false)
+    val initial =
+      CandidateRuntime.typeDescriptor(DigitalCollectionContract.vector(region.inputs.head)._1)
+    val formals = if role == "left" then left
+    else if role == "right" then right
+    else collectionFailure("reduction whole-value formal has an invalid role")
+    if formals.size != DigitalReductionContract.widths(initial).size then
+      collectionFailure("reduction whole-value formal lost its original width arguments")
+    var index = 0
+    DigitalReductionContract.mapWidths(initial): _ =>
+      val result = formals(index).asInstanceOf[Expr[Integer]]
+      index += 1
+      result
+
+  private def collectionFormalType(source: Expr[?], role: String): KernelTypeDescriptor =
+    if role == "accumulator" then DigitalCollectionContract.descriptor(source)
+    else CandidateRuntime.typeDescriptor(DigitalCollectionContract.vector(source)._1)
+
+  private def requireRegisteredCollectionOperand(value: Expr[?], owner: Long): Unit =
+    val actual = valueReference(value) match
+      case reference: ExpressionRef =>
+        reference.module == owner && expressionValues.get(reference).exists: original =>
+          original.eq(value) || generatedMemberRecord(original).exists: member =>
+            value match
+              case signal: Signal[?] => signal.dataType.eq(member.dataType)
+              case register: Register[?] => register.dataType.exists(_.eq(member.dataType))
+              case _ => false
+      case reference: DeclarationRef =>
+        reference.module == owner && records(owner).declarations.lift(reference.index)
+          .exists(_.value eq value)
+    if !actual then collectionFailure("collection type operand has no exact registered identity")
+
+  private def beforeRegionMutation(region: DigitalValueRegionRecord): Unit =
+    boundaryClosureOwner.foreach(_.beforeRegionMutation(region))
 
   private def newCollectionArgument(
       region: DigitalValueRegionRecord,
       dataType: DataType[?],
-      role: String
+      role: String,
+      capture: Option[Expr[?]] = None,
+      physicalControl: Boolean = false
   ): KernelExpr[?] =
+    beforeRegionMutation(region)
     if region.arguments.size >= DigitalReductionContract.MaximumArguments then
       collectionFailure("collection signature exceeds the 4098 argument budget")
-    if sequentialRegion(region) then
+    val formal =
+      Option.when(capture.isEmpty && (DigitalCollectionContract.OrdinaryKinds(region.kind) ||
+        (DigitalReductionContract.Kinds(region.kind) && Set("left", "right")(role))))(
+        collectionFormalSource(region, region.arguments.size, role)
+      )
+    val source = capture.orElse(formal)
+    source.foreach(requireRegisteredCollectionOperand(_, region.reference.module))
+    // Pending container dimensions do not make an independently complete element pending.
+    // The collection result still depends on the original input and rechecks this formal.
+    val eagerFormal = formal.nonEmpty && !DigitalReductionContract.Kinds(
+      region.kind
+    ) && moduleOwnedGeneratedMemberType(
+      CandidateRuntime.typeDescriptor(dataType),
+      region.reference.module
+    )
+    val intent = if eagerFormal then None
+    else
+      DeferredResultType.intent(source.toVector):
+        if capture.nonEmpty then DigitalCollectionContract.descriptor(source.get)
+        else if DigitalReductionContract.Kinds(region.kind) then reductionFormalType(region, role)
+        else collectionFormalType(source.get, role)
+    if physicalControl then requirePhysicalControlCapture(dataType, region)
+    else if intent.nonEmpty then requireDeferredPayloadScope(Some(region), region.reference.module)
+    else if sequentialRegion(region) then
       validateSequentialValueType(dataType, region.reference.module)
     else if CandidateRuntime.typeDescriptor(dataType).kind != "Integer" then
       DigitalCombinationalContract.validateValueType(CandidateRuntime.typeDescriptor(dataType))
     val argument = new KernelExpr[Data](
       Vector.empty,
       resultType = Some(CandidateRuntime.typeDescriptor(dataType)),
-      operation = Some(DigitalCollectionContract.Argument)
+      operation = Some(DigitalCollectionContract.Argument),
+      typeIntent = intent
     )
     val module = records(region.reference.module)
     val scaffold = role == "induction" && region.loop.exists(_.generated.nonEmpty)
     val reference = if scaffold then newScaffoldReference(module)
     else
-      val result = ExpressionRef(module.handle, module.expressionCount)
+      val result = allocateExpressionReference(module)
       module.expressionCount += 1
       result
     collectionArguments.update(reference, region -> region.arguments.size)
@@ -1869,6 +2681,42 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val _ =
       captureExpression(argument, retained = Some(reference), scopeOverride = Some(Some(region)))
     argument
+
+  /** Non-Data family capability capture uses the same ordered lexical owner as Data. */
+  private def bindGeneratedFamily(
+      family: GeneratedRegionRecord,
+      destination: Option[DigitalValueRegionRecord],
+      create: Boolean = true
+  ): GeneratedRegionRecord | GeneratedFamilyArgument =
+    val source = family.digitalRegion.getOrElse(
+      collectionFailure("family capture has no actual generated body")
+    ).parent
+    if source == destination then family
+    else
+      destination match
+        case Some(region) if region.structuralArm.nonEmpty =>
+          val parent = bindGeneratedFamily(family, region.parent, create)
+          region.captures.get(parent) match
+            case Some((source, argument: GeneratedFamilyArgument)) if argument.family eq family =>
+              boundaryClosureOwner.foreach(_.verifyRegionCaptureReuse(
+                source.eq(parent) && (argument.region eq region) &&
+                  region.arguments.lift(argument.position).exists((actual, role) =>
+                    (actual eq argument) && role == "family_capture"
+                  )
+              ))
+              argument
+            case Some(_) => collectionFailure("family capture cannot change its actual capability")
+            case None if create =>
+              beforeRegionMutation(region)
+              if region.arguments.size >= DigitalReductionContract.MaximumArguments then
+                collectionFailure("family capture exceeds the argument budget")
+              val argument = new GeneratedFamilyArgument(region, region.arguments.size, family)
+              region.arguments += argument -> "family_capture"
+              region.captures.update(parent, parent -> argument)
+              argument
+            case None =>
+              collectionFailure("family capture edge was not captured during construction")
+        case _ => collectionFailure("family capability escaped its exact structural lexical scope")
 
   /** Resolve each free edge through every intervening region. This retains actual parent values as
     * capture operands and introduces a genuine typed block argument at each isolation boundary.
@@ -1878,8 +2726,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       destination: Option[DigitalValueRegionRecord],
       owner: Long,
       create: Boolean = true,
-      predicateUse: Boolean = false
-  ): Expr[?] =
+      predicateUse: Boolean = false,
+      physicalControl: Boolean = false
+  ): Expr[?] = publicationProbe:
+    if destination.nonEmpty then
+      value match
+        case expression: KernelExpr[?] if !constructionPayloadAvailable(expression) =>
+          collectionFailure("C2a pending construction cannot enter a digital region")
+        case _ => ()
     if create then
       val _ = validateFsmObservations(Vector(value))
     val reference = valueReference(value)
@@ -1896,18 +2750,41 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val sourceRegion = valueRegion(reference)
     val generatedInduction = destination.filter(_.isLoop).flatMap(_.loop.get.generated)
       .exists(region => reference == region.induction)
-    if generatedInduction then destination.get.arguments.head._1
+    if generatedInduction then dataArgument(destination.get.arguments.head._1)
     else if sourceRegion == destination then value
     else
       destination match
         case None =>
           collectionFailure("collection argument or body value escaped its lexical region")
         case Some(region) =>
-          val parentValue = bindCollectionValue(value, region.parent, owner, create, predicateUse)
+          if physicalControl then
+            requirePhysicalControlCapture(
+              CandidateRuntime.expressionDataType(value).getOrElse(
+                collectionFailure("physical capture requires an exact control type")
+              ),
+              region
+            )
+          val parentValue =
+            bindCollectionValue(value, region.parent, owner, create, predicateUse, physicalControl)
           val parentReference = valueReference(parentValue)
           region.captures.get(parentReference) match
-            case Some((_, argument)) => argument
+            case Some((source: Expr[?], argument: KernelExpr[?])) =>
+              boundaryClosureOwner.foreach(_.verifyRegionCaptureReuse(
+                source.eq(parentValue) && Option(expressionIds.get(argument)).exists(ref =>
+                  collectionArguments.get(ref).exists((owner, position) =>
+                    (owner eq region) && region.arguments.lift(position)
+                      .exists((actual, role) =>
+                        (actual eq argument) &&
+                          Set("capture", "static_capture", "index_capture")(role)
+                      )
+                  ) &&
+                    expressionRegions.get(ref).exists(_ eq region)
+                )
+              ))
+              argument
+            case Some(_) => collectionFailure("ordinary capture cannot acquire a family capability")
             case None if create =>
+              beforeRegionMutation(region)
               val dataType = CandidateRuntime.expressionDataType(parentValue).getOrElse(
                 collectionFailure("collection capture requires an exact type")
               )
@@ -1921,9 +2798,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               val isStatic = integer && !runtimeInteger
               val proceduralIndex = isStatic && loopAffine(parentValue)
                 .exists(_._1.loop.get.generated.isEmpty)
-              if !isStatic then
+              val pending = DeferredResultType.pending(parentValue)
+              if pending then requireDeferredPayloadScope(Some(region), owner)
+              if !isStatic && !pending && !physicalControl then
                 validateShapeType(dataType, owner, cardinality = true, storageContext = true)
-              else if !proceduralIndex || predicateUse then
+              else if isStatic && (!proceduralIndex || predicateUse) then
                 val analysis = new StructuralBoundAnalysis(owner, signed64Literals = true)
                 if predicateUse || (admitsPredicateStatics(region) && reductionExact.isEmpty &&
                     reductionDomains.isEmpty && !reductionChecking)
@@ -1945,10 +2824,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 region,
                 dataType,
                 if proceduralIndex then "index_capture"
-                else if isStatic then "static_capture" else "capture"
+                else if isStatic then "static_capture" else "capture",
+                capture = Some(parentValue),
+                physicalControl = physicalControl
               )
               region.captures.update(parentReference, parentValue -> argument)
-              if !isStatic then
+              if !isStatic && !pending && !physicalControl then
                 bindCollectionType(CandidateRuntime.typeDescriptor(dataType), Some(region), owner)
               argument
             case None => collectionFailure("collection free edge has no explicit capture argument")
@@ -1959,30 +2840,32 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       owner: Long,
       create: Boolean
   ): KernelTypeDescriptor =
-    def map(value: Any): Any = value match
-      case expression: Expr[?]
-          if CandidateRuntime.expressionDataType(expression)
-            .exists(CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Integer")) =>
-        // Module statics retain their normal parameter/reference semantics. Only crossing a
-        // collection isolation boundary introduces a genuine static capture argument.
-        if valueRegion(valueReference(expression)).nonEmpty then
-          bindCollectionValue(expression, region, owner, create)
-        else expression
-      case dataType: DataType[?] => CandidateRuntime.dataTypeFromDescriptor(
-          mapCollectionType(CandidateRuntime.typeDescriptor(dataType), region, owner, create)
-        )
-      case field: StructField[?] => StructField(
-          field.name,
-          CandidateRuntime.dataTypeFromDescriptor(mapCollectionType(
-            CandidateRuntime.typeDescriptor(field.dataType),
-            region,
-            owner,
-            create
-          ))
-        )
-      case values: Seq[?] => values.map(map)
-      case other => other
-    descriptor.copy(arguments = descriptor.arguments.map(map))
+    closureCharge(1L)
+    def map(value: Any): Any = closureDescriptorVisit:
+      value match
+        case expression: Expr[?]
+            if CandidateRuntime.expressionDataType(expression)
+              .exists(CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Integer")) =>
+          // Module statics retain their normal parameter/reference semantics. Only crossing a
+          // collection isolation boundary introduces a genuine static capture argument.
+          if valueRegion(valueReference(expression)).nonEmpty then
+            bindCollectionValue(expression, region, owner, create)
+          else expression
+        case dataType: DataType[?] => CandidateRuntime.dataTypeFromDescriptor(
+            mapCollectionType(CandidateRuntime.typeDescriptor(dataType), region, owner, create)
+          )
+        case field: StructField[?] => StructField(
+            field.name,
+            CandidateRuntime.dataTypeFromDescriptor(mapCollectionType(
+              CandidateRuntime.typeDescriptor(field.dataType),
+              region,
+              owner,
+              create
+            ))
+          )
+        case values: Seq[?] => closureElements(values).map(map).toVector
+        case other => other
+    descriptor.copy(arguments = closureElements(descriptor.arguments).map(map).toVector)
 
   private def bindCollectionType(
       descriptor: KernelTypeDescriptor,
@@ -2048,10 +2931,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       region: Option[DigitalValueRegionRecord],
       owner: Long
   )
-      : Option[String] = value match
-    case expression: Expr[?] =>
-      pathOf(bindCollectionValue(expression, region, owner, create = false))
-    case _ => pathOf(value)
+      : Option[String] = publicationProbe:
+    value match
+      case expression: Expr[?] =>
+        pathOf(bindCollectionValue(expression, region, owner, create = false))
+      case _ => pathOf(value)
 
   /** Escapes are checked on all construction consumers, including assignment/initializer paths that
     * do not otherwise enter the digital expression closure.
@@ -2064,6 +2948,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         case value: Expr[?] =>
           Option(expressionIds.get(value)).flatMap(expressionRegions.get).foreach: _ =>
             val _ = bindCollectionValue(value, activeValueRegion, currentModule.handle)
+        case view: InterfaceTerminalView[?, ?] =>
+          val _ = requireConservativeInterfaceScope(view.endpoint)
+          val reference = Option(declarationIds.get(view)).getOrElse(
+            fail("NODAL-INTERFACE-058-ANALOG", "conservative view belongs to another construction")
+          )
+          requireGeneratedDeclarationScope(reference)
         case values: Seq[?] => pending ++= values
         case Some(value) => pending.append(value)
         case _ => ()
@@ -2123,6 +3013,47 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           case _ => None
       case _ => None
 
+  /** Project only where the actual handle and ordinal definitions dominate. The resulting Data
+    * value, not the non-Data family capability, crosses isolated callbacks by ordinary captures.
+    */
+  private def generatedMemberScope(
+      expression: KernelExpr[?],
+      member: GeneratedAreaMemberRecord
+  ): Option[DigitalValueRegionRecord] =
+    val firstFamily = member.selectionPrefix.headOption.map(_.family).getOrElse(member.family)
+    val familyBody = firstFamily.digitalRegion.getOrElse(
+      collectionFailure("generated member has no actual digital family body")
+    )
+    val ancestry = mutable.ArrayBuffer.empty[Option[DigitalValueRegionRecord]]
+    var current = activeValueRegion
+    while current.nonEmpty do
+      if ancestry.contains(current) || ancestry.size >= 128 then
+        collectionFailure("generated member lexical ancestry is cyclic or excessive")
+      ancestry += current
+      current = current.get.parent
+    ancestry += None
+    val dependencies = familyBody.parent +: expression.operands.collect:
+      case value: Expr[?] => valueRegion(valueReference(value))
+    val positions = dependencies.map(ancestry.indexOf)
+    if positions.exists(_ < 0) then
+      collectionFailure("generated member handle or ordinal escaped its lexical scope")
+    val candidates = ancestry.take(positions.min + 1).reverse
+    def capturable(scope: Option[DigitalValueRegionRecord]): Boolean =
+      var current = scope
+      var valid = true
+      while current != familyBody.parent && valid do
+        current match
+          case Some(region) if region.structuralArm.nonEmpty => current = region.parent
+          case _ => valid = false
+      valid
+    val destination = candidates.find(scope =>
+      capturable(scope) &&
+        generatedOrdinalValid(member.family, member.ordinal, scope, member.selectionPrefix)
+    )
+      .getOrElse(collectionFailure("generated member has no dominating structural existence scope"))
+    val _ = bindGeneratedFamily(firstFamily, destination)
+    destination
+
   private def collectionExpressionScope(
       expression: KernelExpr[?],
       retained: Option[ExpressionRef]
@@ -2133,13 +3064,21 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       None
     else
       val operation = expression.operation.getOrElse("")
+      val generatedDestination = generatedMemberRecord(expression).map(member =>
+        generatedMemberScope(expression, member)
+      )
+      if expression.typeIntent.nonEmpty then
+        val _ =
+          requireDeferredPayloadScope(generatedDestination.getOrElse(current), currentModule.handle)
+        if !expression.resultDescriptor.exists(DigitalCombinationalContract.isValueTypeKind) then
+          collectionFailure("deferred lexical result requires a finite digital payload kind")
       val generatedAnalog =
         current.exists(region => region.isLoop && region.loop.get.generated.nonEmpty) &&
           (analogStack.nonEmpty || AnalogProceduralConstruction.generatedProcedureActive ||
-            expression.resultType.exists(_.kind == "Real"))
+            expression.resultDescriptor.exists(_.kind == "Real"))
       val knownArgument = retained.exists(collectionArguments.contains) &&
         operation == DigitalCollectionContract.Argument
-      val staticInteger = expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+      val staticInteger = expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
         !knownArgument && (expression.literal.exists(_.kind == "integer") ||
           IterationDomain.staticArithmetic(operation).nonEmpty)
       val knownCollection = retained.exists(collectionRegions.contains) &&
@@ -2147,6 +3086,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val knownConditional = retained.exists(structuralIfs.contains) &&
         operation == StructuralIfRuntime.Operation
       val behavioralPredicate = operation == SequentialRuntime.PredicateOperation
+      val knownGeneratedMember = generatedDestination.nonEmpty
       val pure = expression.literal.nonEmpty || operation.startsWith(DigitalEnumContract.Prefix) ||
         DigitalScalarContract.Operations.contains(operation) ||
         operation == DigitalMaterializationContract.Operation ||
@@ -2154,13 +3094,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         DigitalAggregateContract.Operations.contains(operation) ||
         DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
         Set("shape_index", "shape_view", "shape_slice").contains(operation) ||
-        knownArgument || knownCollection || knownConditional || behavioralPredicate || FlatFsmRuntime.Operations(
+        knownArgument || knownCollection || knownConditional || behavioralPredicate || knownGeneratedMember ||
+        (operation == DigitalInterfaceContract.OrdinaryReadOperation && expression.interfaceMember.nonEmpty) || FlatFsmRuntime.Operations(
           operation
         )
       val rangeAnalog =
         current.exists(region => region.isLoop && region.loop.get.generated.nonEmpty) &&
           !pure && !staticInteger && !knownArgument
-      if generatedAnalog || rangeAnalog then
+      if (generatedAnalog || rangeAnalog) && !guardedLegacyGeneration then
         validateGeneratedDependencies(expression.operands)
         None
       else
@@ -2168,8 +3109,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           requireNoCollectionEffect(s"unsupported hardware expression '$operation'")
           requireLoopEffect(s"unsupported hardware expression '$operation'")
           collectionFailure(s"unsupported iteration expression '$operation'")
-        if !staticInteger && !knownArgument then
-          val dataType = expression.resultType.getOrElse(
+        if !staticInteger && !knownArgument && expression.typeIntent.isEmpty then
+          val dataType = expression.resultDescriptor.getOrElse(
             collectionFailure("region body expression requires an exact type")
           )
           try
@@ -2195,9 +3136,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           .exists(value => valueRegion(valueReference(value)).nonEmpty)
         val moduleStatic = staticInteger && !localStaticDependency && affine.isEmpty &&
           (!current.exists(_.isLoop) || current.exists(_.loop.exists(_.generated.nonEmpty)))
-        val destination = if moduleStatic then None else current
-        if !knownArgument then
-          expression.resultType.foreach(bindCollectionType(_, destination, currentModule.handle))
+        val destination = generatedDestination.getOrElse(if moduleStatic then None else current)
+        if !knownArgument && expression.typeIntent.isEmpty then
+          expression.resultDescriptor.foreach(bindCollectionType(
+            _,
+            destination,
+            currentModule.handle
+          ))
         val runtimeOperands =
           if Set("shape_index", "shape_view", "shape_slice").contains(operation) then
             expression.operands.take(1)
@@ -2206,18 +3151,21 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           val _ = bindCollectionValue(value, destination, currentModule.handle)
         destination
 
-  private def newLoopRegion(header: DigitalLoopHeader): DigitalValueRegionRecord =
+  private def newLoopRegion(
+      header: DigitalLoopHeader,
+      retainParent: Boolean = false
+  ): DigitalValueRegionRecord =
     if collectionStack.size >= 128 || collectionRegions.size + loopRegions.size >= 65536 then
       collectionFailure("iteration region inventory exceeds its finite budget")
     val module = currentModule
     val reference = if header.generated.nonEmpty then newScaffoldReference(module)
     else
-      val result = ExpressionRef(module.handle, module.expressionCount)
+      val result = allocateExpressionReference(module)
       module.expressionCount += 1
       result
     val region = new DigitalValueRegionRecord(
       reference,
-      None,
+      if retainParent || header.generated.exists(_.areaFamily) then activeValueRegion else None,
       "bounded_loop",
       Vector.empty,
       None,
@@ -2280,24 +3228,49 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       "NODAL-LOOP-055-001",
       "bounded loop"
     )
-    if analysis(header.step).parameters.nonEmpty then
-      collectionFailure("digital iteration step must be a parameter-independent fixed DAG")
-    val _ = IterationDomain.boundedDigital(
-      header.domain.lower,
-      header.domain.upperExclusive,
-      header.domain.step,
-      header.maximum,
-      analysis.sameIdentity(header.lower, header.upperExclusive)
-    )
-      .fold(problem => collectionFailure(problem.message), identity)
+    if region.structuralGenerate then
+      val generated = header.generated.getOrElse(
+        collectionFailure("structural loop header lacks its actual Generate owner")
+      )
+      if generated.owner != region.reference.module ||
+        !records(generated.owner).generatedRegions.exists(_ eq generated) ||
+        !generated.digitalRegion.contains(region) || header.lower != generated.lower ||
+        header.upperExclusive != generated.upperExclusive || header.step != generated.step ||
+        header.maximum != generated.maximum
+      then collectionFailure("structural loop header differs from its actual family")
+      val inputs = Vector(header.lower, header.upperExclusive, header.step).map(analysis(_))
+      val bounds = inputs.map(_.bounds)
+      val checked = IterationDomain.structural(
+        bounds(0),
+        bounds(1),
+        bounds(2),
+        header.maximum,
+        identicalBounds = inputs(0).identity == inputs(1).identity ||
+          (bounds(0).lower == bounds(0).upper && bounds(1).lower == bounds(1).upper &&
+            bounds(0).lower >= bounds(1).upper)
+      ).fold(problem => collectionFailure(problem.message), identity)
+      if checked != header.domain || checked != generated.domain then
+        collectionFailure("structural loop domain differs from its canonical family proof")
+    else
+      if analysis(header.step).parameters.nonEmpty then
+        collectionFailure("digital iteration step must be a parameter-independent fixed DAG")
+      val _ = IterationDomain.boundedDigital(
+        header.domain.lower,
+        header.domain.upperExclusive,
+        header.domain.step,
+        header.maximum,
+        analysis.sameIdentity(header.lower, header.upperExclusive)
+      )
+        .fold(problem => collectionFailure(problem.message), identity)
 
   private def retainedLoopRegions: Set[DigitalValueRegionRecord] =
+    closureCharge(operations.size.toLong + expressionRegions.size.toLong + loopRegions.size.toLong)
     val usedRegions = operations.iterator.flatMap(_.digitalRegion).toSet ++
       expressionRegions.iterator.collect:
         case (reference, region)
             if region.isLoop && !collectionArguments.contains(reference) &&
               expressionValues.get(reference).exists(value =>
-                !value.resultType.exists(dataType =>
+                requireConstructionPayload(value) && !value.resultDescriptor.exists(dataType =>
                   Set("Integer", "Real").contains(dataType.kind)
                 ) &&
                   (DigitalValueConstruction.isDigitalValue(value) || shapeIndices.contains(
@@ -2327,7 +3300,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           KernelDigitalRegionArgument(
             pathOf(argument).get,
             renderCollectionType(
-              CandidateRuntime.expressionDataType(argument).get,
+              CandidateRuntime.expressionDataType(dataArgument(argument)).get,
               region.reference.module,
               Some(region)
             ),
@@ -2373,13 +3346,45 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     region.arguments.toVector.map: (argument, role) =>
       KernelDigitalRegionArgument(
         pathOf(argument).get,
-        renderCollectionType(
-          CandidateRuntime.expressionDataType(argument).get,
-          region.reference.module,
-          Some(region)
-        ),
+        argument match
+          case _: GeneratedFamilyArgument => "GeneratedFamily"
+          case value: KernelExpr[?] => renderCollectionType(
+              CandidateRuntime.expressionDataType(value).get,
+              region.reference.module,
+              Some(region)
+            ),
         role
       )
+
+  /** The pre-sealing boundary query consumes only actual static/family dependencies. Payload
+    * arguments remain on their original records and enter the complete snapshot after sealing. Keep
+    * original argument identities even when the projected signature has sparse indices.
+    */
+  private def staticRegionSignature(region: DigitalValueRegionRecord)
+      : (Vector[String], Vector[KernelDigitalRegionArgument]) =
+    val captures = region.captures.valuesIterator.toVector
+    val suffix = region.arguments.takeRight(captures.size)
+    if suffix.size != captures.size || suffix.zip(captures).exists:
+        case ((argument, _), (_, captured)) => argument.ne(captured)
+    then collectionFailure("static query projection lost its exact ordered capture pairing")
+    def retained(argument: DigitalRegionArgument): Boolean = argument match
+      case _: GeneratedFamilyArgument => true
+      case value: KernelExpr[?] =>
+        requireConstructionPayload(
+          value
+        ) && value.resultDescriptor.contains(KernelTypeDescriptor("Integer"))
+    val selected = region.arguments.toVector.filter((argument, _) => retained(argument))
+    val arguments = selected.map: (argument, role) =>
+      KernelDigitalRegionArgument(
+        pathOf(argument).get,
+        argument match
+          case _: GeneratedFamilyArgument => "GeneratedFamily"
+          case _: KernelExpr[?] => "Integer",
+        role
+      )
+    val sources = captures.collect:
+      case (source, argument) if retained(argument) => pathOf(source).get
+    sources -> arguments
 
   def captureStaticPredicate(
       operation: String,
@@ -2447,7 +3452,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       then
         structuralFailure("structural if requires a bounded digital construction context")
       activeLoop.filter(_.loop.get.generated.nonEmpty).foreach: region =>
-        region.structuralGenerate = true
+        if !region.structuralGenerate then
+          beforeRegionMutation(region)
+          region.structuralGenerate = true
       val predicateRef = Option(expressionIds.get(predicate)).getOrElse(
         structuralFailure("structural if predicate has no construction identity")
       )
@@ -2455,7 +3462,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         expressionRegions.get(predicateRef) != parent
       then
         structuralFailure("structural if predicate belongs to another lexical scope")
-      val reference = ExpressionRef(module.handle, module.expressionCount)
+      val reference = allocateExpressionReference(module)
       module.expressionCount += 1
       val ordinal = parent match
         case Some(region) =>
@@ -2482,42 +3489,68 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       def capture(region: DigitalValueRegionRecord, callback: () => Option[Expr[?]])
           : Option[KernelTypeDescriptor] =
         collectionStack += region
+        val previousStructuralValue = capturingStructuralValue
+        capturingStructuralValue = previousStructuralValue || hasResult
         val yielded = try
           callback().map(value => bindCollectionValue(value, Some(region), module.handle))
         finally
+          capturingStructuralValue = previousStructuralValue
           val removed = collectionStack.remove(collectionStack.size - 1)
           if removed ne region then structuralFailure("structural arm lexical stack is corrupt")
         if yielded.nonEmpty != hasResult then
           structuralFailure("structural arm yield arity differs from its result")
+        beforeRegionMutation(region)
         region.yielded = yielded
         yielded.map: value =>
           val descriptor = DigitalCollectionContract.descriptor(value)
-          DigitalCombinationalContract.validateValueType(descriptor)
-          val exported = exportCollectionType(descriptor, region)
-          validateShapeType(
-            CandidateRuntime.dataTypeFromDescriptor(exported),
-            module.handle,
-            cardinality = true,
-            storageContext = true
-          )
-          exported
+          if DeferredResultType.pending(value) then
+            val _ = requireDeferredValueScope(Some(region), module.handle)
+            if !DigitalCombinationalContract.isValueTypeKind(descriptor) then
+              structuralFailure("deferred structural result requires a finite digital payload kind")
+            descriptor
+          else
+            DigitalCombinationalContract.validateValueType(descriptor)
+            val exported = exportCollectionType(descriptor, region)
+            validateShapeType(
+              CandidateRuntime.dataTypeFromDescriptor(exported),
+              module.handle,
+              cardinality = true,
+              storageContext = true
+            )
+            exported
       // Deterministic authored order, once per template, never per lane or parameter setting.
       val trueType = capture(record.trueArm, whenTrue)
       val falseType = capture(record.falseArm, whenFalse)
-      if trueType.size != falseType.size || trueType.zip(falseType).exists((left, right) =>
-          !DigitalEnumContract.sameType(left, right)
-        )
+      val yields = record.trueArm.yielded.toVector ++ record.falseArm.yielded.toVector
+      val pending = yields.exists(DeferredResultType.pending)
+      if trueType.size != falseType.size || (!pending && trueType.zip(falseType).exists(
+          (left, right) =>
+            !DigitalEnumContract.sameType(left, right)
+        ))
       then
         structuralFailure(
           "structural if alternatives must yield exactly the same complete hardware ABI"
         )
       trueType.map: dataType =>
+        val intent = DeferredResultType.intent(yields):
+          val finalTypes = Vector(record.trueArm, record.falseArm).map: arm =>
+            val actual = DigitalCollectionContract.descriptor(arm.yielded.get)
+            DigitalCombinationalContract.validateValueType(actual)
+            exportCollectionType(actual, arm)
+          if !DigitalEnumContract.sameType(finalTypes.head, finalTypes(1)) then
+            structuralFailure(
+              "structural if alternatives must yield exactly the same complete hardware ABI"
+            )
+          finalTypes.head
         val captures = record.trueArm.captures.valuesIterator.map(_._1).toVector ++
           record.falseArm.captures.valuesIterator.map(_._1).toVector
+        beforeRegionMutation(record.trueArm)
+        beforeRegionMutation(record.falseArm)
         val result = new KernelExpr[Data](
           predicate +: captures,
           resultType = Some(dataType),
-          operation = Some(StructuralIfRuntime.Operation)
+          operation = Some(StructuralIfRuntime.Operation),
+          typeIntent = intent
         )
         record.result = Some(result)
         val _ = captureExpression(result, retained = Some(reference))
@@ -2565,7 +3598,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Some(KernelTypeDescriptor("Bool"))
     then behavioralFailure("behavioral guard requires an exact owned Bool value")
     val bound = bindCollectionValue(condition, parent, module.handle).asInstanceOf[Expr[Bool]]
-    val reference = ExpressionRef(module.handle, module.expressionCount)
+    val reference = allocateExpressionReference(module)
     module.expressionCount += 1
     val ordinal = parent match
       case Some(region) =>
@@ -2603,8 +3636,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       body: () => Unit
   ): Unit =
     try
-      if analogStack.nonEmpty || analogSemanticContext.nonEmpty || activeGeneratedRegion.nonEmpty ||
-        activeValueRegion.exists(!sequentialRegion(_)) || collectionStack.size >= 128 ||
+      val ownedAncestry = collectionStack.forall: region =>
+        region.reference.module == currentModule.handle &&
+          (sequentialRegion(region) || region.structuralArm.nonEmpty ||
+            region.loop.flatMap(_.generated).exists(generated =>
+              generated.areaFamily && generationStack.exists(_ eq generated)
+            ))
+      if analogStack.nonEmpty || analogSemanticContext.nonEmpty ||
+        activeGeneratedRegion.exists(!_.areaFamily) || !ownedAncestry ||
+        collectionStack.size >= 128 ||
         behavioralIfs.size >= 65536
       then behavioralFailure("behavioral update requires a bounded, owned sequential context")
       val key = behavioralKey
@@ -2665,21 +3705,55 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     .toVector
 
   /** Validate actual pre-edge dependencies and update-root ownership, without evaluating guards. */
+  private final case class InterfaceMemberSample(endpoint: DeclarationRef, member: String)
+
   private def verifySequentialAssignments(
       resolved: Map[DomainRef, String],
-      interfaces: DigitalInterfaceContract.Capture
+      interfaces: DigitalInterfaceContract.Capture,
+      actualRoot: Long
   ): Unit =
+    publicationCharge(1L)
     val relationships = relationshipIndex()
-    val roots = mutable.HashMap.empty[DeclarationRef, Either[ExpressionRef, Int]]
+    final case class UpdateRoot(
+        identity: Either[ExpressionRef, Int],
+        guards: Map[ExpressionRef, Boolean]
+    )
+    val roots = mutable.HashMap.empty[DeclarationRef, mutable.ArrayBuffer[UpdateRoot]]
+    var updateRootProofWork = 0
+    def structuralGuards(region: Option[DigitalValueRegionRecord]): Map[ExpressionRef, Boolean] =
+      val result = mutable.HashMap.empty[ExpressionRef, Boolean]
+      var current = region
+      var depth = 0
+      while current.nonEmpty do
+        depth += 1
+        updateRootProofWork += 1
+        if depth > 128 || updateRootProofWork > 262144 then
+          behavioralFailure("update-root structural proof exceeds its bounded graph")
+        current.get.structuralArm.foreach(header =>
+          result.update(header.conditional, header.whenTrue)
+        )
+        current = current.get.parent
+      result.toMap
     val guardPairs: Vector[(ExpressionRef, Expr[?])] =
-      behavioralIfs.valuesIterator.map(value => value.root -> value.predicate).toVector ++
-        flatFsms.valuesIterator.flatMap(record =>
-          record.transitions.map(value => record.reference -> value.guard)
+      publicationElements(behavioralIfs.valuesIterator).map(value =>
+        value.root -> value.predicate
+      ).toVector ++
+        publicationElements(flatFsms.valuesIterator).flatMap(record =>
+          (record.controlInputs ++ record.transitions.map(_.guard)).map(value =>
+            record.reference -> value
+          )
         ).toVector ++
-        enumSwitches.valuesIterator.map(record => record.root -> record.selector).toVector
+        publicationElements(enumSwitches.valuesIterator).map(record =>
+          record.root -> record.selector
+        ).toVector
     val guardsByRoot = guardPairs.groupMap(_._1)(_._2)
-    flatFsms.valuesIterator.foreach(record =>
-      roots.update(declarationIds.get(record.storage), Left(record.reference))
+    publicationElements(flatFsms.valuesIterator).foreach(record =>
+      record.privateStorage.foreach(value =>
+        roots.update(
+          declarationIds.get(value),
+          mutable.ArrayBuffer(UpdateRoot(Left(record.reference), Map.empty))
+        )
+      )
     )
     val checkedGuards = mutable.HashSet.empty[(ExpressionRef, Long, String)]
     val fsmControlCache = mutable.HashMap.empty[FlatFsmActionHeader, Vector[Any]]
@@ -2724,56 +3798,208 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           }
         )
       .getOrElse(Vector.empty)
-    val eventTriggerReferences = eventProcesses.iterator.map(process =>
+    val eventTriggerReferences = publicationElements(eventProcesses.iterator).map(process =>
       declarationIds.get(process.definition.trigger)
     ).toSet
     val continuousWriteCounts = mutable.HashMap.empty[DeclarationRef, Int]
+    val selectedInputInstances = mutable.HashSet.empty[InstanceRecord]
+    val selectedInterfaceInstances = mutable.HashSet.empty[InstanceRecord]
+    def selectedInterfaceInputs: Boolean = selectedInterfaceInstances.nonEmpty
     val continuousDrivers = mutable.HashMap.empty[DeclarationRef, Vector[Any]]
-    operations.iterator.filter(operation =>
+    publicationElements(operations.iterator).filter(operation =>
+      if operation.kind == "interface-drive" then
+        operation.values.headOption.collect { case endpoint: InterfaceEndpoint => endpoint }.foreach:
+          endpoint =>
+            Option(declarationIds.get(DigitalInterfaceContract.root(endpoint))).flatMap(
+              instanceInterfacePorts.get
+            ).filter(_.generated.nonEmpty).foreach: binding =>
+              publicationCharge(2L)
+              selectedInterfaceInstances += binding.instance.get
+              selectedInputInstances += binding.instance.get
       Set("assignment", "value-connect").contains(operation.kind) && operation.values.size == 2
     ).foreach: operation =>
       val target =
-        digitalAssignmentRoot(operation.values.head, operation.owner, allowRootRegister = true)
+        digitalAssignmentRoot(
+          operation.values.head,
+          operation.owner,
+          allowRootRegister = true,
+          generatedScope = assignmentGeneratedScope(operation)
+        )
       if operation.eventProcess.isEmpty &&
         records(target.module).declarations(target.index).kind != KernelSignalKind.Register
       then
+        boundDomainCharge(3L) // count lookup/update and canonical declaration lookup
         continuousWriteCounts.update(target, continuousWriteCounts.getOrElse(target, 0) + 1)
+        instanceDigitalPorts.get(target).filter(_.generated.nonEmpty).foreach: binding =>
+          boundDomainCharge(2L)
+          selectedInputInstances += binding.instance
         val declaration = records(target.module).declarations(target.index)
         // A projected target carries its actual selectors; revisiting the root is cut by the
         // shared sampler's identity worklist, not by an annotation or a synthetic source.
+        boundDomainCharge() // direct target: no selector value or generated cone
         val selection =
           Option.when(operation.values.head.asInstanceOf[AnyRef] ne declaration.value)(
             operation.values.head
           ).toVector
+        // Under the one-assignment proof the old driver vector, selection and causal controls
+        // are empty: pay three concat dispatches, RHS singleton creation/visit, map read/write
+        // and the None causal-control dispatch. No variable input scan is hidden in this unit.
+        boundDomainCharge(8L)
         continuousDrivers.update(
           target,
           continuousDrivers.getOrElse(target, Vector.empty) ++ Vector(operation.values(1)) ++
             selection ++ causalControls(operation.digitalRegion)
         )
-    val parentInputReferences = instanceDigitalPorts.iterator.collect {
-      case (proxy, (_, port))
-          if records(proxy.module).declarations(
+    verifySelectedInputOuterFamilies(selectedInputInstances)
+    val parentInputReferences = publicationElements(instanceDigitalPorts.iterator).collect {
+      case (proxy, binding)
+          if binding.generated.isEmpty && records(proxy.module).declarations(
             proxy.index
-          ).kind == KernelSignalKind.InstanceInput => port -> proxy
+          ).kind == KernelSignalKind.InstanceInput => binding.port -> proxy
     }.toMap
-    instanceDigitalPorts.keysIterator.filter(reference =>
-      records(reference.module).declarations(reference.index).kind == KernelSignalKind.InstanceInput
-    ).foreach: reference =>
+    publicationElements(instanceDigitalPorts.iterator).collect {
+      case (reference, binding)
+          if binding.generated.isEmpty &&
+            records(reference.module).declarations(
+              reference.index
+            ).kind == KernelSignalKind.InstanceInput => reference
+    }.foreach: reference =>
       if continuousWriteCounts.getOrElse(reference, 0) != 1 then
         fail(
           "NODAL-HIERARCHY-057-001",
           "child digital input requires exactly one parent driver",
           Some(declarationPath(reference))
         )
+    def selectedInputDriver(
+        port: DeclarationRef,
+        selection: GeneratedSymbolSelectionRecord
+    ): DeclarationRef =
+      val family = selection.reference.family.generatedRegion
+      val member = generatedAreaPath(family, selection.reference.members).members.getOrElse(
+        selection.member, crossingFailure("selected input export is absent")
+      )
+      val instance = generatedInstanceExportTarget(family, member)._2
+      val candidates = publicationElements(instanceDigitalPorts.iterator).filter:
+        (_, binding) => (binding.instance eq instance) && binding.port == port &&
+          binding.generated.exists(sameSelectedInputLane(_, selection))
+      val matching = candidates.toVector
+      val bodyWriter = publicationElements(instanceDigitalPorts.iterator).exists:
+        (proxy, binding) => (binding.instance eq instance) && binding.port == port &&
+          binding.generated.isEmpty && continuousWriteCounts.getOrElse(proxy, 0) != 0
+      publicationCharge(matching.size.toLong * 3L)
+      val count = matching.map((proxy, _) => continuousWriteCounts.getOrElse(proxy, 0)).sum
+      if bodyWriter || count != 1 then
+        crossingFailure("selected child input requires exactly one lane writer and no template writer")
+      val (proxy, binding) = matching.find((proxy, _) =>
+        continuousWriteCounts.getOrElse(proxy, 0) == 1
+      ).getOrElse(crossingFailure("selected input driver is absent"))
+      requireSelectedInputTarget(proxy, binding, proxy.module)
+      proxy
+    def selectedInterfaceDriver(
+        port: DeclarationRef,
+        member: String,
+        selection: GeneratedSymbolSelectionRecord
+    ): DeclarationRef =
+      val family = selection.reference.family.generatedRegion
+      val exported = generatedAreaPath(family, selection.reference.members).members.getOrElse(
+        selection.member, crossingFailure("selected Interface instance export is absent")
+      )
+      val instance = generatedInstanceExportTarget(family, exported)._2
+      val bindings = publicationElements(instanceInterfacePorts.iterator).filter:
+        (_, binding) => binding.instance.exists(_ eq instance) && binding.port == port
+      val aliases = bindings.toVector
+      publicationCharge(aliases.size.toLong * 3L)
+      val paths = aliases.map((proxy, _) => s"${declarationPath(proxy)}.$member").toSet +
+        s"${declarationPath(port)}.$member"
+      val effects = publicationElements(interfaces.connectivity).filter(effect =>
+        (effect.kind == "interface-drive" || effect.kind == "interface-connect") &&
+          (paths(effect.target) || effect.kind == "interface-connect" && effect.source.exists(paths))
+      ).toVector
+      val lane = aliases.filter((_, binding) =>
+        binding.generated.exists(sameSelectedInputLane(_, selection))
+      )
+      publicationCharge(lane.size.toLong * 3L + effects.size.toLong * 3L)
+      val lanePaths = lane.map((proxy, _) => s"${declarationPath(proxy)}.$member").toSet
+      val writers = effects.filter(effect => lanePaths(effect.target))
+      val collision = publicationElements(effects).exists(effect => effect.kind != "interface-drive" ||
+        !publicationElements(aliases).exists((proxy, binding) => binding.generated.nonEmpty &&
+          effect.target == s"${declarationPath(proxy)}.$member"))
+      if collision || writers.size != 1 || writers.head.kind != "interface-drive" ||
+        writers.head.region.nonEmpty
+      then crossingFailure("selected Interface input requires exactly one lane drive and no template or connect writer")
+      val (proxy, binding) = lane.find((proxy, _) =>
+        writers.head.target == s"${declarationPath(proxy)}.$member"
+      ).getOrElse(crossingFailure("selected Interface driver is absent"))
+      requireSelectedInterfaceInputTarget(proxy, binding, member, proxy.module)
+      proxy
+    // Query-local grouping of existing authored boundaries; no second occurrence registry.
+    // With no selected writers, preserve the old observation path without inventory scans.
+    val selectedObservationContexts =
+      mutable.HashMap.empty[Long, mutable.ArrayBuffer[Vector[GeneratedSymbolSelectionRecord]]]
+    if selectedInputInstances.nonEmpty then
+      val contexts = mutable.HashMap.empty[
+        InstanceRecord, mutable.ArrayBuffer[GeneratedSymbolSelectionRecord]
+      ]
+      publicationElements(instanceDigitalPorts.iterator).foreach: (proxy, binding) =>
+        if selectedInputInstances(binding.instance) then
+          binding.generated.foreach: selection =>
+            publicationCharge(3L)
+            contexts.getOrElseUpdate(binding.instance, mutable.ArrayBuffer.empty) += selection
+            if continuousWriteCounts.getOrElse(proxy, 0) != 0 then
+              val _ = selectedInputDriver(binding.port, selection)
+      if selectedInterfaceInputs then
+        publicationElements(instanceInterfacePorts.iterator).foreach: (_, binding) =>
+          binding.instance.filter(selectedInputInstances).foreach: instance =>
+            binding.generated.foreach: selection =>
+              publicationCharge(3L)
+              contexts.getOrElseUpdate(instance, mutable.ArrayBuffer.empty) += selection
+        // Inventory the original declarations, never only accessed proxy members or writers.
+        publicationElements(contexts.iterator).filter((instance, _) =>
+          selectedInterfaceInstances(instance)
+        ).foreach: (instance, selections) =>
+          publicationElements(records(instance.child).declarations).foreach: declaration =>
+            declaration.value match
+              case endpoint: InterfacePort[?, ?]
+                  if endpoint.exported && !endpoint.boundary && endpoint.origin.isEmpty =>
+                val leaves = ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role)
+                publicationElements(leaves).filter(_.access == "in").foreach: leaf =>
+                  publicationElements(selections.toVector.distinct).foreach: selection =>
+                    val _ = selectedInterfaceDriver(declaration.reference, leaf.name, selection)
+              case endpoint: InterfaceArray[?, ?]
+                  if endpoint.exported && !endpoint.boundary && endpoint.origin.isEmpty =>
+                val leaves = ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role)
+                if publicationElements(leaves).exists(_.access == "in") then
+                  crossingFailure("selected child Interface input arrays are outside the scalar drive profile")
+              case _ => ()
+      val children = publicationElements(selectedInputInstances).map(_.child).toSet
+      publicationElements(records.valuesIterator).foreach: module =>
+        publicationElements(module.instances).foreach: instance =>
+          if children(instance.child) then
+            val actual = contexts.get(instance) match
+              case Some(values) =>
+                publicationCharge(values.size.toLong * 3L)
+                values.toVector.distinct.map(selection => Vector(selection))
+              case None => Vector(Vector.empty[GeneratedSymbolSelectionRecord])
+            publicationCharge(actual.size.toLong + 2L)
+            selectedObservationContexts.getOrElseUpdate(
+              instance.child, mutable.ArrayBuffer.empty
+            ) ++= actual
     // Interface capture is the owner of resolved connectivity and member/driver rules.
     // Feed its actual edges into this same sampler rather than constructing a CDC-only net graph.
-    val declarationsByPath = records.valuesIterator.flatMap(_.declarations).map(value =>
-      declarationPath(value.reference) -> value.reference
+    val declarationsByPath = publicationElements(records.valuesIterator).flatMap(module =>
+      publicationElements(module.declarations)
+    ).map(value =>
+      publicationProbe(declarationPath(value.reference) -> value.reference)
     ).toMap
-    val valuesByPath = records.valuesIterator.flatMap(_.declarations).map(value =>
-      declarationPath(value.reference) -> value.value
+    publicationCharge(declarationsByPath.size.toLong + expressionValues.size.toLong)
+    val valuesByPath = publicationElements(records.valuesIterator).flatMap(module =>
+      publicationElements(module.declarations)
+    ).map(value =>
+      publicationProbe(declarationPath(value.reference) -> value.value)
     ).toMap ++
-      expressionValues.iterator.map((reference, value) => expressionPath(reference) -> value)
+      publicationElements(expressionValues.iterator).map((reference, value) =>
+        publicationProbe(expressionPath(reference) -> value)
+      )
     interfaces.connectivity.foreach: connection =>
       declarationsByPath.get(connection.target).foreach: target =>
         val dependencies = (connection.value.toVector ++ connection.enable.toVector ++
@@ -2794,8 +4020,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             continuousDrivers.getOrElse(source, Vector.empty) :+
               valuesByPath(connection.target)
           )
-    val domainsByPath = records.valuesIterator.flatMap(_.domains).map(domain =>
-      domainPath(domain.reference) -> domain
+    val interfaceMembers = interfaces.interfaces.flatMap(endpoint =>
+      endpoint.members.map(member => member.path -> (endpoint, member))
+    ).toMap
+    val memberDependencies = interfaces.memberDependencies.map(value => value.path -> value).toMap
+    val regionsByPath =
+      publicationElements(allValueRegions).map(region =>
+        expressionPath(region.reference) -> region
+      ).toMap
+    val originalInterfaceInputs = publicationElements(instanceInterfacePorts.iterator).collect {
+      case (proxy, binding) if binding.generated.isEmpty && binding.instance.nonEmpty =>
+        binding.port -> proxy
+    }.toMap
+    val domainsByPath = publicationElements(records.valuesIterator).flatMap(module =>
+      publicationElements(module.domains)
+    ).map(domain =>
+      publicationProbe(domainPath(domain.reference) -> domain)
     ).toMap
     def behavioralRoot(region: Option[DigitalValueRegionRecord]): Option[ExpressionRef] =
       sequentialRoot(region)
@@ -2813,7 +4053,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
     val sampleCache =
       mutable.HashMap.empty[
-        (Long, Boolean, Boolean, Boolean, Option[DigitalEventProcessRecord]),
+        (Long, Boolean, Boolean, Boolean, Option[DigitalEventProcessRecord],
+          Vector[GeneratedSymbolSelectionRecord]),
         IdentityHashMap[AnyRef, SampleFacts]
       ]
     var cachedFacts = 0L
@@ -2821,9 +4062,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         values: Vector[Expr[?]],
         owner: Long,
         strict: Boolean,
-        inferSourceOwnership: Boolean = false
+        inferSourceOwnership: Boolean = false,
+        initialSelections: Vector[GeneratedSymbolSelectionRecord] = Vector.empty
     ): SampleFacts =
-      val facts = values.map(sampleFacts(_, owner, strict, inferSourceOwnership))
+      val facts = values.map(value => sampleFacts(
+        value, owner, strict, inferSourceOwnership, initialSelections = initialSelections
+      ))
       SampleFacts(
         facts.iterator.flatMap(_.domains).toSet,
         facts.iterator.flatMap(_.sources).toSet,
@@ -2866,30 +4110,40 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         strict: Boolean,
         inferSourceOwnership: Boolean = false,
         allowExternalControl: Boolean = false,
-        eventSampling: Option[DigitalEventProcessRecord] = None
+        eventSampling: Option[DigitalEventProcessRecord] = None,
+        initialSelections: Vector[GeneratedSymbolSelectionRecord] = Vector.empty
     ): SampleFacts =
       val cache = sampleCache.getOrElseUpdate(
-        (owner, strict, inferSourceOwnership, allowExternalControl, eventSampling),
+        (owner, strict, inferSourceOwnership, allowExternalControl, eventSampling, initialSelections),
         new IdentityHashMap[AnyRef, SampleFacts]()
       )
       val root = value.asInstanceOf[AnyRef]
       Option(cache.get(root)).getOrElse:
-        val pending = mutable.ArrayDeque((value, owner, true))
+        val pending =
+          mutable.ArrayDeque((value, owner, true, initialSelections))
         var activeOwner = owner
         var activeDomainVisible = true
+        var activeSelections = initialSelections
+        var selectedOccurrenceSeen = initialSelections.nonEmpty
+        val sampledMembers =
+          mutable.HashSet.empty[(DeclarationRef, String, Vector[GeneratedSymbolSelectionRecord])]
         var edges = 0
         def enqueue(
             values: IterableOnce[Any],
             context: Long = activeOwner,
-            domainVisible: Boolean = activeDomainVisible
+            domainVisible: Boolean = activeDomainVisible,
+            selections: Vector[GeneratedSymbolSelectionRecord] = activeSelections
         ): Unit =
           values.iterator.foreach: next =>
             edges += 1
             if edges > 262144 then
               behavioralFailure("sequential dependency edges exceed their budget")
-            pending.append((next, context, domainVisible))
+            pending.append((next, context, domainVisible, selections))
         val visited =
-          mutable.HashMap.empty[(Long, Boolean), IdentityHashMap[AnyRef, java.lang.Boolean]]
+          mutable.HashMap.empty[
+            (Long, Boolean, Vector[GeneratedSymbolSelectionRecord]),
+            IdentityHashMap[AnyRef, java.lang.Boolean]
+          ]
         val domains = mutable.HashSet.empty[String]
         val localEndpoints = mutable.HashSet.empty[DomainRef]
         def retainEndpoint(initial: DomainRef): Unit =
@@ -2912,12 +4166,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         var count = 0
         var pulseClassified = false
         while pending.nonEmpty do
-          val (current, context, domainVisible) = pending.removeLast()
+          val (current, context, domainVisible, selections) = pending.removeLast()
           activeOwner = context
           activeDomainVisible = domainVisible
+          activeSelections = selections
           val seen =
             visited.getOrElseUpdate(
-              (context, domainVisible),
+              (context, domainVisible, selections),
               new IdentityHashMap[AnyRef, java.lang.Boolean]()
             )
           current match
@@ -2959,12 +4214,71 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                         "event-owned state cannot be sampled by another process or ordinary domain"
                       )
                     sourceRoots += declarationRef
-                  case Some((_, port)) if declaration.kind == KernelSignalKind.InstanceOutput =>
+                  case Some(binding) if binding.generated.nonEmpty =>
+                    // This is a view of the original occurrence, never another child definition.
+                    // Keep the actual ordered selection on every work item, including the return
+                    // through the child's real parent input connection. Strict CDC/control roots
+                    // require a separately qualified physical-source proof and remain closed.
+                    if strict || inferSourceOwnership || allowExternalControl || eventSampling.nonEmpty
+                    then
+                      crossingFailure(
+                        "selected generated Instance sampling has unsupported CDC/control provenance"
+                      )
+                    selectedOccurrenceSeen = true
+                    val selection = binding.generated.get
+                    val selected = activeSelections :+ selection
+                    if selected.size > 128 then
+                      crossingFailure(
+                        "selected generated Instance dependency nesting exceeds its budget"
+                      )
+                    if declaration.kind == KernelSignalKind.InstanceOutput then
+                      enqueue(
+                        Vector(records(binding.port.module).declarations(binding.port.index).value),
+                        binding.port.module,
+                        selections = selected
+                      )
+                    else if publicationElements(instanceDigitalPorts.iterator).exists(
+                        (proxy, candidate) => (candidate.instance eq binding.instance) &&
+                          candidate.port == binding.port &&
+                          candidate.generated.exists(sameSelectedInputLane(_, selection)) &&
+                          continuousWriteCounts.getOrElse(proxy, 0) != 0
+                      )
+                    then
+                      val proxy = selectedInputDriver(binding.port, selection)
+                      enqueue(continuousDrivers(proxy), proxy.module)
+                    else
+                      val proxy = parentInputReferences.getOrElse(
+                        binding.port,
+                        crossingFailure(
+                          "selected child input has no actual authored parent connection"
+                        )
+                      )
+                      val original = instanceDigitalPorts(proxy)
+                      if original.instance != binding.instance || original.generated.nonEmpty then
+                        crossingFailure("selected child input differs from its actual occurrence")
+                      enqueue(
+                        Vector(records(proxy.module).declarations(proxy.index).value),
+                        proxy.module,
+                        selections = selected
+                      )
+                  case Some(binding) if declaration.kind == KernelSignalKind.InstanceOutput =>
                     enqueue(
-                      Vector(records(port.module).declarations(port.index).value),
-                      port.module
+                      Vector(records(binding.port.module).declarations(binding.port.index).value),
+                      binding.port.module
                     )
                   case Some(_) => enqueue(drivers)
+                  case None if declaration.kind == KernelSignalKind.Input &&
+                      activeSelections.nonEmpty && publicationElements(instanceDigitalPorts.iterator).exists(
+                        (proxy, binding) => binding.port == declarationRef &&
+                          binding.generated.exists(sameSelectedInputLane(_, activeSelections.last)) &&
+                          continuousWriteCounts.getOrElse(proxy, 0) != 0
+                      ) =>
+                    retainDeclarationEndpoint(declaration)
+                    val proxy = selectedInputDriver(declarationRef, activeSelections.last)
+                    enqueue(
+                      continuousDrivers(proxy), proxy.module,
+                      selections = activeSelections.dropRight(1)
+                    )
                   case None if parentInputReferences.contains(declarationRef) =>
                     retainDeclarationEndpoint(declaration)
                     val proxy = parentInputReferences(declarationRef)
@@ -3043,11 +4357,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                       enqueue(machine.futureSampleDependencies)
                 fsmResults.get(expressionRef).foreach: (machine, _) =>
                   enqueue(machine.futureSampleDependencies)
+                expressionValues.get(expressionRef).flatMap(generatedMemberRecord).foreach:
+                  member =>
+                    // A family projection is a use of the existing storage, not a new unclocked value.
+                    enqueue(
+                      Vector(records(member.target.module).declarations(member.target.index).value)
+                    )
               if eventSampling.nonEmpty && expressionRef.exists(reference =>
                   executableWaivers.contains(reference) || executableCrossings.contains(
                     reference
                   ) ||
-                    resetRecords.containsKey(expressionValues(reference)) || clockRecords.contains(
+                    expressionValues.get(
+                      reference
+                    ).exists(resetRecords.containsKey) || clockRecords.contains(
                       reference
                     ) ||
                     fsmResults.contains(reference)
@@ -3055,6 +4377,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               then
                 eventFailure(
                   "event capture cannot contain clock/reset/crossing/waiver/FSM provenance"
+                )
+              if activeSelections.nonEmpty && expressionRef.exists(reference =>
+                  executableWaivers.contains(reference) || executableCrossings.contains(
+                    reference
+                  ) ||
+                    expressionValues.get(
+                      reference
+                    ).exists(resetRecords.containsKey) || clockRecords.contains(reference)
+                )
+              then
+                crossingFailure(
+                  "selected generated Instance cone has unsupported clock/reset/crossing/waiver provenance"
                 )
               expressionRef.flatMap(executableWaivers.get) match
                 case Some(waiver) =>
@@ -3092,20 +4426,33 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                           if eventSampling.nonEmpty && (expression.operation.contains(
                               "memory_read"
                             ) ||
-                              !expression.resultType.exists(dataType =>
+                              !expression.resultDescriptor.exists(dataType =>
                                 DigitalCombinationalContract.isValueTypeKind(dataType) ||
                                   dataType.kind == "Integer"
                               ))
                           then
                             eventFailure("event capture has analog or unsupported value provenance")
                           if strict && !DigitalValueConstruction.isDigitalValue(expression) &&
-                            !expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+                            !expression.resultDescriptor.contains(
+                              KernelTypeDescriptor("Integer")
+                            ) &&
                             !expressionRef.exists(reference =>
                               shapeIndices.contains(reference) || shapeViews.contains(reference) ||
                                 collectionArguments.contains(reference)
                             )
                           then crossingFailure("input dependency has unsupported source provenance")
-                          if expression.operation.contains("memory_read") then
+                          if expression.interfaceMember.nonEmpty then
+                            val read = expression.interfaceMember.get
+                            val endpoint = Option(
+                              declarationIds.get(DigitalInterfaceContract.root(read.endpoint))
+                            )
+                              .getOrElse(crossingFailure(
+                                "ordinary member read lost its actual endpoint"
+                              ))
+                            if endpoint.module != activeOwner then
+                              crossingFailure("ordinary member read belongs to another occurrence")
+                            enqueue(Vector(InterfaceMemberSample(endpoint, read.member)))
+                          else if expression.operation.contains("memory_read") then
                             sourceRoots += expressionRef.get
                             val ports = expression.operands.collect {
                               case port: MemoryPortCapture =>
@@ -3125,6 +4472,146 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                                   collectionFailure("sampled collection has no actual yield")
                                 )))
                               case None => enqueue(expression.operands)
+                        case sample: InterfaceMemberSample =>
+                          if sample.endpoint.module != activeOwner then
+                            crossingFailure(
+                              "member dependency belongs to another actual occurrence"
+                            )
+                          if sampledMembers.add((sample.endpoint, sample.member, activeSelections))
+                          then
+                            val key = s"${declarationPath(sample.endpoint)}.${sample.member}"
+                            val (endpoint, member) = interfaceMembers.getOrElse(
+                              key,
+                              crossingFailure(
+                                "member dependency lost its exact complete endpoint inventory"
+                              )
+                            )
+                            if member.protocol != "plain" || member.mode.nonEmpty ||
+                              !Set("in", "out", "observe")(member.access)
+                            then
+                              crossingFailure(
+                                "ordinary read cannot borrow protocol or capability provenance"
+                              )
+                            val dependency = memberDependencies.getOrElse(
+                              key,
+                              crossingFailure("ordinary member has no canonical dependency result")
+                            )
+                            dependency.effectRegions.foreach: path =>
+                              val region = regionsByPath.getOrElse(
+                                path,
+                                crossingFailure("member driver lost its actual effect region")
+                              )
+                              if region.reference.module != activeOwner then
+                                crossingFailure("member driver guard belongs to another occurrence")
+                              enqueue(causalControls(Some(region)))
+                            if dependency.terminal != key then
+                              val (source, leaf) = interfaceMembers.getOrElse(
+                                dependency.terminal,
+                                crossingFailure("ordinary connection lost its exact source member")
+                              )
+                              val reference = declarationsByPath.getOrElse(
+                                source.path,
+                                crossingFailure("ordinary connection source has no declaration")
+                              )
+                              enqueue(Vector(InterfaceMemberSample(reference, leaf.name)))
+                            else if dependency.values.nonEmpty then enqueue(dependency.values)
+                            else
+                              instanceInterfacePorts.get(sample.endpoint) match
+                                case Some(binding) if binding.generated.nonEmpty =>
+                                  if strict || inferSourceOwnership || allowExternalControl || eventSampling.nonEmpty
+                                  then
+                                    crossingFailure(
+                                      "selected Interface read has unsupported CDC/control provenance"
+                                    )
+                                  selectedOccurrenceSeen = true
+                                  val selected = activeSelections :+ binding.generated.get
+                                  if selected.size > 128 then
+                                    crossingFailure("selected Interface nesting exceeds its budget")
+                                  enqueue(
+                                    Vector(InterfaceMemberSample(binding.port, sample.member)),
+                                    binding.port.module,
+                                    selections = selected
+                                  )
+                                case Some(binding)
+                                    if binding.instance.nonEmpty && member.access == "out" =>
+                                  enqueue(
+                                    Vector(InterfaceMemberSample(binding.port, sample.member)),
+                                    binding.port.module
+                                  )
+                                case Some(_) => crossingFailure(
+                                    "ordinary parent Interface member has no actual driver"
+                                  )
+                                case None if selectedInterfaceInputs &&
+                                    activeSelections.nonEmpty && member.access == "in" &&
+                                    publicationElements(selectedInterfaceInstances).exists(instance =>
+                                      instance.child == sample.endpoint.module &&
+                                        instance.generatedScope.contains(
+                                          activeSelections.last.reference.family.generatedRegion
+                                        )
+                                    ) =>
+                                  val proxy = selectedInterfaceDriver(
+                                    sample.endpoint, sample.member, activeSelections.last
+                                  )
+                                  selectedOccurrenceSeen = true
+                                  enqueue(
+                                    Vector(InterfaceMemberSample(proxy, sample.member)),
+                                    proxy.module,
+                                    selections = activeSelections.dropRight(1)
+                                  )
+                                case None
+                                    if originalInterfaceInputs.contains(
+                                      sample.endpoint
+                                    ) && member.access == "in" =>
+                                  val proxy = originalInterfaceInputs(sample.endpoint)
+                                  val binding = instanceInterfacePorts(proxy)
+                                  if activeSelections.nonEmpty && !binding.instance.get.generatedScope.contains(
+                                      activeSelections.last.reference.family.generatedRegion
+                                    )
+                                  then
+                                    crossingFailure(
+                                      "selected child Interface input differs from its authored occurrence"
+                                    )
+                                  enqueue(
+                                    Vector(InterfaceMemberSample(proxy, sample.member)),
+                                    proxy.module
+                                  )
+                                case None =>
+                                  val declaration = records(
+                                    sample.endpoint.module
+                                  ).declarations(sample.endpoint.index)
+                                  val exported = declaration.value match
+                                    case value: InterfacePort[?, ?] =>
+                                      value.exported && !value.boundary && value.origin.isEmpty
+                                    case value: InterfaceArray[?, ?] =>
+                                      value.exported && !value.boundary && value.origin.isEmpty
+                                    case _ => false
+                                  val generated =
+                                    records(sample.endpoint.module).generatedRegions.exists(
+                                      _.declarations.contains(sample.endpoint)
+                                    )
+                                  if sample.endpoint.module != actualRoot || !exported || generated ||
+                                    valueRegion(sample.endpoint).nonEmpty || member.access != "in"
+                                  then
+                                    crossingFailure(
+                                      "undriven ordinary member is not an exported top-level input"
+                                    )
+                                  val domain = domainsByPath.getOrElse(
+                                    endpoint.domain.getOrElse(crossingFailure(
+                                      "top-level Interface input has no actual domain"
+                                    )),
+                                    crossingFailure(
+                                      "top-level Interface input has no actual domain"
+                                    )
+                                  )
+                                  sourceRoots += sample.endpoint
+                                  if activeDomainVisible then
+                                    domains += resolved.getOrElse(
+                                      domain.reference,
+                                      crossingFailure(
+                                        "top-level Interface input domain is unresolved"
+                                      )
+                                    )
+                                  retainEndpoint(domain.reference)
                         case memory: MemoryPortCapture =>
                           val declaration = memoryDeclaration(memory.memory, activeOwner)
                           declarationDomain(declaration, resolved) match
@@ -3139,6 +4626,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                           crossingFailure("input dependency has no actual captured owner")
                         case _ => ()
             case _ => ()
+        if selectedOccurrenceSeen && (crossings.nonEmpty || waivers.nonEmpty || events.nonEmpty)
+        then
+          crossingFailure(
+            "selected generated Instance cone requires selection-qualified CDC/event proof"
+          )
         val result = SampleFacts(
           domains.toSet,
           if strict then sourceRoots.toSet else Set.empty,
@@ -3155,8 +4647,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           crossingFailure("cached sample facts exceed their bounded graph budget")
         cache.put(root, result)
         result
-    val updatesByEventProcess = operations.iterator.filter(_.eventProcess.nonEmpty).toVector
-      .groupBy(_.eventProcess.get)
+    val updatesByEventProcess =
+      publicationElements(operations.iterator).filter(_.eventProcess.nonEmpty).toVector
+        .groupBy(_.eventProcess.get)
     eventProcesses.foreach: process =>
       if records(process.owner).parentAtConstruction.nonEmpty then
         eventFailure("event-bearing module must be the actual selected root")
@@ -3355,7 +4848,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           )
       crossing.sourceDomain = Some(source)
       crossing.destinationDomain = Some(destination)
-    records.valuesIterator.flatMap(_.declarations).foreach: declaration =>
+    publicationElements(records.valuesIterator).flatMap(module =>
+      publicationElements(module.declarations)
+    ).foreach: declaration =>
+      publicationCharge(declaration.attributes.size.toLong)
       val values = declaration.attributes.collect:
         case ("stream_payload" | "stream_valid", value: Expr[?]) => value
       if values.nonEmpty then
@@ -3369,35 +4865,110 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         verifyReconvergence(readyFacts)
     // Boundary observations are actual driver cones, not samples authorized by declared domains.
     // Each ordinary output remains independent; the Interface owner alone supplies protocol groups.
-    records.valuesIterator.flatMap(_.declarations).filter(declaration =>
+    publicationElements(records.valuesIterator).flatMap(module =>
+      publicationElements(module.declarations)
+    ).filter(declaration =>
       declaration.kind == KernelSignalKind.Output &&
         continuousWriteCounts.getOrElse(declaration.reference, 0) > 0
     ).foreach: declaration =>
-      verifyReconvergence(sampleFacts(
-        declaration.value,
-        declaration.reference.module,
-        strict = false
-      ))
-    val ownersByPath = records.keysIterator.map(owner => modulePath(owner) -> owner).toMap
+      def observe(selections: Vector[GeneratedSymbolSelectionRecord]): Unit =
+        verifyReconvergence(sampleFacts(
+          declaration.value,
+          declaration.reference.module,
+          strict = false,
+          initialSelections = selections
+        ))
+      if selectedInputInstances.isEmpty then observe(Vector.empty)
+      else
+        publicationCharge(1L)
+        selectedObservationContexts.get(declaration.reference.module) match
+          case None => observe(Vector.empty)
+          case Some(contexts) => publicationElements(contexts).foreach(observe)
+    publicationElements(expressionValues.iterator).filter(_._2.interfaceMember.nonEmpty).foreach:
+      (reference, value) =>
+        if !selectedInterfaceInputs then
+          verifyReconvergence(sampleFacts(value, reference.module, strict = false))
+        else
+          publicationCharge(1L)
+          val contexts = selectedObservationContexts.get(reference.module)
+            .map(_.toVector).getOrElse(Vector(Vector.empty[GeneratedSymbolSelectionRecord]))
+          publicationElements(contexts).foreach: selections =>
+            verifyReconvergence(sampleFacts(
+              value, reference.module, strict = false, initialSelections = selections
+            ))
+    val ownersByPath = publicationElements(records.keysIterator).map(owner =>
+      publicationProbe(modulePath(owner) -> owner)
+    ).toMap
     interfaces.observationGroups.foreach: group =>
       val owner = ownersByPath.getOrElse(
         group.owner,
         crossingFailure("Interface observation lost its actual construction owner")
       )
-      verifyReconvergence(combinedFacts(group.values, owner, strict = false))
+      if !selectedInterfaceInputs then
+        verifyReconvergence(combinedFacts(group.values, owner, strict = false))
+      else
+        publicationCharge(1L)
+        val contexts = selectedObservationContexts.get(owner).map(_.toVector)
+          .getOrElse(Vector(Vector.empty[GeneratedSymbolSelectionRecord]))
+        publicationElements(contexts).foreach: selections =>
+          verifyReconvergence(combinedFacts(
+            group.values, owner, strict = false, initialSelections = selections
+          ))
+    publicationCharge(operations.size.toLong)
     operations.zipWithIndex.foreach: (operation, index) =>
+      publicationCharge(1L)
+      if selectedInterfaceInputs && operation.kind == "interface-drive" then
+        val root = Option(declarationIds.get(
+          DigitalInterfaceContract.root(operation.values.head.asInstanceOf[InterfaceEndpoint])
+        ))
+        root.flatMap(instanceInterfacePorts.get).filter(_.generated.nonEmpty).foreach: binding =>
+          val reference = root.get
+          val domain = instanceInterfaceDomain(reference).flatMap(resolved.get).getOrElse(
+            crossingFailure("selected Interface input has no actual resolved domain")
+          )
+          val facts = sampleFacts(operation.values(2), operation.owner, strict = false)
+          if facts.domains.exists(_ != domain) || facts.crossings.nonEmpty ||
+            facts.waivers.nonEmpty || facts.events.nonEmpty
+          then crossingFailure("selected Interface driver requires its exact ordinary occurrence domain")
+          val _ = selectedInterfaceDriver(
+            binding.port, operation.values(1).asInstanceOf[String], binding.generated.get
+          )
       if operation.kind == "assignment" && operation.values.size == 2 then
         val target =
-          digitalAssignmentRoot(operation.values.head, operation.owner, allowRootRegister = true)
+          digitalAssignmentRoot(
+            operation.values.head,
+            operation.owner,
+            allowRootRegister = true,
+            generatedScope = assignmentGeneratedScope(operation)
+          )
         val declaration = records(target.module).declarations(target.index)
+        boundDomainCharge() // exact empty private-state lookup
         if privateFsmStorage(target) then
           FlatFsmRuntime.fail("private machine state cannot have external updates")
+        instanceDigitalPorts.get(target).filter(_.generated.nonEmpty).foreach: binding =>
+          val childPort = records(binding.port.module).declarations(binding.port.index)
+          val domain = declarationDomain(childPort, resolved)
+          val facts = sampleFacts(operation.values(1), operation.owner, strict = false)
+          val wrongDomain = domain match
+            case Some(actual) => facts.domains.exists(_ != actual)
+            case None => facts.domains.nonEmpty
+          if wrongDomain || facts.crossings.nonEmpty ||
+            facts.waivers.nonEmpty || facts.events.nonEmpty
+          then crossingFailure("selected input driver requires its exact ordinary occurrence domain")
         if declaration.kind == KernelSignalKind.Register then
           val root = behavioralRoot(operation.digitalRegion).map(Left(_)).getOrElse(Right(index))
-          roots.get(target).foreach: previous =>
-            if previous != root then
+          val update = UpdateRoot(root, structuralGuards(operation.digitalRegion))
+          val previousRoots = roots.getOrElseUpdate(target, mutable.ArrayBuffer.empty)
+          previousRoots.foreach: previous =>
+            updateRootProofWork += 1
+            if updateRootProofWork > 262144 then
+              behavioralFailure("update-root structural proof exceeds its bounded graph")
+            val exclusive = previous.guards.exists((conditional, arm) =>
+              update.guards.get(conditional).exists(_ != arm)
+            )
+            if previous.identity != root && !exclusive then
               behavioralFailure("one register has unrelated update roots", "NODAL-STATE-001")
-          roots.update(target, root)
+          if !previousRoots.contains(update) then previousRoots += update
           val source = operation.values(1).asInstanceOf[Expr[?]]
           val exact =
             for
@@ -3461,7 +5032,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       root.foreach: identity =>
         if checkedGuards.add((identity, owner, domain)) then
           guardsByRoot.getOrElse(identity, Vector.empty).foreach(dependencies(_, owner, domain))
-    operations.iterator.filter(_.kind == "memory-write").foreach: operation =>
+    publicationElements(operations.iterator).filter(_.kind == "memory-write").foreach: operation =>
       memoryPort(
         operation.values.last.asInstanceOf[MemoryPortCapture],
         operation.owner,
@@ -3469,7 +5040,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         operation.digitalRegion,
         operation
       )
-    expressionValues.foreach: (reference, expression) =>
+    publicationElements(expressionValues).foreach: (reference, expression) =>
       if expression.operation.contains("memory_read") then
         val _ = memoryReadSnapshot(expression)
         memoryPort(
@@ -3480,7 +5051,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           reference
         )
     flatFsms.valuesIterator.foreach: record =>
-      val targetDomain = pathOf(record.domain).get
+      val targetDomain = resolved.getOrElse(
+        domainRef(record.domain),
+        behavioralFailure("FSM requirement has no resolved occurrence domain")
+      )
       guardsByRoot.getOrElse(
         record.reference,
         Vector.empty
@@ -3493,12 +5067,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           declarationIds.get(record.storage)
         )
       )
-    val usedMemories = operations.iterator.filter(_.kind == "memory-write").map(
-      _.values.head.asInstanceOf[AnyRef]
-    ).toSet ++ expressionValues.valuesIterator.filter(_.operation.contains("memory_read")).map(
-      _.operands.last.asInstanceOf[MemoryPortCapture].memory
-    ).toSet
-    records.valuesIterator.flatMap(_.declarations).filter(declaration =>
+    val usedMemories =
+      publicationElements(operations.iterator).filter(_.kind == "memory-write").map(
+        _.values.head.asInstanceOf[AnyRef]
+      ).toSet ++ publicationElements(
+        expressionValues.valuesIterator
+      ).filter(_.operation.contains("memory_read")).map(
+        _.operands.last.asInstanceOf[MemoryPortCapture].memory
+      ).toSet
+    publicationElements(records.valuesIterator).flatMap(module =>
+      publicationElements(module.declarations)
+    ).filter(declaration =>
       declaration.kind == KernelSignalKind.Register ||
         (declaration.kind == KernelSignalKind.Memory && usedMemories(declaration.value))
     ).foreach: declaration =>
@@ -3506,7 +5085,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val domain = declarationDomain(declaration, resolved).flatMap(domainsByPath.get).getOrElse(
         behavioralFailure("register update domain is not owned by this construction")
       )
-      val behavioral = roots.get(target).exists(_.isLeft)
+      val behavioral = roots.get(target).exists(_.exists(_.identity.isLeft))
       if domain.domain.clock.isEmpty && (behavioral || declaration.kind == KernelSignalKind.Memory)
       then
         behavioralFailure("behavioral update requires an actual local Clock binding")
@@ -3562,7 +5141,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             if declaration.attributes.exists:
                 case ("initial", Some(_: Expr[?])) => true
                 case _ => false
-            then behavioralFailure("resetless register cannot have a reset initializer")
+            then
+              if !contextualFsmInitializer(declaration) then
+                behavioralFailure("resetless register cannot have a reset initializer")
           case Some(_) => ()
           case None if effectiveResets.containsKey(domain.domain) => ()
           case _ => behavioralFailure("executable register requires an explicit reset policy")
@@ -3581,13 +5162,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         )
       )
 
-  private def structuralIfSnapshots(): Vector[KernelStructuralIfSnapshot] =
+  private def structuralIfSnapshots(staticDependenciesOnly: Boolean = false)
+      : Vector[KernelStructuralIfSnapshot] =
     structuralIfs.valuesIterator.map: record =>
       def arm(region: DigitalValueRegionRecord): KernelStructuralArmSnapshot =
+        val (captures, arguments) = if staticDependenciesOnly then staticRegionSignature(region)
+        else
+          region.captures.valuesIterator.map(value => pathOf(value._1).get).toVector ->
+            regionArguments(region)
         KernelStructuralArmSnapshot(
           expressionPath(region.reference),
-          region.captures.valuesIterator.map(value => pathOf(value._1).get).toVector,
-          regionArguments(region),
+          captures,
+          arguments,
           region.yielded.flatMap(pathOf)
         )
       KernelStructuralIfSnapshot(
@@ -3597,13 +5183,124 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         pathOf(record.predicate).get,
         arm(record.trueArm),
         arm(record.falseArm),
-        record.result.flatMap(CandidateRuntime.expressionDataType).map(renderType(
-          _,
-          record.reference.module
-        )),
+        record.result.flatMap(CandidateRuntime.expressionDataType).filter(dataType =>
+          !staticDependenciesOnly ||
+            CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Integer")
+        ).map(renderType(_, record.reference.module)),
         record.sourceOrdinal
       )
     .toVector
+
+  // Registered construction is intentionally narrower than future callback admission.
+  // No payload or provisional type is evidence while this existing cell is pending.
+  private def constructionPayloadAvailable(expression: KernelExpr[?]): Boolean =
+    if expression.constructionFinalized then true
+    else
+      closureCharge(1L)
+      val reference = Option(expressionIds.get(expression))
+      if !expression.pendingConstructionOwnedBy(this) ||
+        !reference.exists(ref => expressionValues.get(ref).exists(_ eq expression)) ||
+        !expression.constructionKind.exists(DigitalReductionContract.Kinds) ||
+        expression.constructionCallback.isEmpty
+      then
+        fail("NODAL-HIERARCHY-058-CONSTRUCTION", "unregistered or failed construction cell")
+      false
+
+  private def requireConstructionPayload(expression: KernelExpr[?]): Boolean =
+    if !constructionPayloadAvailable(expression) then
+      fail("NODAL-HIERARCHY-058-CONSTRUCTION", "pending construction cannot supply static metadata")
+    true
+
+  private var registeredConstructionAdmission = false
+
+  private def ordinaryRootConstructionContext: Boolean =
+    moduleStack.size == 1 && activeValueRegion.isEmpty && domainStack.isEmpty &&
+      areaStack.isEmpty && generationStack.isEmpty && instanceSelectionStack.isEmpty &&
+      analogStack.isEmpty && analogSemanticContext.isEmpty && activeEventProcess.isEmpty
+
+  def reserveReductionConstructionIntent(
+      input: Expr[?],
+      body: DigitalCollectionCallback.ReductionBody,
+      kind: String
+  ): KernelExpr[Data] =
+    AnalogUserFunctionRuntime.rejectEffect()
+    if boundaryClosureOwner.nonEmpty || !ordinaryRootConstructionContext ||
+      !DigitalReductionContract.Kinds(kind)
+    then collectionFailure("C2a construction requires an open ordinary root Module context")
+    val result = reserveRegisteredConstruction(input, body)
+    result.registerConstructionIntent(this, kind)
+    registeredConstructionAdmission = true
+    bindDiagnosticRequest(result)
+
+  /** Stage A/B primitive only: no production reduction branch invokes reservation yet. */
+  def reserveReductionConstruction(
+      input: Expr[?],
+      body: DigitalCollectionCallback.ReductionBody
+  ): KernelExpr[Data] =
+    DigitalCollectionCallback.requireChecked(body.checked)
+    val module = currentModule
+    val bound = bindCollectionValue(input, activeValueRegion, module.handle)
+    requireRegisteredCollectionOperand(bound, module.handle)
+    val (element, _) = DigitalCollectionContract.vector(bound)
+    val result =
+      KernelExpr.reserve[Data](this, CandidateRuntime.typeDescriptor(element), Vector(bound), body)
+    activeValueRegion.foreach: region =>
+      if region.expressionCount >= 4098 then
+        collectionFailure("collection body exceeds the 4098 expression budget")
+      region.expressionCount += 1
+    val reference = allocateExpressionReference(module)
+    module.expressionCount += 1
+    expressionIds.put(result, reference)
+    expressionValues.update(reference, result)
+    activeValueRegion.foreach(region => expressionRegions.update(reference, region))
+    result.attachConstructionSource(
+      this,
+      semanticOrigin.reserveExpression(module.handle, reference.index, result, Vector(bound))
+    )
+    boundaryClosureOwner.foreach: owner =>
+      owner.captured(reference, result)
+      owner.markDirty()
+    result
+
+  private def completeReductionSingletonBody(
+      result: KernelExpr[Data],
+      input: Expr[Vec[Data]],
+      indices: Vector[Dimension]
+  ): Expr[Data] =
+    val reference = Option(expressionIds.get(result)).getOrElse(
+      collectionFailure("reserved result has no original expression identity")
+    )
+    try
+      require(
+        result.constructionKind.isEmpty || ordinaryRootConstructionContext,
+        "registered construction requires its ordinary root context"
+      )
+      require(
+        reference.module == currentModule.handle &&
+          expressionRegions.get(reference) == activeValueRegion,
+        "reserved result requires its original lexical scope"
+      )
+      require(
+        result.constructionDependencies == Vector(input),
+        "reserved result cannot change its actual input"
+      )
+      DeferredResultType.requireFinal(Vector(input), "singleton construction")
+      val (_, dimensions) = DigitalCollectionContract.vector(input)
+      val count = dimensions.reduce(StaticIntegerExpression.multiply64)
+      val bounds =
+        new StructuralBoundAnalysis(currentModule.handle, signed64Literals = true)(count).bounds
+      if bounds.lower != 1 || bounds.upper != 1 then
+        collectionFailure("reserved singleton requires exact count one")
+      require(
+        indices == dimensions.map(_ => 0),
+        "reserved singleton requires the actual zero index"
+      )
+      CandidateRuntime.shapeIndex(input, indices, Some(result -> this))
+    catch
+      case failure: Throwable =>
+        result.failConstruction(this)
+        poisonConstructor(failure, expressionPath(reference))
+        throw failure
 
   def captureCollection(
       kind: String,
@@ -3634,18 +5331,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       seed: Option[Expr[?]]
   )(body: Vector[Expr[?]] => Expr[?]): Expr[?] =
     val module = currentModule
-    val argumentTypes = DigitalCollectionContract.arguments(kind, inputs, seed)
     val parent = activeValueRegion
     val boundInputs = inputs.map(bindCollectionValue(_, parent, module.handle))
     val boundSeed = seed.map(bindCollectionValue(_, parent, module.handle))
-    (boundInputs ++ boundSeed).foreach: value =>
+    (boundInputs ++ boundSeed).foreach(requireRegisteredCollectionOperand(_, module.handle))
+    val argumentTypes =
+      DigitalCollectionContract.constructionArguments(kind, boundInputs, boundSeed)
+    (boundInputs ++ boundSeed).filterNot(DeferredResultType.pending).foreach: value =>
       validateShapeType(
         CandidateRuntime.expressionDataType(value).get,
         module.handle,
         cardinality = true,
         storageContext = true
       )
-    val reference = ExpressionRef(module.handle, module.expressionCount)
+    val reference = allocateExpressionReference(module)
     module.expressionCount += 1
     val region = new DigitalValueRegionRecord(reference, parent, kind, boundInputs, boundSeed)
     collectionRegions.update(reference, region)
@@ -3653,27 +5352,70 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     try
       val arguments =
         argumentTypes.map((dataType, role) => newCollectionArgument(region, dataType, role))
-      arguments.foreach(argument =>
-        bindCollectionType(argument.resultType.get, Some(region), module.handle)
+      arguments.filter(_.typeFinalized).foreach(argument =>
+        bindCollectionType(argument.resultDescriptor.get, Some(region), module.handle)
       )
       val yielded = bindCollectionValue(body(arguments), Some(region), module.handle)
-      DigitalCombinationalContract.validateValueType(DigitalCollectionContract.descriptor(yielded))
+      val dependencies = boundInputs ++ boundSeed ++ Vector(yielded)
+      val pending = dependencies.exists(DeferredResultType.pending)
+      if pending then
+        val _ = requireDeferredPayloadScope(Some(region), module.handle)
+        if !DigitalCombinationalContract.isValueTypeKind(
+            DigitalCollectionContract.descriptor(yielded)
+          )
+        then
+          collectionFailure("deferred collection result requires a finite digital payload kind")
+      else
+        DigitalCombinationalContract.validateValueType(
+          DigitalCollectionContract.descriptor(yielded)
+        )
       val rawResultType =
-        DigitalCollectionContract.result(kind, boundInputs.head, boundSeed, yielded)
+        DigitalCollectionContract.constructionResult(kind, boundInputs.head, boundSeed, yielded)
+      beforeRegionMutation(region)
       region.yielded = Some(yielded)
       collectionStack.remove(collectionStack.size - 1)
-      val resultType = exportCollectionType(rawResultType, region)
-      validateShapeType(
-        CandidateRuntime.dataTypeFromDescriptor(resultType),
-        module.handle,
-        cardinality = true,
-        storageContext = true
-      )
+      def finalResultType(): KernelTypeDescriptor =
+        val arguments = DigitalCollectionContract.arguments(kind, boundInputs, boundSeed)
+        if arguments.size > region.arguments.size || arguments.zipWithIndex.exists:
+            case ((dataType, role), index) =>
+              val (argument, actualRole) = region.arguments(index)
+              actualRole != role || !DigitalEnumContract.sameType(
+                CandidateRuntime.typeDescriptor(dataType),
+                dataArgument(argument).resultDescriptor.get
+              )
+        then
+          collectionFailure("deferred collection argument signature differs from its actual inputs")
+        (boundInputs ++ boundSeed).foreach: value =>
+          validateShapeType(
+            CandidateRuntime.expressionDataType(value).get,
+            module.handle,
+            cardinality = true,
+            storageContext = true
+          )
+        DigitalCombinationalContract.validateValueType(
+          DigitalCollectionContract.descriptor(yielded)
+        )
+        exportCollectionType(
+          DigitalCollectionContract.result(kind, boundInputs.head, boundSeed, yielded),
+          region
+        )
+      val intent = DeferredResultType.intent(dependencies)(finalResultType())
+      val resultType =
+        if pending then rawResultType else exportCollectionType(rawResultType, region)
+      if !pending then
+        validateShapeType(
+          CandidateRuntime.dataTypeFromDescriptor(resultType),
+          module.handle,
+          cardinality = true,
+          storageContext = true
+        )
       val result = new KernelExpr[Data](
         boundInputs ++ boundSeed ++ region.captures.valuesIterator.map(_._1).toVector,
         resultType = Some(resultType),
-        operation = Some(DigitalCollectionContract.Operation)
+        operation = Some(DigitalCollectionContract.Operation),
+        typeIntent = intent
       )
+      beforeRegionMutation(region)
       region.result = Some(result)
       val _ = captureExpression(result, retained = Some(reference))
       result
@@ -3699,12 +5441,34 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val parent = activeValueRegion
     val input = bindCollectionValue(inputs.head, parent, module.handle)
     val (element, dimensions) = DigitalCollectionContract.vector(input)
-    validateShapeType(
-      CandidateRuntime.expressionDataType(input).get,
-      module.handle,
-      cardinality = true,
-      storageContext = true
-    )
+    requireRegisteredCollectionOperand(input, module.handle)
+    val pendingInput = DeferredResultType.pending(input)
+    if pendingInput then
+      if !moduleOwnedGeneratedMemberType(
+          KernelTypeDescriptor("geometry", dimensions.toVector),
+          module.handle
+        )
+      then
+        collectionFailure(
+          "pending reduction outer geometry requires a separately finalized lifecycle"
+        )
+      val schema =
+        DigitalReductionContract.mapWidths(CandidateRuntime.typeDescriptor(element))(_ => 1)
+      if !moduleOwnedGeneratedMemberType(schema, module.handle) then
+        collectionFailure("pending reduction inner schema requires complete original dimensions")
+      validateShapeType(
+        CandidateRuntime.dataTypeFromDescriptor(schema),
+        module.handle,
+        cardinality = true,
+        storageContext = true
+      )
+    else
+      validateShapeType(
+        CandidateRuntime.expressionDataType(input).get,
+        module.handle,
+        cardinality = true,
+        storageContext = true
+      )
     val initialType = CandidateRuntime.typeDescriptor(element)
     val count = dimensions.reduce(StaticIntegerExpression.multiply64)
     val countBounds =
@@ -3728,7 +5492,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         ) > DigitalReductionContract.MaximumWork
       then
         collectionFailure("reduction context preflight exceeds the 65536 analysis-work budget")
-      val reference = ExpressionRef(module.handle, module.expressionCount)
+      val reference = allocateExpressionReference(module)
       module.expressionCount += 1
       val region = new DigitalValueRegionRecord(reference, parent, kind, Vector(input), None)
       collectionRegions.update(reference, region)
@@ -3756,142 +5520,24 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val wholeRight = newCollectionArgument(region, template(right), "right")
         val yielded =
           bindCollectionValue(body(Vector(wholeLeft, wholeRight)), Some(region), module.handle)
-        val yieldedType = DigitalCollectionContract.descriptor(yielded)
-        if !DigitalEnumContract.sameWidthFamily(initialType, yieldedType) then
-          collectionFailure(
-            "reduction callback changes kind, record schema, enum ABI or inner dimensions"
-          )
-        val yieldedWidths = DigitalReductionContract.widths(yieldedType)
-        val graph = new DigitalReductionContract.IntegerGraph[Dimension]:
-          override def charge(work: Int): Unit = chargeReduction(work)
-          def same(a: Dimension, b: Dimension): Boolean = (a, b) match
-            case (x: Int, y: Int) => x == y
-            case (x: Expr[?], y: Expr[?]) => x eq y
-            case _ => false
-          def operation(value: Dimension): Option[(String, Vector[Dimension])] = value match
-            case expression: KernelExpr[?] if expression.literal.isEmpty =>
-              expression.operation.filter(IterationDomain.staticArithmetic(_).nonEmpty).map(
-                operation =>
-                  operation -> expression.operands.map(_.asInstanceOf[Expr[Integer]])
-              )
-            case _ => None
-          def literal(value: Long): Dimension = StaticIntegerExpression.literal64(BigInt(value))
-          def bounds(value: Dimension): (Long, Long) =
-            val result =
-              new StructuralBoundAnalysis(module.handle, signed64Literals = true)(value).bounds
-            result.lower -> result.upper
-          def add(a: Dimension, b: Dimension): Dimension = StaticIntegerExpression.add64(a, b)
-          def subtract(a: Dimension, b: Dimension): Dimension =
-            StaticIntegerExpression.subtract64(a, b)
-          def multiply(a: Dimension, b: Dimension): Dimension =
-            StaticIntegerExpression.multiply64(a, b)
-          def maximum(a: Dimension, b: Dimension): Dimension = StaticIntegerExpression.maximum(a, b)
-          def ceilLog2(value: Dimension): Dimension = StaticIntegerExpression.ceilLog2(value)
-          def chooseZero(test: Dimension, zero: Dimension, nonzero: Dimension): Dimension =
-            StaticIntegerExpression.chooseZero(test, zero, nonzero)
-        val allFormals = (left ++ right).map(_.asInstanceOf[Dimension])
-        val profiles = yieldedWidths.indices.map(index =>
-          DigitalReductionContract.infer(
-            yieldedWidths(index),
-            left(index).asInstanceOf[Dimension],
-            right(index).asInstanceOf[Dimension],
-            allFormals,
-            graph
-          )
-        ).toVector
+        beforeRegionMutation(region)
         region.yielded = Some(yielded)
-        // Body inventory includes ordinary nested collections and all unused retained operations.
-        def descendant(candidate: DigitalValueRegionRecord): Boolean =
-          var current = Option(candidate)
-          var found = false
-          while current.nonEmpty && !found do
-            found = current.get eq region
-            current = current.get.parent
-          found
-        val actualBody = expressionValues.iterator.filter((ref, _) =>
-          expressionRegions.get(ref).exists(descendant)
-        ).toVector
-        if BigInt(actualBody.size + widths.size * 2) * BigInt(contexts.size) >
-            DigitalReductionContract.MaximumWork
-        then
-          collectionFailure("reduction body/context work exceeds the 65536 analysis-work budget")
-        // Endpoints are ordinary static expressions. The universal domain, never an endpoint sample,
-        // is used for every intermediate body width and operation obligation below.
         collectionStack.remove(collectionStack.size - 1)
         reductionExact = previousExact
         reductionDomains = previousDomains
-        val balanced = kind == "reduce_balanced"
-        def at(index: Int, size: Long): Dimension = DigitalReductionContract.formula(
-          profiles(index),
-          widths(index),
-          graph.literal(size),
-          balanced,
-          graph
-        )
-        withReductionProofExpressions:
-          contexts.foreach: (leftSize, rightSize) =>
-            val exact = mutable.HashMap.empty[KernelExpr[?], Dimension]
-            val domains = mutable.HashMap.empty[KernelExpr[?], IterationDomain.Bounds]
-            def bind(
-                formals: Vector[KernelExpr[?]],
-                size: DigitalReductionContract.SizeRange
-            ): Unit =
-              profiles.indices.foreach: index =>
-                profiles(index) match
-                  case DigitalReductionContract.Transfer.Invariant =>
-                    exact.update(formals(index), widths(index))
-                  case DigitalReductionContract.Transfer.Fixed(value) =>
-                    exact.update(formals(index), if size.upper == 1 then widths(index) else value)
-                  case _ if size.lower == size.upper =>
-                    exact.update(formals(index), at(index, size.lower))
-                  case _ =>
-                    val lower = graph.bounds(at(index, size.lower))._1
-                    val upper = graph.bounds(at(index, size.upper))._2
-                    domains.update(formals(index), IterationDomain.Bounds(lower, upper))
-            bind(left, leftSize)
-            bind(right, rightSize)
-            withReductionContext(exact.toMap, domains.toMap):
-              if !DigitalEnumContract.sameWidthFamily(initialType, yieldedType) then
-                collectionFailure("reduction invariant inner shape changes in a reachable context")
-              actualBody.foreach: (reference, expression) =>
-                validateReductionStructure(reference, expression, module.handle)
-                val descriptor =
-                  expression.resultType.getOrElse(
-                    collectionFailure("reduction body type is absent")
-                  )
-                if descriptor.kind == "Integer" then
-                  // Raw static captures need only the i64 stage contract here. Each width,
-                  // shape and bounded consumer is checked independently in this same context.
-                  val _ = new StructuralBoundAnalysis(
-                    module.handle,
-                    signed64Literals = true,
-                    allowUnboundedParameters = true
-                  )(expression.asInstanceOf[Expr[Integer]])
-                else
-                  validateShapeType(
-                    CandidateRuntime.dataTypeFromDescriptor(descriptor),
-                    module.handle,
-                    cardinality = true,
-                    storageContext = true
-                  )
-                  DigitalReductionContract.validateBodyValue(expression)
-        var index = 0
-        val resultType = DigitalReductionContract.mapWidths(initialType): _ =>
-          val value =
-            DigitalReductionContract.formula(profiles(index), widths(index), count, balanced, graph)
-          index += 1
-          value
-        validateShapeType(
-          CandidateRuntime.dataTypeFromDescriptor(resultType),
-          module.handle,
-          cardinality = true,
-          storageContext = true
-        )
+        val dependencies =
+          Vector(input) ++ region.captures.valuesIterator.map(_._1).toVector ++ Vector(yielded)
+        val intent =
+          DeferredResultType.intent(dependencies)(reductionResultType(region, count, dimensions))
+        val resultType =
+          if intent.nonEmpty then initialType else reductionResultType(region, count, dimensions)
         val result = new KernelExpr[Data](
           Vector(input) ++ region.captures.valuesIterator.map(_._1).toVector,
           resultType = Some(resultType),
-          operation = Some(DigitalCollectionContract.Operation)
+          operation = Some(DigitalCollectionContract.Operation),
+          typeIntent = intent
         )
+        beforeRegionMutation(region)
         region.result = Some(result)
         val _ = captureExpression(result, retained = Some(reference))
         result
@@ -3904,6 +5550,200 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         reductionDomains = previousDomains
         if collectionStack.lastOption.contains(region) then
           collectionStack.remove(collectionStack.size - 1)
+
+  /** One transfer/context proof for eager and delayed reductions; the callback is never replayed.
+    */
+  private def reductionResultType(
+      region: DigitalValueRegionRecord,
+      count: Dimension,
+      originalDimensions: Vector[Dimension]
+  ): KernelTypeDescriptor =
+    val module = records(region.reference.module)
+    val kind = region.kind
+    val (left, right) = reductionSignature(region, complete = true)
+    if region.captures.size != region.arguments.size - left.size - right.size - 2 then
+      collectionFailure("reduction capture inventory differs from its complete signature")
+    region.captures.foreach: (key, edge) =>
+      val source = dataCapture(edge._1)
+      val argument = dataArgument(edge._2)
+      requireRegisteredCollectionOperand(source, module.handle)
+      if valueReference(source) != key || valueRegion(valueReference(source)) != region.parent ||
+        !DigitalEnumContract.sameType(
+          DigitalCollectionContract.descriptor(source),
+          argument.resultDescriptor.get
+        )
+      then
+        collectionFailure("reduction capture lost its actual parent identity or final type")
+    val input = region.inputs.head
+    DeferredResultType.requireFinal(
+      Vector(input) ++ region.captures.valuesIterator.map(_._1),
+      "reduction transfer"
+    )
+    val (element, dimensions) = DigitalCollectionContract.vector(input)
+    val initialType = CandidateRuntime.typeDescriptor(element)
+    val widths = DigitalReductionContract.widths(initialType)
+    if dimensions != originalDimensions then
+      collectionFailure("reduction geometry changed after its callback lifecycle decision")
+    validateShapeType(
+      CandidateRuntime.expressionDataType(input).get,
+      module.handle,
+      cardinality = true,
+      storageContext = true
+    )
+    Vector(left, right).zipWithIndex.foreach: (formals, side) =>
+      val whole =
+        dataArgument(region.arguments(left.size + right.size + side)._1).resultDescriptor.get
+      val actualWidths = DigitalReductionContract.widths(whole)
+      if !DigitalEnumContract.sameWidthFamily(
+          initialType,
+          whole
+        ) || actualWidths.size != formals.size ||
+        actualWidths.zip(formals).exists((actual, expected) =>
+          actual match
+            case expression: Expr[?] => !expression.eq(expected)
+            case _ => true
+        )
+      then
+        collectionFailure("reduction whole-value formal lost its exact original width identities")
+    val countBounds =
+      new StructuralBoundAnalysis(module.handle, signed64Literals = true)(count).bounds
+    if countBounds.lower <= 0 || countBounds.upper == 1 then
+      collectionFailure("captured reduction lost its original multi-element geometry")
+    val contexts = DigitalReductionContract.contexts(
+      countBounds.lower,
+      countBounds.upper,
+      kind == "reduce_balanced"
+    )
+    val yielded = region.yielded.getOrElse(collectionFailure("reduction lost its original yield"))
+    DeferredResultType.requireFinal(Vector(yielded), "reduction transfer yield")
+    reductionProofWork = 0
+    val yieldedType = DigitalCollectionContract.descriptor(yielded)
+    if !DigitalEnumContract.sameWidthFamily(initialType, yieldedType) then
+      collectionFailure(
+        "reduction callback changes kind, record schema, enum ABI or inner dimensions"
+      )
+    val yieldedWidths = DigitalReductionContract.widths(yieldedType)
+    val graph = new DigitalReductionContract.IntegerGraph[Dimension]:
+      override def charge(work: Int): Unit = chargeReduction(work)
+      def same(a: Dimension, b: Dimension): Boolean = (a, b) match
+        case (x: Int, y: Int) => x == y
+        case (x: Expr[?], y: Expr[?]) => x eq y
+        case _ => false
+      def operation(value: Dimension): Option[(String, Vector[Dimension])] = value match
+        case expression: KernelExpr[?] if expression.literal.isEmpty =>
+          expression.operation.filter(IterationDomain.staticArithmetic(_).nonEmpty).map(operation =>
+            operation -> expression.operands.map(_.asInstanceOf[Expr[Integer]])
+          )
+        case _ => None
+      def literal(value: Long): Dimension = StaticIntegerExpression.literal64(BigInt(value))
+      def bounds(value: Dimension): (Long, Long) =
+        val result =
+          new StructuralBoundAnalysis(module.handle, signed64Literals = true)(value).bounds
+        result.lower -> result.upper
+      def add(a: Dimension, b: Dimension): Dimension = StaticIntegerExpression.add64(a, b)
+      def subtract(a: Dimension, b: Dimension): Dimension =
+        StaticIntegerExpression.subtract64(a, b)
+      def multiply(a: Dimension, b: Dimension): Dimension =
+        StaticIntegerExpression.multiply64(a, b)
+      def maximum(a: Dimension, b: Dimension): Dimension = StaticIntegerExpression.maximum(a, b)
+      def ceilLog2(value: Dimension): Dimension = StaticIntegerExpression.ceilLog2(value)
+      def chooseZero(test: Dimension, zero: Dimension, nonzero: Dimension): Dimension =
+        StaticIntegerExpression.chooseZero(test, zero, nonzero)
+    val allFormals = (left ++ right).map(_.asInstanceOf[Dimension])
+    val profiles = yieldedWidths.indices.map(index =>
+      DigitalReductionContract.infer(
+        yieldedWidths(index),
+        left(index).asInstanceOf[Dimension],
+        right(index).asInstanceOf[Dimension],
+        allFormals,
+        graph
+      )
+    ).toVector
+    // Body inventory includes ordinary nested collections and all unused retained operations.
+    def descendant(candidate: DigitalValueRegionRecord): Boolean =
+      var current = Option(candidate)
+      var found = false
+      while current.nonEmpty && !found do
+        found = current.get eq region
+        current = current.get.parent
+      found
+    val actualBody = expressionValues.iterator.filter((ref, _) =>
+      expressionRegions.get(ref).exists(descendant)
+    ).toVector
+    if BigInt(actualBody.size + widths.size * 2) * BigInt(contexts.size) >
+        DigitalReductionContract.MaximumWork
+    then
+      collectionFailure("reduction body/context work exceeds the 65536 analysis-work budget")
+    // Endpoints are ordinary static expressions. The universal domain, never an endpoint sample,
+    // is used for every intermediate body width and operation obligation below.
+    val balanced = kind == "reduce_balanced"
+    def at(index: Int, size: Long): Dimension = DigitalReductionContract.formula(
+      profiles(index),
+      widths(index),
+      graph.literal(size),
+      balanced,
+      graph
+    )
+    withReductionProofExpressions:
+      contexts.foreach: (leftSize, rightSize) =>
+        val exact = mutable.HashMap.empty[KernelExpr[?], Dimension]
+        val domains = mutable.HashMap.empty[KernelExpr[?], IterationDomain.Bounds]
+        def bind(
+            formals: Vector[KernelExpr[?]],
+            size: DigitalReductionContract.SizeRange
+        ): Unit =
+          profiles.indices.foreach: index =>
+            profiles(index) match
+              case DigitalReductionContract.Transfer.Invariant =>
+                exact.update(formals(index), widths(index))
+              case DigitalReductionContract.Transfer.Fixed(value) =>
+                exact.update(formals(index), if size.upper == 1 then widths(index) else value)
+              case _ if size.lower == size.upper =>
+                exact.update(formals(index), at(index, size.lower))
+              case _ =>
+                val lower = graph.bounds(at(index, size.lower))._1
+                val upper = graph.bounds(at(index, size.upper))._2
+                domains.update(formals(index), IterationDomain.Bounds(lower, upper))
+        bind(left, leftSize)
+        bind(right, rightSize)
+        withReductionContext(exact.toMap, domains.toMap):
+          if !DigitalEnumContract.sameWidthFamily(initialType, yieldedType) then
+            collectionFailure("reduction invariant inner shape changes in a reachable context")
+          actualBody.foreach: (reference, expression) =>
+            validateReductionStructure(reference, expression, module.handle)
+            val descriptor =
+              expression.resultDescriptor.getOrElse(
+                collectionFailure("reduction body type is absent")
+              )
+            if descriptor.kind == "Integer" then
+              // Raw static captures need only the i64 stage contract here. Each width,
+              // shape and bounded consumer is checked independently in this same context.
+              val _ = new StructuralBoundAnalysis(
+                module.handle,
+                signed64Literals = true,
+                allowUnboundedParameters = true
+              )(expression.asInstanceOf[Expr[Integer]])
+            else
+              validateShapeType(
+                CandidateRuntime.dataTypeFromDescriptor(descriptor),
+                module.handle,
+                cardinality = true,
+                storageContext = true
+              )
+              DigitalReductionContract.validateBodyValue(expression)
+    var index = 0
+    val resultType = DigitalReductionContract.mapWidths(initialType): _ =>
+      val value =
+        DigitalReductionContract.formula(profiles(index), widths(index), count, balanced, graph)
+      index += 1
+      value
+    validateShapeType(
+      CandidateRuntime.dataTypeFromDescriptor(resultType),
+      module.handle,
+      cardinality = true,
+      storageContext = true
+    )
+    resultType
 
   /** Reuse the ordinary shape/collection contracts under each admitted width context. */
   private def validateReductionStructure(
@@ -3938,7 +5778,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       if !nested.arguments.take(expected.size).zip(expected).forall:
           case ((argument, _), (dataType, _)) =>
             DigitalEnumContract.sameType(
-              argument.resultType.get,
+              dataArgument(argument).resultDescriptor.get,
               CandidateRuntime.typeDescriptor(dataType)
             )
       then
@@ -3951,7 +5791,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         nested.seed,
         nested.yielded.get
       )
-      if !DigitalEnumContract.sameType(result, expression.resultType.get) then
+      if !DigitalEnumContract.sameType(result, expression.resultDescriptor.get) then
         collectionFailure("nested collection result type changes in a reachable reduction context")
 
     structuralIfs.get(reference).foreach: conditional =>
@@ -3960,7 +5800,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           arm.yielded.getOrElse(collectionFailure("value conditional lost its reduction yield"))
         if !DigitalEnumContract.sameType(
             DigitalCollectionContract.descriptor(yielded),
-            expression.resultType.get
+            expression.resultDescriptor.get
           )
         then
           collectionFailure("structural alternative ABI changes in a reachable reduction context")
@@ -3981,14 +5821,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           KernelDigitalRegionArgument(
             pathOf(argument).get,
             renderCollectionType(
-              CandidateRuntime.expressionDataType(argument).get,
+              CandidateRuntime.expressionDataType(dataArgument(argument)).get,
               owner,
               Some(region)
             ),
             role
           ),
         pathOf(region.yielded.get).get,
-        renderType(CandidateRuntime.expressionDataType(result).get, owner)
+        renderCollectionType(CandidateRuntime.expressionDataType(result).get, owner, region.parent)
       )
     .toVector
 
@@ -3996,6 +5836,48 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     moduleStack.lastOption.flatMap(module =>
       generationStack.reverseIterator.find(_.owner == module.handle)
     )
+
+  // The new lexical legacy profile shares the actual Generate owner, never Area storage rights.
+  private def guardedLegacyGeneration: Boolean =
+    activeGeneratedRegion.exists(generated =>
+      !generated.areaFamily && generated.digitalRegion.exists(region =>
+        region.structuralGenerate && region.parent.nonEmpty
+      )
+    )
+
+  private def requireGuardedLegacyScope(): Unit =
+    if capturingStructuralValue || activeGeneratedRegion.nonEmpty || activeLoop.nonEmpty ||
+      activeEventProcess.nonEmpty || analogStack.nonEmpty || analogSemanticContext.nonEmpty ||
+      AnalogProceduralConstruction.generatedProcedureActive
+    then structuralFailure("guarded hdlRange requires structural statement ancestry")
+    val owner = currentModule.handle
+    val chain = mutable.ArrayBuffer.empty[DigitalValueRegionRecord]
+    var current = activeValueRegion
+    while current.nonEmpty do
+      // Charge identity comparison, both canonical lookups, and retained ancestry before work.
+      closureCharge(5L + chain.size.toLong)
+      val region = current.get
+      if chain.size >= 128 || chain.exists(_ eq region) || region.reference.module != owner ||
+        !structuralArms.get(region.reference).exists(_ eq region)
+      then structuralFailure("guarded hdlRange lost its exact structural ancestry")
+      val header = region.structuralArm.getOrElse(
+        structuralFailure("guarded hdlRange requires an actual structural arm")
+      )
+      val conditional = structuralIfs.getOrElse(
+        header.conditional,
+        structuralFailure("guarded hdlRange lost its actual structural conditional")
+      )
+      val actual = if header.whenTrue then conditional.trueArm else conditional.falseArm
+      if (actual ne region) || conditional.parent != region.parent || conditional.result.nonEmpty then
+        structuralFailure("guarded hdlRange requires actual structural statement arms")
+      chain += region
+      current = region.parent
+    closureCharge(2L * collectionStack.size.toLong)
+    val active = collectionStack.filter(_.reference.module == owner)
+    closureCharge(2L * chain.size.toLong + active.size.toLong)
+    if chain.isEmpty || chain.size != active.size ||
+      !chain.reverseIterator.zip(active.iterator).forall((left, right) => left eq right)
+    then structuralFailure("guarded hdlRange differs from the active lexical stack")
 
   private def generatedScopeSnapshot(region: Option[GeneratedRegionRecord])
       : Option[KernelGeneratedScope] =
@@ -4035,8 +5917,953 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       fail("NODAL-DOMAIN-020", "ClockDomain is outside this construction transaction")
     )
 
+  private def activeArea: Option[AreaRecord] =
+    moduleStack.lastOption.flatMap(module => areaStack.lastOption.filter(_.owner == module.handle))
+
+  def allocateArea[A <: Area](source: SourceSpan)(body: () => A): A =
+    if activeGeneratedRegion.exists(_.areaFamily) then
+      requireAreaFamilyScope("Area declaration", requireBody = true)
+      requireLoopEffect("Area declaration")
+    else requireNoGeneratedEffect("Area declaration")
+    if analogStack.nonEmpty || analogSemanticContext.nonEmpty then
+      fail("NODAL-AREA-058-CONTEXT", "Area requires ordinary Module construction")
+    if areaStack.size >= 128 || areas.size >= 65536 then
+      fail("NODAL-AREA-058-LIMIT", "Area nesting or count exceeds its finite construction budget")
+    val module = currentModule
+    val record =
+      new AreaRecord(module.handle, source, activeArea, currentDomain, activeGeneratedRegion)
+    areas += record
+    areaStack += record
+    try
+      val result = body()
+      if !record.value.exists(_ eq result) || currentModule.handle != record.owner then
+        fail("NODAL-AREA-058-LIFECYCLE", "Area allocation did not close its exact owned object")
+      result
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, source.path)
+        scala.util.Failure[Nothing](failure).get
+    finally
+      val removed = areaStack.remove(areaStack.size - 1)
+      if removed ne record then
+        fail("NODAL-AREA-058-LIFECYCLE", "Area lexical construction stack is corrupt")
+
+  def beginArea(value: Area): Unit =
+    val record = activeArea.filter(_.value.isEmpty).getOrElse(
+      fail(
+        "NODAL-AREA-058-MISSING",
+        "Area allocation requires the matching Nodal compiler capture plugin"
+      )
+    )
+    val schema = Option(value.getClass.getDeclaredAnnotation(classOf[AreaCaptureSchema]))
+    if !schema.exists(value => Set(1, 2, 3)(value.version())) || areaRecords.containsKey(value) then
+      fail("NODAL-AREA-058-MISSING", "Area class lacks the exact compiler-owned capture version")
+    record.value = Some(value)
+    areaRecords.put(value, record)
+
+  private def areaRecord(value: Area): AreaRecord =
+    val record = Option(areaRecords.get(value)).getOrElse(
+      fail("NODAL-AREA-058-OWNER", "Area belongs to another construction transaction")
+    )
+    if currentModule.handle != record.owner then
+      fail("NODAL-AREA-058-OWNER", "Area belongs to another Module")
+    record
+
+  private def areaName(name: String): String =
+    if !name.matches("[A-Za-z_][A-Za-z0-9_]*") then
+      fail("NODAL-AREA-058-NAME", "Area/member names require an unambiguous Scala identifier")
+    name
+
+  def bindArea(name: String, priority: Int, value: Area): Unit =
+    val record = areaRecord(value)
+    val selected = areaName(name)
+    if priority < 0 || priority > 2 then
+      fail("NODAL-AREA-058-NAME", "Area binder has an invalid lexical priority")
+    if record.name.isEmpty || priority > record.namePriority then
+      record.name.foreach(previous => record.aliases += previous)
+      record.name = Some(selected)
+      record.namePriority = priority
+    else if !record.name.contains(selected) && !record.aliases.contains(selected) then
+      record.aliases += selected
+
+  def areaMember(owner: Area, name: String, value: Any, access: String): Unit =
+    val record = areaRecord(owner)
+    if !activeArea.contains(record) then
+      fail("NODAL-AREA-058-LIFECYCLE", "Area members must be captured during their construction")
+    val selected = areaName(name)
+    if record.members.size >= 65536 then
+      fail("NODAL-AREA-058-LIMIT", "Area member count exceeds its finite construction budget")
+    if record.members.contains(selected) then
+      fail("NODAL-AREA-058-MEMBER", "Area member identity was assigned twice")
+    if !Set(
+        "legacy",
+        "host",
+        "hidden",
+        "area",
+        "family",
+        "read_only",
+        "read_write",
+        "symbol"
+      )(access) ||
+      (access == "read_write" && !value.isInstanceOf[Signal[?]] && !value.isInstanceOf[Register[
+        ?
+      ]]) ||
+      (access == "read_only" && !value.isInstanceOf[Expr[?]]) ||
+      (access == "family" && !value.isInstanceOf[GeneratedAreas[?]])
+    then fail("NODAL-AREA-058-MEMBER", "member capture has incompatible static access metadata")
+    record.members.update(selected, AreaMemberRecord(value, access))
+
+  def areaMemberValue(owner: Area, name: String): Any =
+    areaRecord(owner).members.getOrElse(
+      areaName(name),
+      fail("NODAL-AREA-058-MEMBER", "Area member has no compiler-captured eager value")
+    ).value
+
+  private def requireGeneratedFamily(value: GeneratedAreas[?]): GeneratedRegionRecord =
+    def original(record: GeneratedRegionRecord): Unit =
+      if record.owner != currentModule.handle ||
+        !currentModule.generatedRegions.exists(_ eq record) ||
+        !record.familyHandle.exists(_.generatedRegion eq record) || record.yieldedArea.isEmpty
+      then fail("NODAL-AREA-058-OWNER", "generated family has no exact owned template")
+    val record = value.generatedRegion
+    original(record)
+    val root = value.selectionPrefix.headOption.map(_.family).getOrElse(record)
+    val lexicalParent = root.digitalRegion.getOrElse(
+      fail("NODAL-AREA-058-OWNER", "generated family has no actual body")
+    ).parent
+    var scope = activeValueRegion
+    var depth = 0
+    while scope.nonEmpty && scope != lexicalParent do
+      depth += 1
+      if depth > 128 then fail("NODAL-AREA-058-LIMIT", "generated family scope exceeds depth")
+      scope = scope.get.parent
+    if scope != lexicalParent then
+      fail("NODAL-AREA-058-OWNER", "generated family escaped its lexical existence scope")
+    if value.selectionPrefix.isEmpty then
+      if !record.familyHandle.exists(_ eq value) ||
+        record.parentOrdinal != activeGeneratedRegion.map(_.ordinal)
+      then
+        fail(
+          "NODAL-AREA-058-OWNER",
+          "generated Area family escaped its exact Module/Generate scope"
+        )
+    else
+      if value.selectionPrefix.size >= 128 then
+        fail("NODAL-AREA-058-LIMIT", "generated family selection exceeds depth")
+      var expected = value.selectionPrefix.head.family
+      if expected.parentOrdinal != activeGeneratedRegion.map(_.ordinal) then
+        fail("NODAL-AREA-058-OWNER", "selected generated family escaped its original handle scope")
+      value.selectionPrefix.foreach: selection =>
+        if selection.family ne expected then
+          fail("NODAL-AREA-058-OWNER", "generated family selection chain is discontinuous")
+        original(selection.family)
+        val selected = generatedAreaPath(selection.family, selection.members.dropRight(1))
+        val member = selected.members.getOrElse(
+          selection.members.lastOption.getOrElse(
+            fail("NODAL-AREA-058-MEMBER", "family selection has no member")
+          ),
+          fail("NODAL-AREA-058-MEMBER", "family selection has no captured member")
+        )
+        expected = generatedFamilyExportTarget(selection.family, member)
+      if expected ne record then
+        fail("NODAL-AREA-058-OWNER", "selected family disagrees with its actual export chain")
+      val last = value.selectionPrefix.last
+      validateGeneratedOrdinal(last.family, last.ordinal, value.selectionPrefix.dropRight(1))
+    record
+
+  def generatedAreas[A <: Area](
+      lower: Int | Expr[Integer],
+      upper: Int | Expr[Integer],
+      step: Int | Expr[Integer],
+      maximum: Option[Int]
+  )(body: Expr[Integer] => A): GeneratedAreas[A] =
+    val (value, record) =
+      captureGeneratedRegion(lower, upper, step, maximum, areaFamily = true)(body)
+    val captured = areaRecord(value)
+    if !captured.generatedScope.contains(record) then
+      fail(
+        "NODAL-AREA-058-OWNER",
+        "generated yield must be an Area constructed in its actual family"
+      )
+    record.yieldedArea = Some(captured)
+    val family = new GeneratedAreas[A](record)
+    record.familyHandle = Some(family)
+    val _ = generatedAreaExports(record)
+    family
+
+  def bindGeneratedAreas(name: String, priority: Int, value: GeneratedAreas[?]): Unit =
+    val record = requireGeneratedFamily(value)
+    if value.selectionPrefix.isEmpty then
+      bindArea(name, priority, record.yieldedArea.get.value.get)
+
+  private def generatedOrdinalValid(
+      record: GeneratedRegionRecord,
+      ordinal: Int | Expr[Integer],
+      scope: Option[DigitalValueRegionRecord],
+      prefix: Vector[GeneratedFamilySelectionRecord]
+  ): Boolean =
+    val analysis = new StructuralBoundAnalysis(record.owner, "NODAL-AREA-058-INDEX", "Area ordinal")
+    def check(record: GeneratedRegionRecord, ordinal: Int | Expr[Integer]): Boolean =
+      val bounds = analysis(ordinal)
+      val valid =
+        IterationDomain.verifyOrdinal(analysis.selectedGeneratedDomain(record), bounds.bounds).fold(
+          _ =>
+            val index = analysis(ordinal)
+            val zero = analysis(0)
+            val coordinate = analysis.generatedCoordinate(record, index)
+            val upper = analysis(record.upperExclusive.asInstanceOf[Dimension])
+            val proof = new StructuralPredicateOrdering.Query[StaticPredicate, StructuralBound](
+              predicate =>
+                val reference = Option(expressionIds.get(predicate)).getOrElse(
+                  fail("NODAL-AREA-058-INDEX", "ordering predicate has no actual owner")
+                )
+                if reference.module != record.owner || !staticPredicates.get(
+                    reference
+                  ).contains(predicate)
+                then
+                  fail("NODAL-AREA-058-INDEX", "ordering predicate has a foreign owner")
+                if Set("eq", "ne", "lt", "le", "gt", "ge")(predicate.operation) then
+                  val operands =
+                    predicate.operands.map(value => analysis(value.asInstanceOf[Dimension]))
+                  StructuralPredicateOrdering.Compare(predicate.operation, operands(0), operands(1))
+                else
+                  StructuralPredicateOrdering.Logic(
+                    predicate.operation,
+                    predicate.operands.map(_.asInstanceOf[StaticPredicate])
+                  )
+              ,
+              _.bounds,
+              (left, right) => left.identity == right.identity
+            )
+            def prove(left: StructuralBound, right: StructuralBound, inclusive: Boolean): Boolean =
+              if proof.less(left, right, inclusive) then true
+              else
+                var current = scope
+                val visited = mutable.HashSet.empty[DigitalValueRegionRecord]
+                var proved = false
+                while current.nonEmpty && !proved do
+                  val region = current.get
+                  if visited.size >= 128 || !visited.add(region) then
+                    fail("NODAL-AREA-058-INDEX", "ordering lexical ancestry is cyclic or excessive")
+                  region.structuralArm.foreach: arm =>
+                    val conditional = structuralIfs(arm.conditional)
+                    proved =
+                      proof.under(conditional.predicate, !arm.whenTrue, left, right, inclusive)
+                  current = region.parent
+                proved
+            prove(zero, index, true) && prove(coordinate, upper, false)
+          ,
+          _ => true
+        )
+      bounds.parameters.foreach(markStructuralParameter)
+      valid
+
+    val validPrefix = prefix.forall: selection =>
+      val valid = check(selection.family, selection.ordinal)
+      if valid then analysis.selectGeneratedInduction(selection.family, analysis(selection.ordinal))
+      valid
+    validPrefix && check(record, ordinal)
+
+  private def validateGeneratedOrdinal(
+      record: GeneratedRegionRecord,
+      ordinal: Int | Expr[Integer],
+      prefix: Vector[GeneratedFamilySelectionRecord]
+  ): Unit =
+    if !generatedOrdinalValid(record, ordinal, activeValueRegion, prefix) then
+      fail(
+        "NODAL-AREA-058-INDEX",
+        "generated ordinal existence is not proved in its actual lexical scope"
+      )
+
+  def generatedAreaReference[A <: Area](family: GeneratedAreas[A], ordinal: Int | Expr[Integer])
+      : GeneratedAreaRef[A] =
+    val record = requireGeneratedFamily(family)
+    validateGeneratedOrdinal(record, ordinal, family.selectionPrefix)
+    new GeneratedAreaRef[A](family, ordinal, Vector.empty)
+
+  private def generatedSelectedArea(value: GeneratedAreaRef[?])
+      : (GeneratedRegionRecord, AreaRecord) =
+    val family = requireGeneratedFamily(value.family)
+    validateGeneratedOrdinal(family, value.ordinal, value.family.selectionPrefix)
+    family -> generatedAreaPath(family, value.members)
+
+  private def generatedAreaPath(
+      family: GeneratedRegionRecord,
+      members: Vector[String]
+  ): AreaRecord =
+    if members.size >= 128 then
+      fail("NODAL-AREA-058-LIMIT", "generated member path exceeds depth")
+    members.foldLeft(family.yieldedArea.get): (owner, name) =>
+      owner.members.get(areaName(name)).filter(_.access == "area").map(_.value) match
+        case Some(area: Area) =>
+          val nested = areaRecord(area)
+          if !nested.generatedScope.contains(family) then
+            fail("NODAL-AREA-058-OWNER", "nested Area belongs to another generated family")
+          nested
+        case _ =>
+          fail("NODAL-AREA-058-MEMBER", "generated reference does not name a captured nested Area")
+
+  private def generatedFamilyExportTarget(family: GeneratedRegionRecord, member: AreaMemberRecord)
+      : GeneratedRegionRecord =
+    val target = member.value match
+      case value: GeneratedAreas[?]
+          if member.access == "family" && value.selectionPrefix.isEmpty &&
+            value.generatedRegion.familyHandle.exists(_ eq value) => value.generatedRegion
+      case _ =>
+        fail("NODAL-AREA-058-EXPORT", "family export requires an exact original family handle")
+    if target.owner != family.owner || !target.parentOrdinal.contains(family.ordinal) ||
+      !target.digitalRegion.exists(_.parent == family.digitalRegion) ||
+      !closureElements(
+        records(family.owner).generatedRegions
+      ).exists(_ eq target) || target.yieldedArea.isEmpty
+    then fail("NODAL-AREA-058-OWNER", "family export is not an actual directly nested Generate")
+    target
+
+  def generatedAreaFamily[A <: Area](value: GeneratedAreaRef[?], name: String): GeneratedAreas[A] =
+    val (family, selected) = generatedSelectedArea(value)
+    val member = selected.members.getOrElse(
+      areaName(name),
+      fail("NODAL-AREA-058-MEMBER", "generated family member has no exact eager capture")
+    )
+    val target = generatedFamilyExportTarget(family, member)
+    val prefix = value.family.selectionPrefix :+
+      GeneratedFamilySelectionRecord(family, value.ordinal, value.members :+ name)
+    val result = new GeneratedAreas[A](target, prefix)
+    val _ = requireGeneratedFamily(result)
+    result
+
+  def generatedAreaNested[A <: Area](
+      value: GeneratedAreaRef[?],
+      name: String
+  ): GeneratedAreaRef[A] =
+    val nested =
+      new GeneratedAreaRef[A](value.family, value.ordinal, value.members :+ areaName(name))
+    val _ = generatedSelectedArea(nested)
+    nested
+
+  private def generatedExportTarget(family: GeneratedRegionRecord, member: AreaMemberRecord)
+      : DeclarationRef =
+    val target = member.value match
+      case value: Expr[?] => Option(declarationIds.get(value)).getOrElse(
+          fail(
+            "NODAL-AREA-058-EXPORT",
+            "first generated export profile requires an exact storage declaration"
+          )
+        )
+      case _ => fail("NODAL-AREA-058-EXPORT", "generated export is not a typed storage value")
+    if !closureElements(family.declarations).contains(target) ||
+      !Set(
+        KernelSignalKind.Wire,
+        KernelSignalKind.Register
+      )(records(target.module).declarations(target.index).kind) ||
+      !Set("read_only", "read_write")(member.access)
+    then
+      fail(
+        "NODAL-AREA-058-EXPORT",
+        "generated export lacks actual family storage or typed access metadata"
+      )
+    target
+
+  private def generatedInstanceExportTarget(
+      family: GeneratedRegionRecord,
+      member: AreaMemberRecord
+  ): (Instance[?], InstanceRecord) =
+    val value = member.value match
+      case value: Instance[?] if member.access == "symbol" => value
+      case _ => fail("NODAL-AREA-058-EXPORT", "instance export requires an exact captured Instance")
+    val target = instanceRecord(value)
+    if !closureElements(
+        records(family.owner).instances
+      ).exists(_ eq target) || !target.generatedScope.contains(family)
+    then fail("NODAL-AREA-058-OWNER", "instance export belongs to another exact generated family")
+    value -> target
+
+  private def generatedInterfaceExportTarget(
+      family: GeneratedRegionRecord,
+      member: AreaMemberRecord
+  ): (InterfaceEndpoint, DeclarationRef) =
+    val value = member.value match
+      case value: InterfaceEndpoint if member.access == "symbol" && !value.boundary => value
+      case value: InterfaceValueRef[?] if member.access == "symbol" =>
+        val endpoint = checkedInterfaceValueReference(value).endpoint
+        if endpoint.boundary then
+          fail("NODAL-AREA-058-EXPORT", "ordinary member export requires its original endpoint")
+        endpoint
+      case _ =>
+        fail("NODAL-AREA-058-EXPORT", "Interface export requires an exact original endpoint")
+    val reference = Option(declarationIds.get(value)).getOrElse(
+      fail("NODAL-AREA-058-EXPORT", "Interface export has no actual declaration")
+    )
+    val declaration = records(reference.module).declarations(reference.index)
+    if reference.module != family.owner || !closureElements(
+        family.declarations
+      ).contains(reference) ||
+      !Set(KernelSignalKind.InterfacePort, KernelSignalKind.InterfaceArray)(declaration.kind) ||
+      (value match
+        case endpoint: InterfacePort[?, ?] => endpoint.origin.nonEmpty
+        case array: InterfaceArray[?, ?] => array.origin.nonEmpty)
+    then fail("NODAL-AREA-058-OWNER", "Interface export belongs to another exact generated family")
+    value -> reference
+
+  def generatedAreaInterface(value: GeneratedAreaRef[?], name: String): InterfaceEndpoint =
+    requireAreaFamilyScope("generated Interface selection", requireBody = false)
+    val (family, selected) = generatedSelectedArea(value)
+    val member = selected.members.getOrElse(
+      areaName(name),
+      fail("NODAL-AREA-058-MEMBER", "Interface member has no exact eager capture")
+    )
+    val (endpoint, reference) = generatedInterfaceExportTarget(family, member)
+    if ConstructionInterfaceLayout.leaves(
+        endpoint.definition,
+        endpoint.role,
+        charge = closureCharge
+      ).exists(leaf =>
+        leaf.analogType.nonEmpty || leaf.mode.nonEmpty || leaf.dataType.exists(isBoundaryCapability)
+      )
+    then fail("NODAL-AREA-058-CAPABILITY", "selected Interface requires ordinary digital members")
+    val root = value.family.selectionPrefix.headOption.map(_.family).getOrElse(family)
+    val _ = bindGeneratedFamily(root, activeValueRegion)
+    (value.family.selectionPrefix.map(_.ordinal) :+ value.ordinal).foreach:
+      case ordinal: Expr[Integer] =>
+        val _ = bindCollectionValue(ordinal, activeValueRegion, currentModule.handle)
+      case _: Int => ()
+    projectInterfaceEndpoint(
+      endpoint,
+      records(reference.module).declarations(reference.index).kind,
+      InterfaceBoundaryRecord(
+        None,
+        reference,
+        Some(GeneratedSymbolSelectionRecord(value, name)),
+        activeValueRegion
+      )
+    )
+
+  def generatedAreaValue[A <: Data](
+      value: GeneratedAreaRef[?],
+      name: String
+  ): InterfaceValueRef[A] =
+    val (_, selected) = generatedSelectedArea(value)
+    val original = selected.members.getOrElse(
+      areaName(name),
+      fail("NODAL-AREA-058-MEMBER", "ordinary member reference has no exact eager capture")
+    ).value match
+      case reference: InterfaceValueRef[?] => reference
+      case _ => fail("NODAL-AREA-058-EXPORT", "ordinary member export lacks its typed reference")
+    val endpoint = generatedAreaInterface(value, name)
+    rebindInterfaceValue(original, endpoint).asInstanceOf[InterfaceValueRef[A]]
+
+  def generatedAreaInstance[M <: Module](value: GeneratedAreaRef[?], name: String)
+      : GeneratedInstanceRef[M] =
+    val (family, selected) = generatedSelectedArea(value)
+    val member = selected.members.getOrElse(
+      areaName(name),
+      fail("NODAL-AREA-058-MEMBER", "instance member has no exact eager capture")
+    )
+    val (instance, _) = generatedInstanceExportTarget(family, member)
+    new GeneratedInstanceRef[M](
+      instance.asInstanceOf[Instance[M]],
+      GeneratedSymbolSelectionRecord(value, name)
+    )
+
+  private def validateGeneratedInstanceSelection(view: GeneratedInstanceRef[?]): Unit =
+    val selection = view.selection
+    val (family, selected) = generatedSelectedArea(selection.reference)
+    val member = selected.members.getOrElse(
+      areaName(selection.member),
+      fail("NODAL-AREA-058-MEMBER", "selected instance export is absent")
+    )
+    val (instance, _) = generatedInstanceExportTarget(family, member)
+    if instance ne view.instance then
+      fail("NODAL-AREA-058-OWNER", "selected instance does not match its exact original export")
+
+  private def generatedAreaExports(family: GeneratedRegionRecord)
+      : Vector[KernelGeneratedAreaExport] =
+    val exports = Vector.newBuilder[KernelGeneratedAreaExport]
+    var count = 0
+    def exportPath(key: Vector[String]): String =
+      if boundaryWorkActive then
+        key.foreach(value => closureCharge(1L + value.length.toLong))
+      key.mkString(".")
+    def visit(record: AreaRecord, prefix: Vector[String]): Unit =
+      closureCharge(1L)
+      if prefix.size >= 128 then fail("NODAL-AREA-058-LIMIT", "generated export exceeds path depth")
+      record.members.foreach: (name, member) =>
+        closureCharge(1L + prefix.size.toLong + name.length.toLong)
+        count += 1
+        if count > 65536 then
+          fail("NODAL-AREA-058-LIMIT", "generated export inventory exceeds budget")
+        val key = prefix :+ name
+        member.access match
+          case "area" =>
+            val area = member.value match
+              case value: Area => value
+              case _ => fail("NODAL-AREA-058-EXPORT", "nested export lacks an actual Area")
+            val nested = Option(areaRecords.get(area)).getOrElse(
+              fail("NODAL-AREA-058-OWNER", "generated export has no actual nested Area record")
+            )
+            if nested.owner != family.owner || !nested.generatedScope.contains(family) then
+              fail("NODAL-AREA-058-OWNER", "generated nested export belongs to another family")
+            visit(nested, key)
+          case "family" =>
+            val target = generatedFamilyExportTarget(family, member)
+            closureCharge(1L)
+            exports += KernelGeneratedAreaExport(
+              exportPath(key),
+              generatedRegionPath(target),
+              "read_only",
+              "family"
+            )
+          case "symbol" if member.value.isInstanceOf[Instance[?]] =>
+            val (_, target) = generatedInstanceExportTarget(family, member)
+            closureCharge(1L)
+            exports += KernelGeneratedAreaExport(
+              exportPath(key),
+              instancePath(family.owner, target.ordinal),
+              "read_only",
+              "instance"
+            )
+          case "symbol"
+              if member.value.isInstanceOf[InterfaceEndpoint] ||
+                member.value.isInstanceOf[InterfaceValueRef[?]] =>
+            val (_, target) = generatedInterfaceExportTarget(family, member)
+            closureCharge(1L)
+            exports += KernelGeneratedAreaExport(
+              exportPath(key),
+              declarationPath(target),
+              "read_only",
+              "interface"
+            )
+          case "read_only" | "read_write" =>
+            val target = generatedExportTarget(family, member)
+            closureCharge(1L)
+            exports += KernelGeneratedAreaExport(
+              exportPath(key),
+              declarationPath(target),
+              member.access
+            )
+          case "host"
+              if member.value.isInstanceOf[GeneratedAreas[?]] &&
+                record.value.flatMap(value =>
+                  Option(value.getClass.getDeclaredAnnotation(classOf[AreaCaptureSchema]))
+                )
+                  .forall(_.version() != 3) =>
+            fail(
+              "NODAL-AREA-058-MISSING",
+              "generated family exports require current compiler-owned capture metadata"
+            )
+          case "host" | "hidden" => ()
+          case _ => fail(
+              "NODAL-AREA-058-EXPORT",
+              "generated export requires current supported member metadata"
+            )
+    family.yieldedArea.foreach(visit(_, Vector.empty))
+    exports.result()
+
+  def generatedAreaMember(value: GeneratedAreaRef[?], name: String, kind: String): Any =
+    val (family, selected) = generatedSelectedArea(value)
+    val member = selected.members.getOrElse(
+      areaName(name),
+      fail("NODAL-AREA-058-MEMBER", "generated member has no exact eager capture")
+    )
+    val target = generatedExportTarget(family, member)
+    val declaration = records(target.module).declarations(target.index)
+    val access = if kind == "read_only" then "read_only" else "read_write"
+    if !Set("read_only", "signal", "register")(kind) ||
+      (access == "read_write" && member.access != "read_write") ||
+      (kind == "signal" && !member.value.isInstanceOf[Signal[?]]) ||
+      (kind == "register" && !member.value.isInstanceOf[Register[?]])
+    then
+      fail(
+        "NODAL-AREA-058-CAPABILITY",
+        "generated projection cannot expand the exact exported capability"
+      )
+    val dataType = declaration.dataType.getOrElse(
+      fail("NODAL-AREA-058-EXPORT", "generated storage has no exact type")
+    ).asInstanceOf[DataType[Data]]
+    val selectedType = new KernelInstanceDataType[Data](CandidateRuntime.typeDescriptor(dataType))
+    // Preserve an already complete Module-owned type in pure callbacks. A regional token, even
+    // one with singleton bounds, still requires the exact selected-boundary finalizer below.
+    if moduleOwnedGeneratedMemberType(selectedType.formal, target.module) then
+      selectedType.seal(selectedType.formal)
+    val metadata =
+      GeneratedAreaMemberRecord(
+        family,
+        value.ordinal,
+        value.members :+ name,
+        target,
+        access,
+        selectedType,
+        value.family.selectionPrefix
+      )
+    val expression = new KernelExpr[Data](
+      value.family.selectionPrefix.map(_.ordinal) ++ Vector(value.ordinal, metadata),
+      resultType = Some(selectedType.formal),
+      operation = Some(GeneratedAreaRuntime.MemberOperation),
+      typeIntent = Option.when(!selectedType.finalized)(new KernelResultTypeIntent(
+        Vector(metadata),
+        () => {
+          if !selectedType.finalized then
+            fail("NODAL-AREA-058-TYPE", "selected storage type has not been sealed")
+          selectedType.kernelDescriptor
+        }
+      ))
+    )
+    val _ = captureExpression(expression)
+    kind match
+      case "signal" =>
+        new Signal(selectedType, KernelSignalKind.Wire, projection = Some(expression))
+      case "register" => new Register(None, Some(selectedType), Some(expression))
+      case _ => expression
+
+  private def generatedMemberRecord(expression: KernelExpr[?]): Option[GeneratedAreaMemberRecord] =
+    publicationProbe:
+      if !constructionPayloadAvailable(expression) then None
+      else
+        expression.operands.lastOption.collect:
+          case value: GeneratedAreaMemberRecord
+              if expression.operation.contains(GeneratedAreaRuntime.MemberOperation) => value
+
+  /** Eager reuse is a property of the complete original descriptor and actual token owners, not of
+    * selected bounds or rendered names. No new type or dependency registry is introduced.
+    */
+  private def moduleOwnedGeneratedMemberType(descriptor: KernelTypeDescriptor, owner: Long)
+      : Boolean =
+    val visited = mutable.HashSet.empty[DeclarationRef | ExpressionRef]
+    var work = 0
+    def visit(value: Any, depth: Int): Boolean =
+      work += 1
+      if depth > 128 || work > 65536 then
+        fail("NODAL-AREA-058-TYPE", "selected storage type exceeds structural budget")
+      value match
+        case expression: Expr[?] =>
+          val reference = Option(declarationIds.get(expression))
+            .map(value => value: DeclarationRef | ExpressionRef)
+            .orElse(Option(expressionIds.get(expression))
+              .map(value => value: DeclarationRef | ExpressionRef))
+          reference.exists: actual =>
+            val actualOwner = actual match
+              case value: DeclarationRef => value.module
+              case value: ExpressionRef => value.module
+            actualOwner == owner && valueRegion(actual).isEmpty &&
+            CandidateRuntime.expressionDataType(expression)
+              .exists(CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Integer")) &&
+            (!visited.add(actual) || (expression match
+              case kernel: KernelExpr[?] => kernel.operands.forall(visit(_, depth + 1))
+              case _ => true))
+        case dataType: DataType[?] => visit(CandidateRuntime.typeDescriptor(dataType), depth + 1)
+        case field: StructField[?] => visit(field.dataType, depth + 1)
+        case value: KernelTypeDescriptor => value.arguments.forall(visit(_, depth + 1))
+        case values: Seq[?] => values.forall(visit(_, depth + 1))
+        case _ => true
+    visit(descriptor, 0)
+
+  private def requireGeneratedMemberTypeRecord(
+      expression: KernelExpr[?],
+      reference: ExpressionRef,
+      scope: Option[DigitalValueRegionRecord]
+  ): GeneratedAreaMemberRecord =
+    val member = generatedMemberRecord(expression).getOrElse(
+      fail("NODAL-AREA-058-TYPE", "selected storage type requires its original member record")
+    )
+    def registered(family: GeneratedRegionRecord): Unit =
+      if family.owner != reference.module ||
+        !records(
+          reference.module
+        ).generatedRegions.exists(_ eq family) || family.yieldedArea.isEmpty
+      then fail("NODAL-AREA-058-TYPE", "selected storage has a foreign family owner")
+    def exported(family: GeneratedRegionRecord, path: Vector[String]): AreaMemberRecord =
+      registered(family)
+      if path.isEmpty then fail("NODAL-AREA-058-TYPE", "selected storage export path is empty")
+      generatedAreaPath(family, path.dropRight(1)).members.getOrElse(
+        areaName(path.last),
+        fail("NODAL-AREA-058-TYPE", "selected storage lost its original captured export")
+      )
+    var expected = member.selectionPrefix.headOption.map(_.family).getOrElse(member.family)
+    member.selectionPrefix.foreach: selection =>
+      if selection.family ne expected then
+        fail("NODAL-AREA-058-TYPE", "selected storage family prefix is discontinuous")
+      expected =
+        generatedFamilyExportTarget(selection.family, exported(selection.family, selection.members))
+    val actual = exported(member.family, member.members)
+    val target = generatedExportTarget(member.family, actual)
+    if (expected ne member.family) || target != member.target ||
+      !(member.access == "read_only" || member.access == "read_write" && actual.access == "read_write") ||
+      !expression.typeIntent.fold(
+        member.dataType.finalized &&
+          moduleOwnedGeneratedMemberType(member.dataType.formal, target.module)
+      )(intent =>
+        intent.dependencies.size == 1 && intent.dependencies.head.asInstanceOf[AnyRef].eq(member)
+      ) || records(target.module).declarations(target.index).dataType.forall(value =>
+        CandidateRuntime.typeDescriptor(value) != member.dataType.formal
+      ) || !generatedOrdinalValid(member.family, member.ordinal, scope, member.selectionPrefix)
+    then
+      fail("NODAL-AREA-058-TYPE", "selected storage type lost its exact export or type obligation")
+    // Reuse the original family/capture owner. This does not manufacture a storage SSA capture.
+    val _ = generatedSelectionSnapshot(
+      member.family,
+      member.ordinal,
+      member.members,
+      member.access,
+      member.selectionPrefix,
+      scope
+    )
+    member
+
+  def bindGeneratedMemberAlias(value: AnyRef, expression: Expr[?]): Unit = expression match
+    case original: KernelExpr[?] if generatedMemberRecord(original).nonEmpty =>
+      val reference = Option(expressionIds.get(original)).getOrElse(
+        fail("NODAL-AREA-058-OWNER", "generated proxy has no canonical expression")
+      )
+      if reference.module != currentModule.handle || declarationIds.containsKey(
+          value
+        ) || expressionIds.containsKey(value)
+      then
+        fail("NODAL-AREA-058-OWNER", "generated proxy has a foreign or existing identity")
+      expressionIds.put(value, reference)
+      ()
+    case _ => fail(
+        "NODAL-AREA-058-CAPABILITY",
+        "typed proxy requires an actual generated member expression"
+      )
+
+  private def generatedSelectionSnapshot(
+      family: GeneratedRegionRecord,
+      ordinal: Int | Expr[Integer],
+      members: Vector[String],
+      access: String,
+      prefix: Vector[GeneratedFamilySelectionRecord],
+      scope: Option[DigitalValueRegionRecord]
+  ): KernelGeneratedMemberSnapshot =
+    def bound(input: Int | Expr[Integer]): String =
+      val actual = input match
+        case value: Int => value
+        case value: Expr[Integer] =>
+          bindCollectionValue(
+            value,
+            scope,
+            family.owner,
+            create = false
+          ).asInstanceOf[Expr[Integer]]
+      generatedBound(actual)
+    val root = prefix.headOption.map(_.family).getOrElse(family)
+    val familyInput = bindGeneratedFamily(root, scope, create = false) match
+      case _: GeneratedRegionRecord => None
+      case argument: GeneratedFamilyArgument => pathOf(argument)
+    KernelGeneratedMemberSnapshot(
+      generatedRegionPath(family),
+      bound(ordinal),
+      members.mkString("."),
+      access,
+      prefix.map(value =>
+        KernelGeneratedFamilySelection(
+          generatedRegionPath(value.family),
+          bound(value.ordinal),
+          value.members.mkString(".")
+        )
+      ),
+      familyInput
+    )
+
+  private def generatedSymbolSnapshot(
+      selection: GeneratedSymbolSelectionRecord,
+      scope: Option[DigitalValueRegionRecord]
+  ): KernelGeneratedMemberSnapshot =
+    val value = selection.reference
+    generatedSelectionSnapshot(
+      value.family.generatedRegion,
+      value.ordinal,
+      value.members :+ selection.member,
+      "read_only",
+      value.family.selectionPrefix,
+      scope
+    )
+
+  private def generatedMemberSnapshot(expression: KernelExpr[?])
+      : Option[KernelGeneratedMemberSnapshot] =
+    generatedMemberRecord(expression).map: record =>
+      val reference = Option(expressionIds.get(expression)).getOrElse(
+        fail("NODAL-AREA-058-OWNER", "generated member snapshot has no captured expression")
+      )
+      generatedSelectionSnapshot(
+        record.family,
+        record.ordinal,
+        record.members,
+        record.access,
+        record.selectionPrefix,
+        expressionRegions.get(reference)
+      )
+
+  private def areaComponents(record: AreaRecord): Vector[String] =
+    areaComponents(record, closureCharge)
+
+  private def areaComponents(record: AreaRecord, charge: Long => Unit): Vector[String] =
+    charge(1L + record.name.fold(33L + record.source.path.length.toLong)(_.length.toLong))
+    val local = record.name.getOrElse(
+      "area_" + java.lang.Integer.toUnsignedString(
+        (record.source.path + ":" + record.source.line + ":" + record.source.column).hashCode,
+        16
+      )
+    )
+    val parent = record.parent.map(parent => areaComponents(parent, charge)).getOrElse(Vector.empty)
+    val family = record.generatedScope.filterNot(value =>
+      record.parent.flatMap(_.generatedScope).contains(value)
+    )
+    charge(parent.size.toLong + 1L + family.size.toLong)
+    parent ++ family.toVector.map(value => s"generate_${value.ordinal}") :+ local
+
+  /** Metadata only: read original lexical captures afresh within each resolver's work scope.
+    * Alias labels never allocate another Area or a hardware name/source-map entry.
+    */
+  private def areaAliasNames(
+      modulePaths: () => Map[Long, String],
+      charge: Long => Unit
+  ): Vector[KernelNameSnapshot] =
+    if areas.isEmpty then Vector.empty
+    else
+      charge(1L)
+      val result = Vector.newBuilder[KernelNameSnapshot]
+      areas.foreach: record =>
+        charge(1L)
+        if record.generatedScope.isEmpty && record.aliases.nonEmpty then
+          charge(1L)
+          val canonical = record.name.getOrElse(
+            fail("NODAL-AREA-058-NAME", "Area aliases require their canonical lexical binder")
+          )
+          val retained = mutable.ArrayBuffer.empty[String]
+          record.aliases.foreach: alias =>
+            charge(2L + alias.length.toLong + canonical.length.toLong)
+            if alias != canonical then
+              charge(1L)
+              retained += alias
+          if retained.nonEmpty then
+            charge(retained.size.toLong)
+            val labels = retained.toVector
+            charge(labels.size.toLong)
+            val ordering = new Ordering[String]:
+              def compare(left: String, right: String): Int =
+                charge(1L + left.length.toLong + right.length.toLong)
+                left.compareTo(right)
+            val sorted = labels.sorted(using ordering)
+            charge(1L)
+            val unique = Vector.newBuilder[String]
+            var previous = Option.empty[String]
+            sorted.foreach: alias =>
+              charge(1L)
+              val duplicate = previous.exists(value =>
+                charge(1L + value.length.toLong + alias.length.toLong)
+                value == alias
+              )
+              if !duplicate then
+                charge(1L)
+                unique += alias
+                previous = Some(alias)
+            charge(1L)
+            val aliases = unique.result()
+            // The shared algorithm pays record traversal and vector copies. Pay component text
+            // at each ancestor too, so repeated nested-path construction is never free.
+            var ancestor = Option(record)
+            while ancestor.nonEmpty do
+              charge(1L)
+              var component = ancestor
+              while component.nonEmpty do
+                val current = component.get
+                charge(1L + current.name.fold(33L + current.source.path.length.toLong)(_.length.toLong))
+                component = current.parent
+              ancestor = ancestor.get.parent
+            val components = areaComponents(record, charge)
+            charge(1L)
+            val owner = modulePaths()(record.owner)
+            charge(2L + owner.length.toLong + components.size.toLong)
+            components.foreach(value => charge(1L + value.length.toLong))
+            val path = (Vector(owner) ++ components).mkString(".")
+            charge(1L)
+            result += KernelNameSnapshot(
+              path, canonical, "area", "scala-declaration", Some(record.source), aliases
+            )
+      charge(1L)
+      result.result()
+
+  private def prepareAreaNames(): Unit =
+    closureCharge(areas.size.toLong)
+    val paths = mutable.HashSet.empty[(Long, Vector[String])]
+    areas.foreach: record =>
+      closureCharge(record.declarations.size.toLong + record.instances.size.toLong +
+        record.members.size.toLong)
+      val components = areaComponents(record)
+      if boundaryWorkActive then
+        components.foreach(value => closureCharge(1L + value.length.toLong))
+      if !paths.add(record.owner -> components) then
+        fail("NODAL-AREA-058-NAME", "Area lexical names collide in the same Module")
+      val ownedDeclarations = record.declarations.toSet
+      val ownedInstances = record.instances.toSet
+      record.members.foreach: (name, member) =>
+        closureCharge(2L + name.length.toLong + math.max(
+          name.length.toLong + 2L,
+          6L
+        ) + components.size.toLong)
+        if boundaryWorkActive then
+          components.foreach(value =>
+            closureCharge(2L + value.length.toLong + math.max(value.length.toLong + 2L, 6L))
+          )
+        val value = member.value
+        val ownedDeclaration = Option(declarationIds.get(value)).exists(ownedDeclarations.contains)
+        val ownedInstance =
+          Option(instanceObjects.get(value)).flatMap(value => Option(instanceIds.get(value)))
+            .orElse(Option(instanceIds.get(value))).exists(ownedInstances.contains)
+        if ownedDeclaration || ownedInstance then
+          value match
+            case reference: AnyRef =>
+              semanticOrigin.captureLexicalName(reference, components :+ name)
+            case _ => ()
+
+  private def areaSnapshots(resolved: Map[DomainRef, String]): Vector[KernelAreaSnapshot] =
+    closureCharge(areas.size.toLong)
+    def path(record: AreaRecord): String =
+      val components = Vector(modulePath(record.owner)) ++ areaComponents(record)
+      if boundaryWorkActive then
+        components.foreach(value => closureCharge(1L + value.length.toLong))
+      components.mkString(".")
+    def localDomain(record: AreaRecord): Option[String] =
+      localDomainCandidate(record.owner, record.domain, path(record))
+        .map(domain => domainPath(domainRef(domain))).orElse:
+          val members = record.declarations.iterator.flatMap(reference =>
+            localDeclarationDomain(
+              records(reference.module).declarations(reference.index),
+              resolved
+            )
+          ).toSet
+          Option.when(members.size == 1)(members.head)
+    areas.toVector.map: record =>
+      closureCharge(1L + 2L * record.declarations.size.toLong + 2L * record.members.size.toLong)
+      KernelAreaSnapshot(
+        path(record),
+        modulePath(record.owner),
+        record.parent.map(path),
+        record.source,
+        localDomain(record),
+        record.declarations.toVector.map(declarationPath),
+        record.members.toVector.flatMap: (name, member) =>
+          closureCharge(1L + name.length.toLong)
+          val target = member.value match
+            case value: InterfaceValueRef[?] =>
+              pathOf(checkedInterfaceValueReference(value).endpoint)
+            case area: Area => Option(areaRecords.get(area)).map(path)
+            case family: GeneratedAreas[?] => Some(generatedRegionPath(family.generatedRegion))
+            case instance: Instance[?] =>
+              Option(instanceIds.get(instance)).map(record => modulePath(record.child))
+            case _ => pathOf(member.value)
+          target.map: value =>
+            val ownerPath = path(record)
+            closureCharge(2L + ownerPath.length.toLong + name.length.toLong)
+            KernelAreaMemberSnapshot(name, ownerPath + "." + name, value)
+        ,
+        generatedScopeSnapshot(record.generatedScope)
+      )
+
   def beginModule(module: Module): Unit =
-    requireNoCollectionEffect("Module declaration")
+    if activeGeneratedRegion.exists(_.areaFamily) then
+      requireAreaFamilyScope("Module declaration", requireBody = true)
+    else requireNoCollectionEffect("Module declaration")
     requireLoopEffect("Module declaration")
     if moduleIds.containsKey(module) then
       fail("NODAL-LIFECYCLE-016", "one Module entered construction twice")
@@ -4056,6 +6883,59 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     moduleIds.put(module, java.lang.Long.valueOf(handle))
     semanticOrigin.captureModule(handle, module, record.className, record.parentAtConstruction)
     moduleStack += record
+
+  def declareExternalModule(module: Module, name: String): Unit =
+    val handle = moduleHandle(module)
+    val record = records(handle)
+    if moduleStack.lastOption.forall(_.handle != handle) || record.externalName.nonEmpty ||
+      record.declarations.nonEmpty || record.domains.nonEmpty || record.instances.nonEmpty
+    then fail("NODAL-EXTERNAL-058-001", "external flavor requires the exact new Module owner")
+    ExternalModuleContract.validateName(name, record.className)
+    record.externalName = Some(name)
+
+  def externalInterfaceArray[I <: Interface, R <: RoleKind](
+      module: ExternalModule,
+      definition: InterfaceType[I],
+      role: Role[R],
+      count: Int,
+      name: String,
+      placement: InoutPlacement,
+      profile: ResolutionProfile
+  ): InterfaceArray[I, R] =
+    val handle = moduleHandle(module)
+    if currentModule.handle != handle || records(handle).externalName.isEmpty ||
+      activeValueRegion.nonEmpty || generationStack.nonEmpty
+    then
+      fail(
+        "NODAL-EXTERNAL-058-001",
+        "external InterfaceArray requires its exact direct ExternalModule owner"
+      )
+    ExternalModuleContract.validateArray(definition, role, count, placement, profile)
+    new InterfaceArray(
+      definition,
+      role,
+      count,
+      name,
+      None,
+      externalAttributes = Vector("placement" -> placement, "profile" -> profile)
+    )
+
+  private def externalInterfaceOrigin(reference: DeclarationRef): Option[DeclarationRef] =
+    val binding = instanceInterfacePorts.get(reference)
+    val original = binding.map(_.port).getOrElse(reference)
+    val owner = records(original.module)
+    val declaration = owner.declarations(original.index)
+    Option.when(
+      owner.externalName.nonEmpty && declaration.kind == KernelSignalKind.InterfaceArray &&
+        !owner.generatedRegions.exists(_.declarations.contains(original)) && valueRegion(
+          original
+        ).isEmpty &&
+        binding.forall(value =>
+          value.generated.isEmpty && value.instance.exists(instance =>
+            instance.child == original.module && instance.generatedScope.isEmpty
+          )
+        )
+    )(original)
 
   def prepareConstructorAllocation(site: String): Int =
     constructorFailure.foreach: (_, firstSite) =>
@@ -4178,6 +7058,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               selected.array match
                 case declaration: DeclarationRef => requireGeneratedDeclarationScope(declaration)
                 case _ => ()
+        case expression: Expr[?] =>
+          Option(declarationIds.get(expression)).foreach(requireGeneratedDeclarationScope)
         case _ => ()
 
   def registerDeclaration(
@@ -4187,19 +7069,88 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       explicitName: Option[String],
       domain: Option[ClockDomain],
       attributes: Vector[(String, Any)],
-      conservativeDimensions: Vector[Dimension] = Vector.empty
+      conservativeDimensions: Vector[Dimension] = Vector.empty,
+      interfaceBoundary: Option[InterfaceBoundaryRecord] = None
   ): Unit =
+    registrationOwner(conservativeDimensions, interfaceBoundary).foreach: closure =>
+      val proxy = admitPort(value, kind, dataType, explicitName, domain, attributes) ||
+        interfaceBoundary.nonEmpty || (value match
+          case endpoint: DigitalInout[?, ?] => endpoint.boundary && instanceSelectionStack.nonEmpty
+          case _: InterfaceResolvedMember[?, ?] => true
+          case _: InterfaceTerminalView[?, ?] => true
+          case _ => false)
+      if !proxy then closure.reject("incremental closure freezes authored declarations")
+      closure.markDirty()
     closeBehavioralChain()
-    requireNoCollectionEffect(s"${kind.label} declaration")
+    val interfaceKind = Set(KernelSignalKind.InterfacePort, KernelSignalKind.InterfaceArray)(kind)
+    val generatedConservativeView = value match
+      case view: InterfaceTerminalView[?, ?] if kind == KernelSignalKind.ConservativeTerminal =>
+        val _ = requireConservativeInterfaceScope(view.endpoint)
+        activeGeneratedRegion.nonEmpty
+      case _ => false
+    val selectedInterface = interfaceKind && interfaceBoundary.exists(_.generated.nonEmpty)
+    val generatedInterface = interfaceKind && activeGeneratedRegion.exists(_.areaFamily) &&
+      (interfaceBoundary.isEmpty || interfaceBoundary.exists(binding =>
+        binding.generated.nonEmpty || binding.instance.exists(
+          _.generatedScope == activeGeneratedRegion
+        )
+      ))
+    val selectedInstancePort =
+      Set(KernelSignalKind.InstanceInput, KernelSignalKind.InstanceOutput)(kind) &&
+        instanceSelectionStack.lastOption.exists(_.generated.nonEmpty)
+    val generatedInstancePort =
+      selectedInstancePort || (Set(
+        KernelSignalKind.InstanceInput,
+        KernelSignalKind.InstanceOutput
+      )(kind) &&
+        activeGeneratedRegion.exists(_.areaFamily) &&
+        instanceSelectionStack.lastOption.exists(selected =>
+          instanceRecord(selected).generatedScope == activeGeneratedRegion
+        ))
+    if selectedInterface then
+      requireAreaFamilyScope(s"${kind.label} selection", requireBody = false)
+    else if selectedInstancePort then
+      requireAreaFamilyScope(s"${kind.label} selection", requireBody = false)
+    else if activeGeneratedRegion.exists(_.areaFamily) &&
+      (Set(
+        KernelSignalKind.Wire,
+        KernelSignalKind.Register
+      )(kind) || generatedInstancePort || generatedInterface || generatedConservativeView)
+    then requireAreaFamilyScope(s"${kind.label} declaration", requireBody = true)
+    else requireNoCollectionEffect(s"${kind.label} declaration")
     requireLoopEffect(s"${kind.label} declaration")
     validateCollectionDependencies(attributes.map(_._2))
     val activeGeneratedVariable =
       kind == KernelSignalKind.Variable && AnalogProceduralConstruction.generatedProcedureActive
+    val generatedAreaStorage = activeGeneratedRegion.exists(_.areaFamily) &&
+      Set(KernelSignalKind.Wire, KernelSignalKind.Register)(kind)
     if kind != KernelSignalKind.AnalogNode && kind != KernelSignalKind.AnalogNodeArray &&
-      !activeGeneratedVariable
+      !activeGeneratedVariable && !generatedAreaStorage && !generatedInstancePort && !generatedInterface && !selectedInterface && !generatedConservativeView
     then
       requireNoGeneratedEffect(s"generated ${kind.label} declaration")
     val module = currentModule
+    value match
+      case endpoint: InterfaceEndpoint if interfaceBoundary.isEmpty =>
+        var examined = 0
+        def visible(definition: InterfaceType[?], depth: Int): Unit =
+          examined += 1
+          if depth > 128 || examined > 65536 then
+            fail("NODAL-INTERFACE-058-SCOPE", "Interface definition ancestry exceeds its budget")
+          requireInterfaceDefinitionContext(definition, module.handle).foreach: context =>
+            if !requireDeferredValueScope(
+                activeValueRegion,
+                module.handle
+              ).exists(_ eq context.region)
+            then
+              fail(
+                "NODAL-INTERFACE-058-SCOPE",
+                "Interface definition escaped its actual lexical construction region"
+              )
+          definition.members.foreach:
+            case nested: InterfaceMember.Nested[?] => visible(nested.definition, depth + 1)
+            case _ => ()
+        visible(endpoint.definition, 0)
+      case _ => ()
     validateGeneratedDependencies(attributes.map(_._2))
     val initial = attributes.collectFirst { case ("initial", value) => value }.toVector.flatMap:
       case expression: Expr[?] => Vector(expression)
@@ -4211,7 +7162,24 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
     val digitalStorage =
       Set(KernelSignalKind.Wire, KernelSignalKind.Register, KernelSignalKind.Memory).contains(kind)
-    resolvedType.foreach(validateShapeType(
+    val deferredInstanceType = resolvedType.exists:
+      case deferred: KernelInstanceDataType[?] =>
+        !deferred.finalized && (
+          instanceSelectionStack.nonEmpty &&
+            (Set(KernelSignalKind.InstanceInput, KernelSignalKind.InstanceOutput)(kind) ||
+              (kind == KernelSignalKind.DigitalInout && (value match
+                case endpoint: DigitalInout[?, ?] => endpoint.boundary
+                case _ => false))) ||
+            (kind == KernelSignalKind.DigitalInout && (value match
+              case view: InterfaceResolvedMember[?, ?] =>
+                val root = DigitalInterfaceContract.root(view.endpoint)
+                Option(declarationIds.get(root)).exists(reference =>
+                  reference.module == module.handle && instanceInterfacePorts.contains(reference)
+                )
+              case _ => false))
+        )
+      case _ => false
+    resolvedType.filterNot(_ => deferredInstanceType).foreach(validateShapeType(
       _,
       module.handle,
       cardinality = kind == KernelSignalKind.Variable || digitalStorage,
@@ -4242,14 +7210,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           new KernelDataType[Data](KernelTypeDescriptor("Vec", Vector(storageType, Vector(depth))))
         validateShapeType(shaped, module.handle, cardinality = true, storageContext = true)
     value match
-      case array: InterfaceArray[?, ?] =>
+      case array: InterfaceArray[?, ?] if !array.boundary =>
         val shaped =
           new KernelDataType[Data](KernelTypeDescriptor("Vec", Vector(Bool, Vector(array.count))))
         validateShapeType(shaped, module.handle, cardinality = true)
       case _ => ()
     if declarationIds.containsKey(value) then
       fail("NODAL-OWNERSHIP-016", s"${kind.label} was registered twice")
-    val reference = DeclarationRef(module.handle, module.declarations.size)
+    val reference = allocateDeclarationReference(module)
     module.declarations += DeclarationRecord(
       reference,
       value,
@@ -4270,6 +7238,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       conservativeDimensions
     )
     declarationIds.put(value, reference)
+    activeArea.foreach(_.declarations += reference)
     semanticOrigin.captureDeclaration(
       module.handle,
       reference.index,
@@ -4279,6 +7248,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
     generationStack.lastOption
       .filter(_.owner == module.handle)
+      .filter(_ => !selectedInstancePort && !selectedInterface)
       .foreach(_.declarations += reference)
 
   def registerNodeArray(
@@ -4350,17 +7320,916 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
   /** References are parent-owned declarations in the existing value/assignment registry. */
   private val instanceDigitalPorts =
+    mutable.LinkedHashMap.empty[DeclarationRef, InstancePortBoundaryRecord]
+  private val instanceDigitalInouts =
     mutable.LinkedHashMap.empty[DeclarationRef, (InstanceRecord, DeclarationRef)]
   private var occurrenceDomains = Map.empty[DomainRef, String]
   private val selectedRequirementBindings =
     mutable.LinkedHashMap.empty[DomainRef, (DomainRef, String, Long, Int)]
 
-  def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
+  private val instanceInterfacePorts =
+    mutable.LinkedHashMap.empty[DeclarationRef, InterfaceBoundaryRecord]
+
+  private val instanceInterfaceDimensions =
+    mutable.LinkedHashMap.empty[DeclarationRef, Vector[Dimension]]
+  private val instanceInterfaceTypes =
+    mutable.LinkedHashMap.empty[DeclarationRef, Map[KernelTypeDescriptor, DataType[?]]]
+
+  // One exact source-view registry. It records no physical net or independent role map.
+  private val resolvedInterfaceViews = new IdentityHashMap[
+    InterfaceEndpoint,
+    mutable.LinkedHashMap[String, ResolvedDigitalCapability[?, ?]]
+  ]()
+
+  // Views share the existing declaration/capture owner, not a topology or role registry.
+  private val conservativeInterfaceViews = new IdentityHashMap[
+    InterfacePort[?, ?],
+    mutable.LinkedHashMap[(String, String), ConservativeView[?, ?]]
+  ]()
+
+  private def conservativeMemberSnapshot(declaration: DeclarationRecord)
+      : Option[KernelInterfaceMemberOrigin] = declaration.value match
+    case view: InterfaceTerminalView[?, ?] =>
+      val root = DigitalInterfaceContract.root(view.endpoint)
+      Some(KernelInterfaceMemberOrigin(
+        declarationPath(declarationIds.get(root)),
+        view.member,
+        view.endpoint.role.name
+      ))
+    case _ => None
+
+  private def conservativeIntegerLiteral(value: Any): Option[Long] = value match
+    case value: Int => Some(value.toLong)
+    case value: KernelExpr[?] =>
+      value.literal.filter(_.kind == "integer").flatMap(_.value.toLongOption)
+    case _ => None
+
+  /** The additive nested profile is exactly two original rectangular literal axes. */
+  private def nestedConservativeFamily(family: GeneratedRegionRecord): Boolean =
+    def axis(value: GeneratedRegionRecord): Boolean =
+      value.areaFamily && value.digitalRegion.nonEmpty &&
+        conservativeIntegerLiteral(value.lower).contains(0L) &&
+        conservativeIntegerLiteral(value.step).contains(1L) &&
+        conservativeIntegerLiteral(value.upperExclusive).exists(_ > 0L)
+    family.parentOrdinal.flatMap(index => currentModule.generatedRegions.find(_.ordinal == index))
+      .exists(parent =>
+        (parent ne family) && parent.owner == family.owner && parent.parentOrdinal.isEmpty &&
+          parent.digitalRegion.exists(_.parent.isEmpty) &&
+          family.digitalRegion.exists(_.parent == parent.digitalRegion) && axis(parent) && axis(family)
+      )
+
+  /** Selected conservative views retain a real authored body boundary, not invented incidence. */
+  private def requireSelectedConservativeChild(
+      binding: InterfaceBoundaryRecord
+  ): Option[DeclarationRef] =
+    def invalid(message: String): Nothing = fail("NODAL-INTERFACE-058-ANALOG", message)
+    val instance = binding.instance.getOrElse(
+      invalid("selected conservative endpoint requires its child instance")
+    )
+    val selection = binding.generated.getOrElse(
+      invalid("selected conservative endpoint requires its actual selection")
+    )
+    val (family, area) = generatedSelectedArea(selection.reference)
+    val exported = area.members.getOrElse(
+      selection.member,
+      invalid("selected conservative child export is absent")
+    )
+    val (_, target) = generatedInstanceExportTarget(family, exported)
+    val child = records(instance.child)
+    val original = child.declarations.lift(
+      binding.port.index
+    ).getOrElse(invalid("selected conservative child endpoint is absent"))
+    val endpoint = original.value match
+      case value: InterfacePort[?, ?] => value
+      case _ => invalid("selected conservative child requires a scalar Interface")
+    val leaves =
+      ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role, charge = closureCharge)
+    val nested = selection.reference.family.selectionPrefix.size == 1 &&
+      nestedConservativeFamily(family)
+    val literalOrdinal = selection.reference.ordinal match
+      case _: Int => true
+      case value: KernelExpr[?] => value.literal.exists(_.kind == "integer")
+      case _ => false
+    if (target ne instance) || !currentModule.instances.exists(_ eq instance) ||
+      binding.port.module != instance.child || original.kind != KernelSignalKind.InterfacePort ||
+      endpoint.boundary || endpoint.origin.nonEmpty ||
+      activeGeneratedRegion.nonEmpty || activeValueRegion.nonEmpty || binding.scope.nonEmpty ||
+      (!nested && (family.parentOrdinal.nonEmpty || family.digitalRegion.isEmpty ||
+        family.digitalRegion.exists(_.parent.nonEmpty) ||
+        selection.reference.family.selectionPrefix.nonEmpty)) || !literalOrdinal ||
+      (nested && !selection.reference.family.selectionPrefix.forall(value =>
+        conservativeIntegerLiteral(value.ordinal).exists(ordinal =>
+          ordinal >= 0L && conservativeIntegerLiteral(value.family.upperExclusive).exists(ordinal < _)
+        )
+      )) ||
+      !instance.generatedScope.contains(family) ||
+      leaves.isEmpty || !leaves.forall(leaf =>
+        leaf.protocol == "conservative" && leaf.mode.isEmpty && leaf.analogType.nonEmpty &&
+          leaf.dataType.isEmpty && leaf.access == "connect"
+      )
+    then invalid("selected conservative child requires its exact constant scalar connect profile")
+    // This is profile admission only. The existing override policy owns binding,
+    // type, ownership and duplicate validation; the scalar materializer owns substitution.
+    def realLiteral(value: Any): Boolean = value match
+      case expression: KernelExpr[?] =>
+        expression.literal.exists(literal =>
+          literal.kind == "real" && literal.value.toDoubleOption.exists(_.isFinite)
+        ) && CandidateRuntime.expressionUnit(expression).forall(_.isEmpty)
+      case _ => false
+    def ordinaryDimensionlessReal(parameter: DeclarationRecord): Boolean =
+      parameter.kind == KernelSignalKind.Parameter && parameter.dataType.exists(
+        CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Real")
+      ) && parameter.attributes.iterator.map(_._1).toSet.size == parameter.attributes.size &&
+        parameter.attributes.find(_._1 == "classification").forall(_._2 == "ordinary") &&
+        parameter.attributes.find(_._1 == "unit").forall(_._2 == "")
+    val parent = currentModule
+    val generatedDeclarations = parent.generatedRegions.iterator.flatMap(_.declarations).toSet
+    val analogExpressions = analogRegions.iterator.flatMap(_.expressions).toSet
+    def parentReal(value: Any): Boolean =
+      val heights = new IdentityHashMap[AnyRef, java.lang.Integer]()
+      val active = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+      var work = 0
+      // Admission follows canonical identities without evaluating arithmetic or reading defaults.
+      // Charge every edge, even memo hits; retain subtree heights for shared deep paths.
+      def visit(value: Any, depth: Int, before: Long): Int =
+        work += 1
+        if work > 65536 || depth >= 512 then
+          invalid(
+            "selected conservative parent Real expression exceeds its finite work/depth budget"
+          )
+        val (identity, reference): (AnyRef, DeclarationRef | ExpressionRef) = value match
+          case parameter: Param[?] =>
+            val reference = Option(declarationIds.get(parameter)).getOrElse(
+              invalid("selected conservative parent parameter has no canonical identity")
+            )
+            if reference.module != parent.handle || generatedDeclarations.contains(reference) ||
+              !parent.declarations.lift(reference.index).exists(declaration =>
+                (declaration.reference eq reference) && (declaration.value eq parameter) &&
+                  ordinaryDimensionlessReal(declaration)
+              )
+            then invalid("selected conservative parameter must be an exact ordinary parent Real")
+            parameter -> reference
+          case expression: KernelExpr[?] =>
+            val reference = Option(expressionIds.get(expression)).getOrElse(
+              invalid("selected conservative parent expression has no canonical identity")
+            )
+            if reference.module != parent.handle || reference.index < 0 ||
+              !expressionValues.get(reference).exists(_ eq expression) ||
+              expressionRegions.contains(reference) || analogExpressions.contains(reference) ||
+              !expression.constructionFinalized ||
+              !expression.resultDescriptor.contains(KernelTypeDescriptor("Real"))
+            then invalid("selected conservative expression must be an exact module-owned Real")
+            expression -> reference
+          case _ => invalid("selected conservative expression has a non-static Real operand")
+        val allocation = reference.constructionAllocation.getOrElse(
+          invalid("selected conservative parent value lost its original allocation")
+        )
+        if (allocation.session ne this) || (allocation.module ne parent) ||
+          allocation.serial >= before
+        then invalid("selected conservative operands must precede their authored consumer")
+        if active.containsKey(identity) then
+          invalid("selected conservative parent expression is cyclic")
+        Option(heights.get(identity)) match
+          case Some(height) =>
+            if depth + height.intValue >= 512 then
+              invalid(
+                "selected conservative parent Real expression exceeds its finite depth budget"
+              )
+            height.intValue
+          case None =>
+            active.put(identity, java.lang.Boolean.TRUE)
+            val height = identity match
+              case _: Param[?] => 0
+              case expression: KernelExpr[?] if expression.literal.nonEmpty =>
+                if !realLiteral(expression) ||
+                  !expression.literal.exists(_.dataType == KernelTypeDescriptor("Real")) ||
+                  !expression.operation.contains("real_literal") ||
+                  !(expression.operands match
+                    case Vector(number: Double, unit: String) =>
+                      number.isFinite && unit.isEmpty && expression.literal.exists(
+                        _.value == java.lang.Double.toString(number)
+                      )
+                    case _ => false
+                  )
+                then
+                  invalid("selected conservative expression requires finite unitless Real literals")
+                0
+              case expression: KernelExpr[?] =>
+                val arity = expression.operation match
+                  case Some("analog_add" | "analog_sub" | "analog_mul") => 2
+                  case Some("analog_neg") => 1
+                  case _ => invalid("selected conservative parent Real operation is unsupported")
+                if expression.operands.size != arity then
+                  invalid("selected conservative parent Real operation has invalid arity")
+                expression.operands.iterator.map(operand =>
+                  visit(operand, depth + 1, allocation.serial) + 1
+                ).max
+              case _ => invalid("selected conservative parent Real identity is unsupported")
+            active.remove(identity)
+            heights.put(identity, java.lang.Integer.valueOf(height))
+            height
+      visit(value, 0, Long.MaxValue)
+      true
+    val parameters = child.declarations.filter(_.kind == KernelSignalKind.Parameter)
+    if !parameters.forall(parameter =>
+        ordinaryDimensionlessReal(parameter) &&
+          parameter.attributes.find(_._1 == "default").exists(entry => realLiteral(entry._2))
+      ) || !instance.parameterOverrides.forall((_, value) =>
+        realLiteral(value) || (!nested && parentReal(value))
+      )
+    then
+      invalid(
+        "selected conservative child parameters require ordinary dimensionless Real literals " +
+          "or parent Real arithmetic, with literal child defaults"
+      )
+    val analysis = new StructuralBoundAnalysis(
+      currentModule.handle,
+      "NODAL-INTERFACE-058-ANALOG",
+      "selected conservative family",
+      signed64Literals = true
+    )
+    val inputs = Vector(family.lower, family.upperExclusive, family.step).map(value =>
+      analysis(value.asInstanceOf[Dimension])
+    )
+    val fixedFamily = inputs.forall(value =>
+      value.parameters.isEmpty && value.bounds.lower == value.bounds.upper
+    )
+    def integerLiteral(value: Any, expected: Long): Boolean = value match
+      case value: Int => value.toLong == expected
+      case value: KernelExpr[?] =>
+        value.literal.exists(literal =>
+          literal.kind == "integer" && literal.value.toLongOption.contains(expected)
+        )
+      case _ => false
+    // Admit source identity, not an arithmetic expression normalized to the same bounds.
+    val symbolicExtent = family.upperExclusive match
+      case parameter: Param[?]
+          if integerLiteral(family.lower, 0L) && integerLiteral(family.step, 1L) =>
+        Option(declarationIds.get(parameter)).filter: reference =>
+          val declaration = records(reference.module).declarations(reference.index)
+          reference.module == parent.handle &&
+          (declaration.value.asInstanceOf[AnyRef] eq parameter) &&
+          inputs(1).parameters == Vector(reference) && !generatedDeclarations.contains(reference) &&
+          declaration.kind == KernelSignalKind.Parameter && declaration.dataType.exists(
+            CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Integer")
+          ) && declaration.attributes.iterator.map(
+            _._1
+          ).toSet.size == declaration.attributes.size &&
+          declaration.attributes.contains("classification" -> "structural")
+      case _ => None
+    if (!fixedFamily && symbolicExtent.isEmpty) ||
+      family.maximumTripCount <= 0 || inputs(2).bounds.lower <= 0 ||
+      !IterationDomain.verifyOrdinal(
+        analysis.selectedGeneratedDomain(family),
+        analysis(selection.reference.ordinal).bounds
+      ).isRight
+    then
+      invalid(
+        "selected conservative child requires a fixed family or direct structural Integer extent and a universal literal ordinal"
+      )
+    val authenticBody = instanceInterfacePorts.exists: (reference, body) =>
+      body.instance.exists(_ eq instance) && body.port == binding.port && body.generated.isEmpty &&
+        body.scope == family.digitalRegion && reference.module == family.owner &&
+        family.declarations.contains(reference)
+    if !authenticBody then
+      invalid("selected conservative child requires its authentic authored body Interface boundary")
+    symbolicExtent
+
+  private def requireConservativeInterfaceScope(endpoint: InterfacePort[?, ?]): DeclarationRef =
+    val root = DigitalInterfaceContract.root(endpoint)
+    val reference = Option(declarationIds.get(root)).getOrElse(
+      fail("NODAL-INTERFACE-058-ANALOG", "conservative member requires an owned Interface")
+    )
+    if reference.module != currentModule.handle || (root.boundary && endpoint.origin.nonEmpty)
+    then
+      fail(
+        "NODAL-INTERFACE-058-ANALOG",
+        "conservative member belongs to another module, role view or selected family"
+      )
+    instanceInterfacePorts.get(
+      reference
+    ).filter(_.generated.nonEmpty).foreach(binding =>
+      val _ = requireSelectedConservativeChild(binding)
+    )
+    requireGeneratedDeclarationScope(reference)
+    activeGeneratedRegion match
+      case None => requireNoGeneratedEffect("conservative Interface member selection")
+      case Some(generated) =>
+        requireAreaFamilyScope("conservative Interface member selection", requireBody = true)
+        val boundary = instanceInterfacePorts.get(reference)
+        val nested = nestedConservativeFamily(generated)
+        val leaves = ConstructionInterfaceLayout.leaves(
+          endpoint.definition,
+          endpoint.role,
+          charge = closureCharge
+        )
+        if (nested && (boundary.isEmpty || !leaves.forall(_.access == "connect"))) ||
+          (!nested &&
+            (generated.parentOrdinal.nonEmpty || activeValueRegion.exists(_.parent.nonEmpty))) ||
+          generated.digitalRegion != activeValueRegion ||
+          !generated.declarations.contains(reference) || leaves.isEmpty ||
+          !leaves.forall(leaf =>
+            leaf.protocol == "conservative" && leaf.mode.isEmpty &&
+              leaf.analogType.nonEmpty && leaf.dataType.isEmpty
+          ) ||
+          boundary.exists(binding =>
+            binding.generated.nonEmpty ||
+              binding.scope != generated.digitalRegion || !binding.instance.exists(instance =>
+                currentModule.instances.exists(_ eq instance) &&
+                  instance.generatedScope.contains(
+                    generated
+                  ) && binding.port.module == instance.child
+              )
+          )
+        then
+          fail(
+            "NODAL-INTERFACE-058-ANALOG",
+            "generated conservative member requires its direct scalar endpoint and actual occurrence"
+          )
+    reference
+
+  private def requireGeneratedConservativeConnection(values: Vector[Any]): Unit =
+    val generated = activeGeneratedRegion.get
+    requireAreaFamilyScope("conservative connection", requireBody = true)
+    if values.size != 2 then
+      fail("NODAL-INTERFACE-058-ANALOG", "conservative connection requires two endpoints")
+    var local = false
+    values.foreach:
+      case view: InterfaceTerminalView[?, ?] =>
+        val _ = requireConservativeInterfaceScope(view.endpoint)
+        val reference = Option(declarationIds.get(view)).getOrElse(
+          fail("NODAL-INTERFACE-058-ANALOG", "conservative view has no captured identity")
+        )
+        if view.permission != "connect" || !generated.declarations.contains(reference) then
+          fail(
+            "NODAL-INTERFACE-058-ANALOG",
+            "connection requires the actual body-local connect view"
+          )
+        local = true
+      case terminal: Terminal[?] =>
+        val reference = Option(declarationIds.get(terminal)).getOrElse(
+          fail("NODAL-INTERFACE-058-ANALOG", "outer terminal has no captured identity")
+        )
+        if reference.module != currentModule.handle ||
+          currentModule.generatedRegions.exists(_.declarations.contains(reference))
+        then
+          fail(
+            "NODAL-INTERFACE-058-ANALOG",
+            "outer terminal must be an actual Module-owned endpoint"
+          )
+      case _ => fail(
+          "NODAL-INTERFACE-058-ANALOG",
+          "generated connection requires exact terminal capabilities"
+        )
+    if !local then
+      fail(
+        "NODAL-INTERFACE-058-ANALOG",
+        "generated connection requires a body-local Interface endpoint"
+      )
+
+  def interfaceConservativeMember[D <: Discipline, A <: ConservativeAccess](
+      endpoint: InterfacePort[?, ?],
+      field: InterfaceMember.Conservative[D],
+      through: Vector[InterfaceMember.Nested[?]],
+      permission: String
+  ): ConservativeView[D, A] =
+    val reference = requireConservativeInterfaceScope(endpoint)
+    if permission != "connect" && instanceInterfacePorts.get(reference).exists(_.generated.nonEmpty)
+    then
+      fail(
+        "NODAL-INTERFACE-058-ANALOG",
+        "selected conservative child permits only its exact connect capability"
+      )
+    val member = ConstructionInterfaceLayout.exactMemberPath(endpoint.definition, field, through)
+    val leaves =
+      ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role, charge = closureCharge)
+    val leaf =
+      closureElements(leaves).find(_.name == member).getOrElse(
+        fail("NODAL-INTERFACE-058-ANALOG", "conservative member is absent from its selected role")
+      )
+    if leaf.protocol != "conservative" ||
+      (permission != "sense" && leaf.access != permission) ||
+      !Set("connect", "sense", "contribute").contains(permission)
+    then
+      fail("NODAL-INTERFACE-058-ANALOG", "conservative member lacks its requested role capability")
+    val known = Option(conservativeInterfaceViews.get(endpoint)).getOrElse:
+      val created = mutable.LinkedHashMap.empty[(String, String), ConservativeView[?, ?]]
+      conservativeInterfaceViews.put(endpoint, created)
+      created
+    known.getOrElseUpdate(
+      member -> permission, {
+        val view = new InterfaceTerminalView[D, A](endpoint, field, through, member, permission)
+        registerDeclaration(
+          view,
+          KernelSignalKind.ConservativeTerminal,
+          None,
+          Some(s"conservative_member_${currentModule.declarations.size}"),
+          None,
+          CandidateRuntime.conservativeAttributes(field.discipline)
+        )
+        view
+      }
+    ).asInstanceOf[ConservativeView[D, A]]
+
+  private def resolvedMemberSnapshot(declaration: DeclarationRecord)
+      : Option[KernelInterfaceMemberOrigin] = declaration.value match
+    case view: InterfaceResolvedMember[?, ?] =>
+      val root = DigitalInterfaceContract.root(view.endpoint)
+      Some(KernelInterfaceMemberOrigin(
+        declarationPath(declarationIds.get(root)),
+        view.member,
+        view.endpoint.role.name
+      ))
+    case _ => None
+
+  private def checkedInterfaceValueRecord(
+      endpoint: InterfaceEndpoint,
+      field: InterfaceMember.Value[?],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): InterfaceValueReadRecord =
+    val member = ConstructionInterfaceLayout.exactMemberPath(endpoint.definition, field, through)
+    val leaves =
+      ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role, charge = closureCharge)
+    val leaf =
+      closureElements(leaves).find(_.name == member).getOrElse(
+        fail("NODAL-INTERFACE-054-003", "ordinary read is absent from the selected role")
+      )
+    if leaf.protocol != "plain" || leaf.mode.nonEmpty || leaf.analogType.nonEmpty ||
+      !Set("in", "out", "observe")(leaf.access) ||
+      !DigitalCombinationalContract.isValueTypeKind(CandidateRuntime.typeDescriptor(field.dataType))
+    then
+      fail(
+        "NODAL-INTERFACE-054-003",
+        "ordinary read requires a storable digital Value and visible role"
+      )
+    InterfaceValueReadRecord(endpoint, field, through, member)
+
+  private def requireInterfaceValueUse(endpoint: InterfaceEndpoint): DeclarationRef =
+    val root = DigitalInterfaceContract.root(endpoint)
+    val reference = Option(declarationIds.get(root)).getOrElse(
+      fail("NODAL-INTERFACE-054-007", "ordinary read requires an actual owned Interface endpoint")
+    )
+    if reference.module != currentModule.handle then
+      fail("NODAL-INTERFACE-054-007", "ordinary read belongs to another Module")
+    requireGeneratedDeclarationScope(reference)
+    valueRegion(reference).foreach: scope =>
+      if !collectionStack.exists(_ eq scope) then
+        fail("NODAL-INTERFACE-054-007", "ordinary read endpoint escaped its actual region")
+    if activeValueRegion.nonEmpty then
+      requireAreaFamilyScope("ordinary Interface read", requireBody = false)
+    reference
+
+  def interfaceValueReference[A <: Data](
+      endpoint: InterfaceEndpoint,
+      field: InterfaceMember.Value[?],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): InterfaceValueRef[A] =
+    val _ = requireInterfaceValueUse(endpoint)
+    new InterfaceValueRef[A](checkedInterfaceValueRecord(endpoint, field, through))
+
+  private def checkedInterfaceValueReference(value: InterfaceValueRef[?])
+      : InterfaceValueReadRecord =
+    val original = value.memberRecord
+    val checked = checkedInterfaceValueRecord(original.endpoint, original.field, original.through)
+    if checked.member != original.member then
+      fail("NODAL-INTERFACE-054-003", "ordinary member reference lost its exact declared path")
+    checked
+
+  def interfaceValueRefRead(value: InterfaceValueRef[?]): Expr[?] =
+    val record = checkedInterfaceValueReference(value)
+    interfaceValueRead(record.endpoint, record.field, record.through)
+
+  private def rebindInterfaceValue[A <: Data](
+      original: InterfaceValueRef[A],
+      endpoint: InterfaceEndpoint
+  ): InterfaceValueRef[A] =
+    val record = checkedInterfaceValueReference(original)
+    if endpoint.definition ne record.endpoint.definition then
+      fail("NODAL-INTERFACE-054-003", "ordinary member projection changed its original definition")
+    if endpoint.role ne record.endpoint.role then
+      fail("NODAL-INTERFACE-054-003", "ordinary member projection changed its actual role")
+    val rebound = checkedInterfaceValueRecord(endpoint, record.field, record.through)
+    if rebound.member != record.member then
+      fail("NODAL-INTERFACE-054-003", "ordinary member projection changed its exact nested path")
+    new InterfaceValueRef[A](rebound)
+
+  def instanceInterfaceValue[A <: Data](value: InterfaceValueRef[A]): InterfaceValueRef[A] =
+    val record = checkedInterfaceValueReference(value)
+    val projected = record.endpoint match
+      case port: InterfacePort[?, ?] => instanceInterfacePort(port)
+      case array: InterfaceArray[?, ?] => instanceInterfaceArray(array)
+    rebindInterfaceValue(value, projected)
+
+  def interfaceValueRead(
+      endpoint: InterfaceEndpoint,
+      field: InterfaceMember.Value[?],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): Expr[?] =
+    val reference = requireInterfaceValueUse(endpoint)
+    val root = DigitalInterfaceContract.root(endpoint)
+    val read = checkedInterfaceValueRecord(endpoint, field, through)
+    def actual(): KernelTypeDescriptor =
+      val dimensions = interfaceDimensions(records(reference.module).declarations(reference.index))
+      val dataType = interfaceActualType(reference, field.dataType)
+      val result = if dimensions.isEmpty then dataType else Vec(dataType, dimensions*)
+      val _ = shapeTypeFootprint(
+        result,
+        reference.module,
+        cardinality = true,
+        storageContext = true,
+        bitPatternOnly = true,
+        allowUnattained = true
+      )
+      CandidateRuntime.typeDescriptor(result)
+    DigitalCombinationalContract.validateValueType(CandidateRuntime.typeDescriptor(field.dataType))
+    val expression = new KernelExpr[Data](
+      Vector(root),
+      Some(CandidateRuntime.typeDescriptor(field.dataType)),
+      operation = Some(DigitalInterfaceContract.OrdinaryReadOperation),
+      typeIntent = Some(new KernelResultTypeIntent(Vector(root), () => actual())),
+      interfaceMember = Some(read)
+    )
+    val _ = captureExpression(expression)
+    expression
+
+  def interfaceResolvedMember[A <: Bits, M <: DriveMode](
+      endpoint: InterfacePort[?, ?],
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): ResolvedDigital[A, M] =
+    interfaceResolvedCapability(endpoint, field, through).asInstanceOf[ResolvedDigital[A, M]]
+
+  def interfaceResolvedArrayMember[A <: Bits, M <: DriveMode](
+      endpoint: InterfaceArray[?, ?],
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): ResolvedDigitalArray[A, M] =
+    interfaceResolvedCapability(endpoint, field, through).asInstanceOf[ResolvedDigitalArray[A, M]]
+
+  private def interfaceResolvedCapability[A <: Bits, M <: DriveMode](
+      endpoint: InterfaceEndpoint,
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): ResolvedDigitalCapability[?, ?] =
+    requireNoGeneratedEffect("resolved Interface member selection")
+    val root = DigitalInterfaceContract.root(endpoint)
+    val reference = Option(declarationIds.get(root)).getOrElse(
+      fail("NODAL-INTERFACE-054-007", "resolved member requires an actual owned Interface endpoint")
+    )
+    val roleView = endpoint match
+      case port: InterfacePort[?, ?] => port.origin.nonEmpty
+      case array: InterfaceArray[?, ?] => array.origin.nonEmpty
+    if reference.module != currentModule.handle || activeValueRegion.nonEmpty ||
+      (root.boundary && roleView) ||
+      instanceInterfacePorts.get(reference).exists(_.generated.nonEmpty)
+    then
+      fail(
+        "NODAL-INTERFACE-054-007",
+        "resolved member endpoint belongs to another module, role view or selected family"
+      )
+    val member = ConstructionInterfaceLayout.resolvedMemberPath(endpoint.definition, field, through)
+    val leaves =
+      ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role, charge = closureCharge)
+    val leaf =
+      closureElements(leaves).find(_.name == member).getOrElse(
+        fail("NODAL-INTERFACE-054-003", "resolved member is absent from its selected role")
+      )
+    if leaf.protocol != "resolved" || !leaf.mode.contains(field.mode.name) then
+      fail("NODAL-INTERFACE-054-003", "resolved member requires its actual resolved declaration")
+    val known = Option(resolvedInterfaceViews.get(endpoint)).getOrElse:
+      val created = mutable.LinkedHashMap.empty[String, ResolvedDigitalCapability[?, ?]]
+      resolvedInterfaceViews.put(endpoint, created)
+      created
+    known.getOrElseUpdate(
+      member, {
+        val view: InterfaceResolvedMember[?, M] = endpoint match
+          case port: InterfacePort[?, ?] =>
+            val dataType: DataType[A] = if root.boundary then
+              new KernelInstanceDataType[A](CandidateRuntime.typeDescriptor(field.dataType))
+            else field.dataType
+            new InterfaceResolvedView(dataType, field.mode, port, field, through, member)
+          case array: InterfaceArray[?, ?] =>
+            val formalData = Vec(field.dataType, array.formalCount)
+            val formalEnable = Vec(Bool, array.formalCount)
+            val dataType: DataType[Vec[A]] = if root.boundary then
+              new KernelInstanceDataType[Vec[A]](CandidateRuntime.typeDescriptor(formalData))
+            else formalData
+            val enableType: DataType[Vec[Bool]] = if root.boundary then
+              new KernelInstanceDataType[Vec[Bool]](CandidateRuntime.typeDescriptor(formalEnable))
+            else formalEnable
+            new InterfaceResolvedArrayView(
+              dataType,
+              enableType,
+              field.mode,
+              array,
+              field,
+              through,
+              member
+            )
+        val name = s"resolved_member_${currentModule.declarations.size}"
+        registerDeclaration(
+          view,
+          KernelSignalKind.DigitalInout,
+          Some(view.dataType),
+          Some(name),
+          None,
+          Vector("mode" -> field.mode.name)
+        )
+        view
+      }
+    )
+
+  private def materializeResolvedInterfaceViews(): Unit =
+    // Shape validation can refine existing declaration records. Retain only the
+    // authored member-view inventory before invoking that shared mutation owner.
+    closureCharge(records.size.toLong)
+    val views = records.valuesIterator.flatMap(module =>
+      closureCharge(module.declarations.size.toLong)
+      module.declarations.iterator.flatMap(declaration =>
+        declaration.value match
+          case view: InterfaceResolvedMember[?, ?] => Some(module.handle -> view)
+          case _ => None
+      )
+    ).toVector
+    views.filter((_, view) => closureAccepts("resolved", view)).foreach: (owner, view) =>
+      val endpoint = declarationIds.get(DigitalInterfaceContract.root(view.endpoint))
+      val dimensions = interfaceDimensions(records(endpoint.module).declarations(endpoint.index))
+      val actual = interfaceActualType(endpoint, view.declaration.dataType)
+      def seal(dataType: DataType[?], resolved: DataType[?]): Unit = dataType match
+        case deferred: KernelInstanceDataType[?] =>
+          deferred.seal(CandidateRuntime.typeDescriptor(resolved))
+          validateShapeType(deferred, owner, cardinality = false)
+        case _ => ()
+      seal(view.dataType, if dimensions.isEmpty then actual else Vec(actual, dimensions*))
+      seal(view.enableDataType, if dimensions.isEmpty then Bool else Vec(Bool, dimensions*))
+
+  // Only a typed, genuinely global immutable singleton initializer enters this scope.
+  // Preserve all expression/capture ownership, and never affect another Module or region.
+  private var globalInterfaceInitializers =
+    List.empty[(ModuleRecord, Option[DigitalValueRegionRecord])]
+
+  def initializeGlobalInterface[A](initializer: () => A): A =
+    val previous = globalInterfaceInitializers
+    moduleStack.lastOption.foreach: owner =>
+      globalInterfaceInitializers = (owner -> activeValueRegion) :: previous
+    try initializer()
+    finally globalInterfaceInitializers = previous
+
+  def interfaceDefinitionContext(): Option[InterfaceDefinitionContext] =
+    if globalInterfaceInitializers.exists((owner, region) =>
+        moduleStack.lastOption.exists(_ eq owner) && region == activeValueRegion
+      )
+    then None
+    else captureInterfaceDefinitionContext()
+
+  private def captureInterfaceDefinitionContext(): Option[InterfaceDefinitionContext] =
+    activeValueRegion.filter(region =>
+      requireDeferredValueScope(Some(region), currentModule.handle).forall(value =>
+        value.structuralArm.nonEmpty || value.loop.exists(_.generated.nonEmpty)
+      )
+    ).map: region =>
+      if region.assignmentCount >= 4098 then
+        collectionFailure("regional Interface construction exceeds the 4098 operation budget")
+      val ordinal = region.assignmentCount
+      region.assignmentCount += 1
+      InterfaceDefinitionContext(
+        currentModule,
+        region,
+        ordinal,
+        semanticOrigin.captureSemanticSource()
+      )
+
+  private def requireInterfaceDefinitionContext(definition: InterfaceType[?], owner: Long)
+      : Option[InterfaceDefinitionContext] =
+    definition.constructionContext.map: context =>
+      if !records.get(
+          owner
+        ).exists(_ eq context.owner) || context.region.reference.module != owner ||
+        !requireDeferredValueScope(Some(context.region), owner).forall(value =>
+          value.structuralArm.nonEmpty || value.loop.exists(_.generated.nonEmpty)
+        ) ||
+        context.sourceOrdinal < 0 || context.sourceOrdinal >= context.region.assignmentCount
+      then
+        fail("NODAL-INTERFACE-058-SCOPE", "Interface definition lost its actual construction owner")
+      context
+
+  private def withInterfaceDefinitionScope[A](
+      definition: InterfaceType[?],
+      owner: Long
+  )(body: => A): A =
+    val context = requireInterfaceDefinitionContext(definition, owner)
+    inValueScope(owner, context.map(_.region))(body)
+
+  private def inValueScope[A](owner: Long, scope: Option[DigitalValueRegionRecord])(body: => A): A =
+    val previousModules = moduleStack.toVector
+    val previousRegions = collectionStack.toVector
+    val previousGeneration = generationStack.toVector
+    installValueScope(owner, scope)
+    try body
+    finally
+      moduleStack.clear(); moduleStack ++= previousModules
+      collectionStack.clear(); collectionStack ++= previousRegions
+      generationStack.clear(); generationStack ++= previousGeneration
+
+  private def interfaceActualType(reference: DeclarationRef, formal: DataType[?]): DataType[?] =
+    instanceInterfaceTypes.get(reference).map(_.getOrElse(
+      CandidateRuntime.typeDescriptor(formal),
+      fail("NODAL-HIERARCHY-058-INTERFACE", "projected Interface member type was not finalized")
+    )).getOrElse(formal)
+
+  def instanceInterfacePort[I <: Interface, R <: RoleKind](
+      value: InterfacePort[I, R]
+  ): InterfacePort[I, R] =
+    instanceInterfaceEndpoint(value, KernelSignalKind.InterfacePort)
+      .asInstanceOf[InterfacePort[I, R]]
+
+  def instanceInterfaceArray[I <: Interface, R <: RoleKind](
+      value: InterfaceArray[I, R]
+  ): InterfaceArray[I, R] =
+    instanceInterfaceEndpoint(value, KernelSignalKind.InterfaceArray)
+      .asInstanceOf[InterfaceArray[I, R]]
+
+  private def instanceInterfaceEndpoint(
+      value: InterfaceEndpoint,
+      kind: KernelSignalKind
+  ): InterfaceEndpoint =
+    val selected = instanceSelectionStack.lastOption.getOrElse(
+      fail("NODAL-HIERARCHY-058-INTERFACE", "child Interface requires an exact Instance selector")
+    )
+    val instance = instanceRecord(selected)
+    if selected.generated.isEmpty then requireInstanceScope(instance)
+    val port = Option(declarationIds.get(value)).getOrElse(
+      fail("NODAL-HIERARCHY-058-INTERFACE", "selector requires an actual declared child Interface")
+    )
+    val declaration = records(port.module).declarations(port.index)
+    val view = value match
+      case endpoint: InterfacePort[?, ?] => endpoint.origin.nonEmpty
+      case array: InterfaceArray[?, ?] => array.origin.nonEmpty
+    if port.module != instance.child || declaration.kind != kind || view || value.boundary ||
+      records(port.module).generatedRegions.exists(_.declarations.contains(port))
+    then
+      fail(
+        "NODAL-HIERARCHY-058-INTERFACE",
+        "selector requires its immediate child's direct Interface"
+      )
+    val leaves =
+      ConstructionInterfaceLayout.leaves(value.definition, value.role, charge = closureCharge)
+    val ordinaryConservativeArray =
+      DigitalInterfaceContract.conservativeArrayProfile(value, leaves, closureCharge) &&
+        selected.generated.isEmpty && instance.generatedScope.isEmpty &&
+        activeGeneratedRegion.isEmpty && activeValueRegion.isEmpty && activeArea.isEmpty &&
+        valueRegion(port).isEmpty &&
+        !areas.exists(area => area.declarations.contains(port) || area.instances.exists(_ eq instance)) &&
+        (value match
+          case array: InterfaceArray[?, ?] => array.exported
+          case _ => false)
+    val generatedConservative =
+      selected.generated.isEmpty && kind == KernelSignalKind.InterfacePort &&
+        activeGeneratedRegion.exists(generated =>
+          generated.areaFamily &&
+            (nestedConservativeFamily(generated) ||
+              (generated.parentOrdinal.isEmpty && activeValueRegion.forall(_.parent.isEmpty))) &&
+            generated.digitalRegion == activeValueRegion && instance.generatedScope.contains(
+              generated
+            )
+        ) &&
+        leaves.nonEmpty && leaves.forall(leaf =>
+          leaf.protocol == "conservative" && leaf.mode.isEmpty &&
+            leaf.analogType.nonEmpty && leaf.dataType.isEmpty &&
+            (activeGeneratedRegion.forall(_.parentOrdinal.isEmpty) || leaf.access == "connect")
+        )
+    val binding =
+      InterfaceBoundaryRecord(Some(instance), port, selected.generated, activeValueRegion)
+    val selectedConservative = selected.generated.nonEmpty && leaves.exists(_.analogType.nonEmpty)
+    val symbolicExtent =
+      if selectedConservative then requireSelectedConservativeChild(binding) else None
+    if leaves.exists(leaf =>
+        (((selected.generated.nonEmpty && !selectedConservative) || instance.generatedScope.nonEmpty && !generatedConservative && !selectedConservative) &&
+          (leaf.analogType.nonEmpty || leaf.mode.nonEmpty)) ||
+          (leaf.analogType.nonEmpty && (leaf.protocol != "conservative" ||
+            kind == KernelSignalKind.InterfaceArray && !ordinaryConservativeArray)) || leaf.dataType.exists(
+            isBoundaryCapability
+          )
+      )
+    then
+      fail(
+        "NODAL-HIERARCHY-058-INTERFACE",
+        "child Interface requires digital/resolved leaves or scalar conservative components"
+      )
+    val projection = projectInterfaceEndpoint(
+      value,
+      kind,
+      binding
+    )
+    // Only a successfully admitted boundary adapts the symbolic family into conservative shape.
+    symbolicExtent.foreach(markStructuralParameterEffect(_, "shape"))
+    projection
+
+  private def projectInterfaceEndpoint(
+      value: InterfaceEndpoint,
+      kind: KernelSignalKind,
+      binding: InterfaceBoundaryRecord
+  ): InterfaceEndpoint =
+    val port = binding.port
+    instanceInterfacePorts.iterator.collectFirst:
+      case (reference, existing) if existing == binding =>
+        records(
+          reference.module
+        ).declarations(reference.index).value.asInstanceOf[InterfaceEndpoint]
+    .getOrElse:
+      val base =
+        binding.instance.map(instance => s"instance_${instance.ordinal}_interface_${port.index}")
+          .getOrElse(s"generated_interface_${port.index}")
+      val name = if binding.generated.isEmpty then base
+      else s"${base}_selected_${currentModule.declarations.size}"
+      val proxy = value match
+        case array: InterfaceArray[?, ?] =>
+          new InterfaceArray(
+            array.definition,
+            array.role,
+            array.formalCount,
+            name,
+            array.domainOption,
+            exported = false,
+            boundary = true
+          )
+        case endpoint: InterfacePort[?, ?] =>
+          new InterfacePort(
+            endpoint.definition,
+            endpoint.role,
+            name,
+            endpoint.domain,
+            exported = false,
+            boundary = true
+          )
+      registerDeclaration(
+        proxy,
+        kind,
+        None,
+        Some(name),
+        None,
+        Vector("interface" -> value.definition.name, "role" -> value.role.name),
+        interfaceBoundary = Some(binding)
+      )
+      val reference = declarationIds.get(proxy)
+      val owner = records(reference.module)
+      owner.declarations.update(
+        reference.index,
+        owner.declarations(reference.index).copy(domainCandidate = None)
+      )
+      instanceInterfacePorts(reference) = binding
+      proxy
+
+  private def interfaceDimensions(declaration: DeclarationRecord): Vector[Dimension] =
+    declaration.value match
+      case array: InterfaceArray[?, ?] =>
+        if array.boundary then
+          instanceInterfaceDimensions.getOrElse(
+            declaration.reference,
+            fail(
+              "NODAL-HIERARCHY-058-INTERFACE",
+              "projected InterfaceArray dimensions remain unresolved"
+            )
+          )
+        else Vector(array.formalCount)
+      case _ => Vector.empty
+
+  private def instanceInterfaceDomain(reference: DeclarationRef): Option[DomainRef] =
+    instanceInterfacePorts.get(reference).flatMap: binding =>
+      val port = binding.port
+      val original = records(port.module).declarations(port.index)
+      val domain = declarationCandidate(original).map(domainRef)
+      if externalInterfaceOrigin(reference).nonEmpty then None
+      else if binding.instance.isEmpty then domain
+      else
+        val required = domain.getOrElse(
+          fail(
+            "NODAL-HIERARCHY-058-INTERFACE",
+            "child Interface has no declared domain requirement"
+          )
+        )
+        Some(selectedRequirementBindings.get(required).map(_._1).getOrElse(
+          fail(
+            "NODAL-HIERARCHY-058-INTERFACE",
+            "child Interface needs an actual instance domain binding"
+          )
+        ))
+
+  private def interfaceBoundarySnapshot(owner: Long, binding: InterfaceBoundaryRecord)
+      : KernelInterfaceBoundarySnapshot =
+    KernelInterfaceBoundarySnapshot(
+      binding.instance.map(instance => instancePath(owner, instance.ordinal)),
+      declarationPath(binding.port),
+      binding.generated.map(generatedSymbolSnapshot(_, binding.scope)),
+      binding.scope.map(region => expressionPath(region.reference))
+    )
+
+  private def instanceDigitalPortBody[A <: Data](value: Signal[A]): Signal[A] =
     val selected = instanceSelectionStack.lastOption.getOrElse(
       fail("NODAL-HIERARCHY-057-001", "digital child reference requires an exact Instance selector")
     )
     val instance = instanceRecord(selected)
-    requireInstanceScope(instance)
+    if selected.generated.isEmpty then requireInstanceScope(instance)
     val port = Option(declarationIds.get(value)).getOrElse(
       fail("NODAL-HIERARCHY-057-001", "instance selector requires an actual child port")
     )
@@ -4368,34 +8237,864 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     if port.module != instance.child ||
       !Set(KernelSignalKind.Input, KernelSignalKind.Output)(declaration.kind) ||
       !isClockedDigitalType(value.dataType) || isBoundaryCapability(value.dataType) ||
-      activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty
+      (selected.generated.isEmpty && (activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty) &&
+        !activeGeneratedRegion.exists(_.areaFamily))
     then
       fail(
         "NODAL-HIERARCHY-057-001",
         "instance selector requires its immediate child's direct digital data port"
       )
+    if activeGeneratedRegion.nonEmpty then
+      requireAreaFamilyScope("Instance digital port selection", requireBody = true)
     instanceDigitalPorts.iterator.collectFirst:
-      case (reference, (existing, target)) if (existing eq instance) && target == port =>
+      case (reference, binding)
+          if (binding.instance eq instance) && binding.port == port &&
+            binding.generated == selected.generated && binding.scope == activeValueRegion =>
         records(reference.module).declarations(reference.index).value.asInstanceOf[Signal[A]]
     .getOrElse:
       val kind = if declaration.kind == KernelSignalKind.Input then KernelSignalKind.InstanceInput
       else KernelSignalKind.InstanceOutput
-      val proxy =
-        new Signal(value.dataType, kind, Some(s"instance_${instance.ordinal}_port_${port.index}"))
+      val proxy = new Signal(
+        preparedDirectPortType(value.dataType),
+        kind,
+        Some(s"instance_${instance.ordinal}_port_${port.index}" +
+          selected.generated.map(_ => s"_selected_${currentModule.declarations.size}").getOrElse(
+            ""
+          ))
+      )
+      val reference = completeDirectPortRegistration(proxy)
+      val owner = records(reference.module)
+      owner.declarations.update(
+        reference.index,
+        owner.declarations(reference.index).copy(domainCandidate = None)
+      )
+      instanceDigitalPorts(reference) =
+        InstancePortBoundaryRecord(instance, port, selected.generated, activeValueRegion)
+      proxy
+
+  def instanceDigitalInout[A <: Bits, M <: DriveMode](value: DigitalInout[A, M])
+      : DigitalInout[A, M] =
+    val selected = instanceSelectionStack.lastOption.getOrElse(
+      fail("NODAL-HIERARCHY-058-INOUT", "child resolved net requires an exact Instance selector")
+    )
+    val instance = instanceRecord(selected)
+    requireInstanceScope(instance)
+    val port = Option(declarationIds.get(value)).getOrElse(
+      fail("NODAL-HIERARCHY-058-INOUT", "selector requires an actual declared child resolved net")
+    )
+    val declaration = records(port.module).declarations(port.index)
+    if port.module != instance.child || declaration.kind != KernelSignalKind.DigitalInout ||
+      value.boundary || activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty
+    then
+      fail(
+        "NODAL-HIERARCHY-058-INOUT",
+        "selector requires its immediate child's direct resolved net"
+      )
+    instanceDigitalInouts.iterator.collectFirst:
+      case (reference, (existing, target)) if (existing eq instance) && target == port =>
+        records(reference.module).declarations(reference.index).value.asInstanceOf[DigitalInout[
+          A,
+          M
+        ]]
+    .getOrElse:
+      val name = s"instance_${instance.ordinal}_net_${port.index}"
+      val proxy = new DigitalInout(
+        new KernelInstanceDataType[A](CandidateRuntime.typeDescriptor(value.dataType)),
+        value.mode,
+        value.placement,
+        value.profile,
+        name,
+        boundary = true
+      )
+      registerDeclaration(
+        proxy,
+        KernelSignalKind.DigitalInout,
+        Some(proxy.dataType),
+        Some(name),
+        None,
+        Vector(
+          "mode" -> value.mode.name,
+          "placement" -> value.placement,
+          "profile" -> value.profile
+        )
+      )
       val reference = declarationIds.get(proxy)
       val owner = records(reference.module)
       owner.declarations.update(
         reference.index,
         owner.declarations(reference.index).copy(domainCandidate = None)
       )
-      instanceDigitalPorts(reference) = instance -> port
+      instanceDigitalInouts(reference) = instance -> port
       proxy
+
+  def withGeneratedInstanceSelection[A](view: GeneratedInstanceRef[?])(body: => A): A =
+    validateGeneratedInstanceSelection(view)
+    requireAreaFamilyScope("generated Instance selection", requireBody = false)
+    val value = view.selection.reference
+    val root =
+      value.family.selectionPrefix.headOption.map(_.family).getOrElse(value.family.generatedRegion)
+    val _ = bindGeneratedFamily(root, activeValueRegion)
+    (value.family.selectionPrefix.map(_.ordinal) :+ value.ordinal).foreach:
+      case ordinal: Expr[Integer] =>
+        val _ = bindCollectionValue(ordinal, activeValueRegion, currentModule.handle)
+      case _: Int => ()
+    instanceSelectionStack += InstanceSelectionRecord(view.instance, Some(view.selection))
+    try
+      val result = body
+      val reference = result match
+        case value: InterfaceValueRef[?] =>
+          Option(declarationIds.get(checkedInterfaceValueReference(value).endpoint))
+        case value: AnyRef => Option(declarationIds.get(value))
+        case _ => None
+      if !reference.exists(reference =>
+          instanceDigitalPorts.get(reference).exists(binding =>
+            binding.generated.contains(view.selection) && binding.scope == activeValueRegion
+          ) ||
+            instanceInterfacePorts.get(reference).exists(binding =>
+              binding.generated.contains(view.selection) && binding.scope == activeValueRegion
+            )
+        )
+      then
+        fail("NODAL-AREA-058-CAPABILITY", "selected Instance requires its exact typed direct port")
+      result
+    finally instanceSelectionStack.remove(instanceSelectionStack.size - 1)
 
   def withInstanceSelection[A](instance: Instance[?])(body: => A): A =
     requireInstanceScope(instanceRecord(instance))
-    instanceSelectionStack += instance
+    instanceSelectionStack += InstanceSelectionRecord(instance)
     try body
     finally instanceSelectionStack.remove(instanceSelectionStack.size - 1)
+
+  /** Derived query-local contexts over the immutable pre-finalization snapshot. These do not
+    * allocate occurrences or change the original template's formal bindings.
+    */
+  private final class InstanceTypeContext(
+      snapshot: ConstructionSnapshot,
+      queries: StructuralParameterBinding.InstanceQueries
+  ):
+    closureCharge(snapshot.generatedRegions.size.toLong + snapshot.structuralIfs.size.toLong * 3L +
+      snapshot.staticPredicates.size.toLong)
+    private val root = new StructuralParameterBinding.Query(snapshot, meter = closureMeter)
+    private val families = snapshot.generatedRegions.map(value => value.path -> value).toMap
+    private val arms = snapshot.structuralIfs.flatMap(value =>
+      Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value, arm))
+    ).toMap
+    private val predicates = snapshot.staticPredicates.map(value => value.path -> value).toMap
+    private val cache = mutable.HashMap.empty[String, StructuralParameterBinding.Query]
+    private val active = mutable.HashSet.empty[String]
+    private def lexical(scope: Option[String]): StructuralParameterBinding.Query =
+      closureCharge(1L)
+      scope.map: path =>
+        cache.getOrElseUpdate(
+          path, {
+            if active.size >= 128 || !active.add(path) then
+              fail("NODAL-HIERARCHY-058-TYPE", "instance type context is cyclic or exceeds depth")
+            try
+              families.get(path) match
+                case Some(family) => lexical(family.lexicalParent).generatedBody(family)
+                case None =>
+                  val (conditional, arm) = arms.getOrElse(
+                    path,
+                    fail(
+                      "NODAL-HIERARCHY-058-TYPE",
+                      "instance type context requires an actual structural owner"
+                    )
+                  )
+                  lexical(conditional.parentRegion).conditionalArm(conditional.parentRegion, arm)
+            finally active.remove(path)
+          }
+        )
+      .getOrElse(root)
+
+    def query(owner: Long, binding: InstancePortBoundaryRecord): StructuralParameterBinding.Query =
+      query(owner, binding.instance, binding.generated, binding.scope)
+
+    def query(
+        owner: Long,
+        instance: InstanceRecord,
+        generated: Option[GeneratedSymbolSelectionRecord],
+        scope: Option[DigitalValueRegionRecord]
+    )
+        : StructuralParameterBinding.Query =
+      val ownerPath = modulePath(owner)
+      val occurrence = instancePath(owner, instance.ordinal)
+      instance.generatedScope match
+        case None => queries.query(ownerPath, occurrence)
+        case Some(familyScope) =>
+          val body = lexical(Some(generatedRegionPath(familyScope)))
+          generated match
+            case None => queries.generated(ownerPath, occurrence, body)
+            case Some(selection) =>
+              queries.selected(ownerPath, occurrence, selected(owner, selection, scope), body)
+
+    def lexicalQuery(path: String): StructuralParameterBinding.Query = lexical(Some(path))
+
+    def definitionQuery(
+        owner: Long,
+        definition: InterfaceType[?]
+    ): StructuralParameterBinding.Query =
+      lexical(requireInterfaceDefinitionContext(definition, owner).map(value =>
+        expressionPath(value.region.reference)
+      ))
+
+    def selected(
+        owner: Long,
+        selection: GeneratedSymbolSelectionRecord,
+        scope: Option[DigitalValueRegionRecord]
+    ): StructuralParameterBinding.SelectedGeneratedContext =
+      selected(owner, generatedSymbolSnapshot(selection, scope), scope)
+
+    def selected(
+        owner: Long,
+        member: KernelGeneratedMemberSnapshot,
+        scope: Option[DigitalValueRegionRecord]
+    ): StructuralParameterBinding.SelectedGeneratedContext =
+      val ownerPath = modulePath(owner)
+      val use = scope.map(value => expressionPath(value.reference))
+      val context = lexical(use).selectedGenerated(ownerPath)
+      val query = context.query
+      val proof = new StructuralPredicateOrdering.Query[String, Int](
+        path =>
+          val predicate = predicates.getOrElse(
+            path,
+            fail("NODAL-HIERARCHY-058-TYPE", "selected type predicate is absent")
+          )
+          if Set("eq", "ne", "lt", "le", "gt", "ge")(predicate.operation) then
+            val original = lexical(predicate.region)
+            val values = context.importValues(
+              original,
+              predicate.operands.map(original.resolve(ownerPath, _))
+            )
+            StructuralPredicateOrdering.Compare(predicate.operation, values(0), values(1))
+          else StructuralPredicateOrdering.Logic(predicate.operation, predicate.operands)
+        ,
+        query.bounds,
+        _ == _
+      )
+      def prove(left: Int, right: Int, inclusive: Boolean): Boolean =
+        if proof.less(left, right, inclusive) then true
+        else
+          var current = use
+          val visited = mutable.HashSet.empty[String]
+          var result = false
+          while current.nonEmpty && !result do
+            closureCharge(1L)
+            val path = current.get
+            if visited.size >= 128 || !visited.add(path) then
+              fail(
+                "NODAL-HIERARCHY-058-TYPE",
+                "selected type guard ancestry is cyclic or excessive"
+              )
+            arms.get(path).foreach: (conditional, arm) =>
+              result = proof.under(
+                conditional.predicate,
+                arm.path == conditional.falseArm.path,
+                left,
+                right,
+                inclusive
+              )
+            current = families.get(path).flatMap(_.lexicalParent)
+              .orElse(arms.get(path).flatMap(_._1.parentRegion))
+          result
+      (member.selectionPrefix.map(value => value.family -> value.ordinal) :+
+        (member.family -> member.ordinal)).foreach: (path, ordinal) =>
+        val family = families.getOrElse(
+          path,
+          fail("NODAL-HIERARCHY-058-TYPE", "selected type family is absent")
+        )
+        context.admit(family, ordinal, lexical(family.lexicalParent), prove)
+      context
+
+  // Both digital ports and complete Interface payloads use this one contextual transform.
+  // The batch shares a reachable-DAG export and one bounded recursive type budget.
+  private def materializeInstanceTypeDescriptors(
+      parent: Long,
+      instance: InstanceRecord,
+      port: DeclarationRef,
+      formals: Vector[KernelTypeDescriptor],
+      queries: StructuralParameterBinding.InstanceQueries,
+      checkedQuery: Option[StructuralParameterBinding.Query] = None
+  ): Vector[KernelTypeDescriptor] =
+    val owner = modulePath(parent)
+    val occurrencePath = instancePath(parent, instance.ordinal)
+    val (_, occurrence, _) = queries.declaration(owner, occurrencePath, declarationPath(port))
+    val query = checkedQuery.getOrElse(queries.query(owner, occurrencePath))
+    materializeTypeDescriptors(
+      parent,
+      formals,
+      (_, value) =>
+        val id = query.resolve(occurrence.childModule, renderShapeDimension(value, port.module))
+        query.positive(id)
+        id
+      ,
+      values => query.exportDimensions(owner, values)
+    )
+
+  private def materializeTypeDescriptors(
+      parent: Long,
+      formals: Vector[KernelTypeDescriptor],
+      resolveDimension: (KernelTypeDescriptor, Any) => Int,
+      exportDimensions: Vector[Int] => StructuralParameterBinding.ResolvedDimensions
+  ): Vector[KernelTypeDescriptor] =
+    val dimensions = mutable.ArrayBuffer.empty[Int]
+    var examined = 0
+    def transform(
+        descriptor: KernelTypeDescriptor,
+        dimension: Any => Dimension,
+        depth: Int
+    ): KernelTypeDescriptor =
+      closureCharge(1L)
+      examined += 1
+      if depth > 128 || examined > 65536 then
+        fail("NODAL-HIERARCHY-057-001", "instance digital type exceeds structural budget")
+      descriptor.kind match
+        case "Bits" | "UInt" | "SInt" =>
+          if descriptor.arguments.size != 1 then
+            fail("NODAL-HIERARCHY-057-001", "instance scalar width is malformed")
+          descriptor.copy(arguments = Vector(dimension(descriptor.arguments.head)))
+        case "Vec" => descriptor.arguments match
+            case Vector(element: DataType[?], counts: Seq[?]) =>
+              descriptor.copy(arguments =
+                Vector(
+                  CandidateRuntime.dataTypeFromDescriptor(
+                    transform(CandidateRuntime.typeDescriptor(element), dimension, depth + 1)
+                  ),
+                  closureElements(counts).map(dimension).toVector
+                )
+              )
+            case _ => fail("NODAL-HIERARCHY-057-001", "instance vector type is malformed")
+        case "Struct" => descriptor.arguments match
+            case Vector(name: String, fields: Seq[?]) =>
+              descriptor.copy(arguments =
+                Vector(
+                  name,
+                  closureElements(fields).map:
+                    case field: StructField[?] => StructField(
+                        field.name,
+                        CandidateRuntime.dataTypeFromDescriptor(
+                          transform(
+                            CandidateRuntime.typeDescriptor(field.dataType),
+                            dimension,
+                            depth + 1
+                          )
+                        )
+                      )
+                    case _ =>
+                      fail("NODAL-HIERARCHY-057-001", "instance struct field is malformed")
+                  .toVector
+                )
+              )
+            case _ => fail("NODAL-HIERARCHY-057-001", "instance struct type is malformed")
+        case _ => descriptor
+    closureElements(formals).foreach: formal =>
+      val _ = transform(
+        formal,
+        value =>
+          closureCharge(1L)
+          dimensions += resolveDimension(formal, value)
+          1
+        ,
+        0
+      )
+    val previousModules = moduleStack.toVector
+    moduleStack.clear()
+    moduleStack += records(parent)
+    try
+      val actual = materializeStructuralDimensions(
+        exportDimensions(closureElements(dimensions).toVector)
+      ).iterator
+      examined = 0
+      closureElements(formals).map(formal =>
+        transform(
+          formal,
+          _ => {
+            closureCharge(1L)
+            actual.next()
+          },
+          0
+        )
+      ).toVector
+    finally
+      moduleStack.clear()
+      moduleStack ++= previousModules
+
+  private def deferredValueScopeChain(
+      scope: Option[DigitalValueRegionRecord],
+      owner: Long,
+      ordinaryPayload: Boolean
+  ): Vector[DigitalValueRegionRecord] =
+    val chain = mutable.ArrayBuffer.empty[DigitalValueRegionRecord]
+    var current = scope
+    while current.nonEmpty do
+      val region = current.get
+      val ordinary = ordinaryPayload && DigitalCollectionContract.OrdinaryKinds(region.kind) &&
+        collectionRegions.get(region.reference).contains(region) &&
+        region.regionKind == DigitalRegionKind.Collection &&
+        region.inputs.size == (if region.kind == "zip_with" then 2 else 1) &&
+        region.seed.nonEmpty == Set("fold_left", "scan_left")(region.kind)
+      val reduction = ordinaryPayload && DigitalReductionContract.Kinds(region.kind) &&
+        collectionRegions.get(region.reference).contains(region) && {
+          val _ = reductionSignature(region, complete = false)
+          true
+        }
+      if chain.size >= 128 || chain.contains(region) || region.reference.module != owner ||
+        !(ordinary || reduction || region.behavioralArm.nonEmpty || region.structuralArm.nonEmpty ||
+          region.loop.exists(_.generated.nonEmpty))
+      then
+        val message = if ordinaryPayload then
+          "deferred payload requires an actual registered ordinary collection or structural region"
+        else "deferred value requires actual structural or behavioral lexical ancestry"
+        fail("NODAL-HIERARCHY-058-TYPE", message)
+      chain += region
+      current = region.parent
+    chain.reverse.toVector
+
+  private def requireDeferredValueScope(scope: Option[DigitalValueRegionRecord], owner: Long)
+      : Vector[DigitalValueRegionRecord] =
+    deferredValueScopeChain(scope, owner, ordinaryPayload = false)
+
+  /** Only actual registered ordinary collections extend the deferred Data lifecycle. Formal and
+    * seed obligations retain their exact operand roles; callback effects remain unchanged.
+    */
+  private def requireDeferredPayloadScope(scope: Option[DigitalValueRegionRecord], owner: Long)
+      : Vector[DigitalValueRegionRecord] =
+    deferredValueScopeChain(scope, owner, ordinaryPayload = true)
+
+  private def installValueScopeChain(owner: Long, chain: Vector[DigitalValueRegionRecord]): Unit =
+    moduleStack.clear(); moduleStack += records(owner)
+    collectionStack.clear(); collectionStack ++= chain
+    generationStack.clear(); generationStack ++= chain.flatMap(_.loop.flatMap(_.generated))
+
+  private def installValueScope(owner: Long, scope: Option[DigitalValueRegionRecord]): Unit =
+    installValueScopeChain(owner, requireDeferredValueScope(scope, owner))
+
+  private def requirePhysicalControlCapture(
+      dataType: DataType[?],
+      region: DigitalValueRegionRecord
+  ): Unit =
+    val descriptor = CandidateRuntime.typeDescriptor(dataType)
+    if !(descriptor == KernelTypeDescriptor("Clock") || descriptor == KernelTypeDescriptor(
+        "Reset"
+      )) ||
+      !requireDeferredValueScope(Some(region), region.reference.module).forall(scope =>
+        scope.structuralArm.nonEmpty || scope.loop.exists(_.generated.exists(_.areaFamily))
+      )
+    then collectionFailure("physical controls require exact scalar structural capture ancestry")
+
+  private def actualDomainControls(
+      actual: DomainRecord,
+      physical: DomainRecord
+  ): (Option[Expr[Clock]], Option[Expr[Reset]]) =
+    boundDomainCharge()
+    val reset = Option(effectiveResets.get(physical.domain)).map: value =>
+      boundDomainCharge()
+      if actual.kind == KernelDomainKind.Required then actual.domain.reset else value
+    actual.domain.clock -> reset
+
+  /** Final bindings, not eager binding calls, own the physical edges through isolated arms. */
+  private def materializeInstanceControlCaptures(resolved: Map[DomainRef, String]): Unit =
+    val byPath = records.valuesIterator.flatMap(module =>
+      boundDomainCharge(1L + module.domains.size.toLong)
+      module.domains
+    ).map(domain =>
+      boundDomainCharge()
+      domainPath(domain.reference) -> domain
+    ).toMap
+    // Prepay copies plus restoration: exact profile cannot mutate these stacks.
+    boundDomainCharge(
+      3L * (moduleStack.size.toLong + collectionStack.size.toLong + generationStack.size.toLong)
+    )
+    val previousModules = moduleStack.toVector
+    val previousRegions = collectionStack.toVector
+    val previousGeneration = generationStack.toVector
+    try
+      records.valuesIterator.foreach: module =>
+        boundDomainCharge()
+        module.instances.foreach: instance =>
+          boundDomainCharge()
+          instance.generatedScope.foreach: family =>
+            val scope = family.digitalRegion.getOrElse(
+              collectionFailure("generated instance has no actual digital family body")
+            )
+            installValueScope(module.handle, Some(scope))
+            records(instance.child).domains.filter(_.kind == KernelDomainKind.Required).foreach:
+              requirement =>
+                val (actualRef, _, owner, ordinal) =
+                  selectedRequirementBindings(requirement.reference)
+                if owner != module.handle || ordinal != instance.ordinal then
+                  collectionFailure("physical binding lost its actual instance owner")
+                val actual = records(actualRef.module).domains(actualRef.index)
+                val (clock, reset) = actualDomainControls(actual, byPath(resolved(actualRef)))
+                (clock.toVector ++ reset.toVector).foreach: value =>
+                  val _ = bindCollectionValue(
+                    value,
+                    Some(scope),
+                    module.handle,
+                    physicalControl = true
+                  )
+    finally
+      moduleStack.clear(); moduleStack ++= previousModules
+      collectionStack.clear(); collectionStack ++= previousRegions
+      generationStack.clear(); generationStack ++= previousGeneration
+
+  /** Seal the existing captured DAG once, including exact capture-edge type-copy intents. */
+  private def materializeDeferredResultTypes(): Unit =
+    val incrementalOwner = boundaryClosureOwner.filter(_.incremental)
+    val state = incrementalOwner.map(_.typeState).getOrElse(
+      new java.util.IdentityHashMap[KernelExpr[?], java.lang.Integer]()
+    )
+    var work = incrementalOwner.map(_.typeWork).getOrElse(0)
+    val previousModules = moduleStack.toVector
+    val previousRegions = collectionStack.toVector
+    val previousGeneration = generationStack.toVector
+    def visit(expression: KernelExpr[?], depth: Int): Unit =
+      closureCharge(1L)
+      if depth > 128 then fail("NODAL-HIERARCHY-058-TYPE", "deferred result type graph is too deep")
+      if !constructionPayloadAvailable(expression) then return
+      val reference = Option.when(expression.typeIntent.nonEmpty &&
+        !Option(state.get(expression)).contains(2))(Option(expressionIds.get(expression))).flatten
+      val chain = reference.toVector.flatMap(ref =>
+        deferredValueScopeChain(expressionRegions.get(ref), ref.module, ordinaryPayload = true)
+      )
+      chain.find(region => DigitalReductionContract.Kinds(region.kind)) match
+        case Some(region)
+            if expression.typeIntent.nonEmpty && !Option(state.get(expression)).contains(2) =>
+          // Validate the original result edges before descendant inference appends checked
+          // Integer type captures. The registered result owns the entire once-only transfer.
+          region.result.collect {
+            case result: KernelExpr[?]
+                if result.typeIntent.nonEmpty &&
+                  !Option(state.get(result)).exists(value => value == 1 || value == 2) => result
+          }
+            .foreach(visit(_, depth + 1))
+          region.inputs.foreach:
+            case input: KernelExpr[?] => visit(input, depth + 1)
+            case _ => ()
+          DeferredResultType.requireFinal(region.inputs, "reduction deferred body input")
+          val (left, right) = reductionSignature(region, complete = true)
+          val widths = DigitalReductionContract.widths(
+            CandidateRuntime.typeDescriptor(DigitalCollectionContract.vector(region.inputs.head)._1)
+          )
+          withReductionContext((left.zip(widths) ++ right.zip(widths)).toMap, Map.empty):
+            visitActual(expression, depth)
+        case _ => visitActual(expression, depth)
+    def visitActual(expression: KernelExpr[?], depth: Int): Unit =
+      if depth > 128 || Option(state.get(expression)).contains(1) then
+        fail("NODAL-HIERARCHY-058-TYPE", "deferred result type graph is cyclic or too deep")
+      if !Option(state.get(expression)).contains(2) && expression.typeIntent.nonEmpty then
+        work += 1
+        if work > 65536 then
+          fail("NODAL-HIERARCHY-058-TYPE", "deferred result type graph exceeds its finite budget")
+        val reference = Option(expressionIds.get(expression)).getOrElse(
+          fail("NODAL-HIERARCHY-058-TYPE", "deferred expression has no captured owner")
+        )
+        val scope = expressionRegions.get(reference)
+        val scopeChain = requireDeferredPayloadScope(scope, reference.module)
+        state.put(expression, 1)
+        val intent = expression.typeIntent.get
+        closureCharge(expression.operands.size.toLong + intent.dependencies.size.toLong)
+        work += expression.operands.size + intent.dependencies.size
+        if work > 65536 then
+          fail("NODAL-HIERARCHY-058-TYPE", "deferred result type edges exceed their finite budget")
+        val argumentSource = collectionArguments.get(reference).map: (region, position) =>
+          val source = intent.dependencies match
+            case Vector(value: Expr[?]) => value
+            case _ =>
+              fail("NODAL-HIERARCHY-058-TYPE", "deferred argument requires one exact source value")
+          if !scope.contains(region) || !region.arguments.lift(position)
+              .exists(_._1.eq(expression)) ||
+            !expression.operation.contains(DigitalCollectionContract.Argument) ||
+            expression.operands.nonEmpty
+          then fail("NODAL-HIERARCHY-058-TYPE", "deferred argument lost its registered identity")
+          val role = region.arguments(position)._2
+          if role == "capture" then
+            val edge = region.captures.get(valueReference(source))
+            if !edge.exists((value, argument) => value.eq(source) && argument.eq(expression)) then
+              fail(
+                "NODAL-HIERARCHY-058-TYPE",
+                "deferred capture differs from its exact parent edge"
+              )
+          else if !collectionFormalSource(region, position, role).eq(source) then
+            fail(
+              "NODAL-HIERARCHY-058-TYPE",
+              "deferred formal differs from its actual input or seed"
+            )
+          requireRegisteredCollectionOperand(source, reference.module)
+          if valueRegion(valueReference(source)) != region.parent then
+            fail("NODAL-HIERARCHY-058-TYPE", "deferred argument source has the wrong lexical owner")
+          source
+        val conditional = structuralIfs.get(reference).filter(_.result.exists(_ eq expression))
+        val yields = conditional.toVector.flatMap: record =>
+          val arms = Vector(record.trueArm, record.falseArm)
+          if !expression.operation.contains(
+              StructuralIfRuntime.Operation
+            ) || record.parent != scope ||
+            intent.dependencies.size != 2 || arms.zipWithIndex.exists: (arm, ordinal) =>
+              !structuralArms.get(arm.reference).contains(arm) || arm.parent != scope ||
+                arm.reference.module != reference.module ||
+                !arm.structuralArm.exists(header =>
+                  header.conditional == reference && header.whenTrue == (ordinal == 0)
+                ) ||
+                !arm.yielded.exists(value =>
+                  value.eq(intent.dependencies(ordinal).asInstanceOf[AnyRef]) &&
+                    valueRegion(valueReference(value)).contains(arm)
+                )
+          then
+            fail(
+              "NODAL-HIERARCHY-058-TYPE",
+              "deferred conditional lost its exact authored yield edges"
+            )
+          arms.flatMap(_.yielded)
+        val collection = collectionRegions.get(reference).filter(_.result.exists(_ eq expression))
+        val collectionYields = collection.toVector.flatMap: region =>
+          val expectedOperands =
+            region.inputs ++ region.seed ++ region.captures.valuesIterator.map(_._1).toVector
+          val expectedDependencies = region.inputs ++ region.seed ++
+            (if DigitalReductionContract.Kinds(region.kind) then
+               region.captures.valuesIterator.map(_._1).toVector
+             else Vector.empty) ++ region.yielded
+          if !(DigitalCollectionContract.OrdinaryKinds(
+              region.kind
+            ) || DigitalReductionContract.Kinds(region.kind)) ||
+            !expression.operation.contains(
+              DigitalCollectionContract.Operation
+            ) || region.parent != scope ||
+            region.reference != reference || !region.yielded.exists(value =>
+              valueRegion(
+                valueReference(value)
+              ).contains(region)
+            ) || expectedDependencies.size != intent.dependencies.size ||
+            expectedDependencies.zip(intent.dependencies).exists((left, right) =>
+              !left.eq(right.asInstanceOf[AnyRef])
+            ) ||
+            expectedOperands.size != expression.operands.size ||
+            expectedOperands.zip(expression.operands).exists((left, right) =>
+              !left.asInstanceOf[AnyRef].eq(right.asInstanceOf[AnyRef])
+            )
+          then
+            fail(
+              "NODAL-HIERARCHY-058-TYPE",
+              "deferred collection lost its exact registered inputs, captures or yield"
+            )
+          region.yielded
+        val operands = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+        (expression.operands ++ argumentSource ++ yields ++ collectionYields).foreach(value =>
+          operands.put(value.asInstanceOf[AnyRef], true)
+        )
+        if intent.dependencies.isEmpty || intent.dependencies.exists(dependency =>
+            !operands.containsKey(dependency.asInstanceOf[AnyRef])
+          )
+        then fail("NODAL-HIERARCHY-058-TYPE", "type intent lost its exact operand dependency")
+        val selectedStorage = generatedMemberRecord(expression).map: _ =>
+          val member = inValueScope(reference.module, scope):
+            requireGeneratedMemberTypeRecord(expression, reference, scope)
+          if !member.dataType.finalized then
+            fail("NODAL-AREA-058-TYPE", "selected storage descriptor remains unresolved")
+          member
+        intent.dependencies.foreach: dependency =>
+          if !selectedStorage.exists(_ eq dependency.asInstanceOf[AnyRef]) &&
+            !digitalOwnerOf(dependency).contains(modulePath(reference.module))
+          then
+            fail("NODAL-HIERARCHY-058-TYPE", "type intent operand belongs to another module")
+          dependency match
+            case value: KernelExpr[?] => visit(value, depth + 1)
+            case _ => ()
+          if argumentSource.isEmpty && conditional.isEmpty && collection.isEmpty then
+            dependency match
+              case value: Expr[?] =>
+                val local = bindCollectionValue(value, scope, reference.module, create = false)
+                local match
+                  case argument: KernelExpr[?] if !(argument eq value) => visit(argument, depth + 1)
+                  case _ => ()
+              case _ => ()
+        collection.foreach: region =>
+          region.arguments.foreach((argument, _) => visit(dataArgument(argument), depth + 1))
+          if DigitalReductionContract.Kinds(region.kind) then
+            incrementalOwner match
+              case Some(owner) => owner.descendants(region).foreach(visit(_, depth + 1))
+              case None =>
+                expressionValues.toVector.foreach: (bodyRef, bodyExpression) =>
+                  closureCharge(1L)
+                  var current = expressionRegions.get(bodyRef)
+                  var budget = 0
+                  while current.nonEmpty && !current.contains(region) do
+                    closureCharge(1L)
+                    budget += 1
+                    if budget > 128 then collectionFailure("reduction body ancestry exceeds budget")
+                    current = current.get.parent
+                  if current.contains(region) then visit(bodyExpression, depth + 1)
+        if incrementalOwner.exists(_.hasConstructionWork) then
+          closureCharge(intent.dependencies.size.toLong)
+        if incrementalOwner.exists(
+            _.hasConstructionWork
+          ) && intent.dependencies.exists(DeferredResultType.pending)
+        then
+          state.remove(expression)
+          return
+        DeferredResultType.requireFinal(intent.dependencies, "result type materialization")
+        installValueScopeChain(reference.module, scopeChain)
+        val actual = intent.resolve()
+        if expression.operation.contains("shape_index") && !shapeIndices.contains(reference) then
+          collectionFailure("deferred shape index requires its actual captured projection")
+        shapeIndices.get(reference).foreach: index =>
+          val input = expression.operands.headOption.collect { case value: Expr[?] => value }
+            .getOrElse(collectionFailure("deferred shape index lost its actual input"))
+          if !expression.operation.contains("shape_index") || valueReference(
+              input
+            ) != index.input ||
+            expression.operands.tail != index.indices
+          then
+            collectionFailure("deferred shape index differs from its original input or indices")
+          val (element, dimensions) = DigitalCollectionContract.vector(input)
+          val _ = validateShapeIndexBounds(
+            index.indices,
+            dimensions,
+            reference.module,
+            expressionPath(reference)
+          )
+          val remaining = dimensions.drop(index.indices.size)
+          val expected = if remaining.isEmpty then CandidateRuntime.typeDescriptor(element)
+          else KernelTypeDescriptor("Vec", Vector(element, remaining))
+          if remaining != index.resultDimensions || !DigitalEnumContract.sameType(actual, expected)
+          then
+            collectionFailure(
+              "deferred shape index differs from its final exact geometry or element"
+            )
+        validateShapeType(
+          CandidateRuntime.dataTypeFromDescriptor(actual),
+          reference.module,
+          cardinality = true,
+          storageContext = scope.nonEmpty
+        )
+        bindCollectionType(actual, scope, reference.module)
+        expression.sealResultType(actual)
+        state.put(expression, 2)
+    try
+      expressionValues.valuesIterator.toVector.foreach(visit(_, 0))
+      operations.iterator.filter(operation =>
+        Set("assignment", "value-connect")(operation.kind)
+      ).foreach: operation =>
+        val hadObligation = operation.values.collect { case value: Expr[?] => value }.exists:
+          value =>
+            DeferredResultType.hasTypeObligation(value) || operation.digitalRegion.exists: region =>
+              DeferredResultType.hasTypeObligation(
+                bindCollectionValue(value, Some(region), operation.owner, create = false)
+              )
+        if hadObligation then
+          val defer = incrementalOwner.exists(_.hasConstructionWork) && {
+            closureCharge(operation.values.size.toLong)
+            operation.values.exists(DeferredResultType.pending)
+          }
+          if !defer then
+            installValueScope(operation.owner, operation.digitalRegion)
+            DeferredResultType.requireFinal(operation.values, "assignment type materialization")
+            validateAssignmentTypes(operation.values)
+    finally
+      incrementalOwner.foreach(_.typeWork = work)
+      moduleStack.clear(); moduleStack ++= previousModules
+      collectionStack.clear(); collectionStack ++= previousRegions
+      generationStack.clear(); generationStack ++= previousGeneration
+    if incrementalOwner.isEmpty && expressionValues.valuesIterator.exists(!_.typeFinalized) then
+      fail("NODAL-HIERARCHY-058-TYPE", "unresolved result type cannot leave construction")
+
+  private def materializeGeneratedMemberTypes(
+      queries: StructuralParameterBinding.InstanceQueries,
+      snapshot: ConstructionSnapshot
+  ): Unit =
+    closureCharge(expressionValues.size.toLong)
+    val contexts = new InstanceTypeContext(snapshot, queries)
+    val previousModules = moduleStack.toVector
+    val previousRegions = collectionStack.toVector
+    val previousGeneration = generationStack.toVector
+    try
+      expressionValues.toVector.filter((reference, _) =>
+        closureAccepts("member", reference)
+      ).foreach: (reference, expression) =>
+        generatedMemberRecord(expression).foreach: _ =>
+          val scope = expressionRegions.get(reference)
+          installValueScope(reference.module, scope)
+          val member = requireGeneratedMemberTypeRecord(expression, reference, scope)
+          val selected =
+            contexts.selected(reference.module, generatedMemberSnapshot(expression).get, scope)
+          val original = contexts.lexicalQuery(generatedRegionPath(member.family))
+          val owner = modulePath(reference.module)
+          val actualType = materializeTypeDescriptors(
+            reference.module,
+            Vector(member.dataType.formal),
+            (_, value) =>
+              val id = original.resolve(owner, renderShapeDimension(value, reference.module))
+              original.positive(id)
+              val actual = selected.importValues(original, Vector(id)).head
+              selected.query.positive(actual)
+              actual
+            ,
+            values => selected.query.exportDimensions(owner, values)
+          ).head
+          if member.dataType.finalized then
+            if !DigitalEnumContract.sameType(member.dataType.kernelDescriptor, actualType) then
+              fail("NODAL-AREA-058-TYPE", "eager storage type differs from its checked selection")
+          else member.dataType.seal(actualType)
+          validateShapeType(member.dataType, reference.module, cardinality = true)
+    finally
+      moduleStack.clear(); moduleStack ++= previousModules
+      collectionStack.clear(); collectionStack ++= previousRegions
+      generationStack.clear(); generationStack ++= previousGeneration
+
+  private def materializeInstanceDigitalTypes(
+      queries: StructuralParameterBinding.InstanceQueries,
+      snapshot: ConstructionSnapshot
+  ): Unit =
+    closureCharge(instanceDigitalPorts.size.toLong)
+    val contexts = new InstanceTypeContext(snapshot, queries)
+    val previousModules = moduleStack.toVector
+    val previousRegions = collectionStack.toVector
+    val previousGeneration = generationStack.toVector
+    try
+      instanceDigitalPorts.iterator.filter((reference, _) =>
+        closureAccepts("digital", reference)
+      ).foreach: (reference, boundary) =>
+        installValueScope(reference.module, boundary.scope)
+        val instance = boundary.instance
+        val port = boundary.port
+        val declaration = records(reference.module).declarations(reference.index)
+        val deferred = declaration.dataType.collect { case value: KernelInstanceDataType[?] =>
+          value
+        }.getOrElse(fail("NODAL-HIERARCHY-057-001", "instance port lost its deferred type view"))
+        deferred.seal(materializeInstanceTypeDescriptors(
+          reference.module,
+          instance,
+          port,
+          Vector(deferred.formal),
+          queries,
+          Some(contexts.query(reference.module, boundary))
+        ).head)
+        validateShapeType(deferred, reference.module, cardinality = false)
+    finally
+      moduleStack.clear(); moduleStack ++= previousModules
+      collectionStack.clear(); collectionStack ++= previousRegions
+      generationStack.clear(); generationStack ++= previousGeneration
+
+  private def materializeInstanceDigitalInouts(queries: StructuralParameterBinding.InstanceQueries)
+      : Unit =
+    closureCharge(instanceDigitalInouts.size.toLong)
+    instanceDigitalInouts.iterator.filter((reference, _) =>
+      closureAccepts("inout", reference)
+    ).foreach: (reference, boundary) =>
+      val (instance, port) = boundary
+      val declaration = records(reference.module).declarations(reference.index)
+      val deferred = declaration.dataType.collect { case value: KernelInstanceDataType[?] => value }
+        .getOrElse(fail(
+          "NODAL-HIERARCHY-058-INOUT",
+          "resolved boundary lost its deferred element type"
+        ))
+      deferred.seal(materializeInstanceTypeDescriptors(
+        reference.module,
+        instance,
+        port,
+        Vector(deferred.formal),
+        queries
+      ).head)
+      validateShapeType(deferred, reference.module, cardinality = false)
 
   def nodeArrayUse[D <: Discipline](value: NodeArray[D]): NodeArray[D] =
     Option(declarationIds.get(value)) match
@@ -4419,7 +9118,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             root.value.asInstanceOf[NodeArray[D]]
         }).nextOption().getOrElse(new NodeArray(
           value.discipline,
-          NodeArrayShapeIntent.InstancePort(instance, value)
+          NodeArrayShapeIntent.InstancePort(instance.instance, value)
         ))
       case _ => value
 
@@ -4460,7 +9159,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def nodeArrayInput(array: NodeArray[?])
       : (DeclarationRef | ExpressionRef, DeclarationRef | ExpressionRef) =
     val module = currentModule.handle
-    val input: DeclarationRef | ExpressionRef = Option(declarationIds.get(array))
+    val input = Option[DeclarationRef | ExpressionRef](declarationIds.get(array))
       .orElse(Option(expressionIds.get(array))).getOrElse(
         fail("NODAL-SHAPE-043-006", "node-array reference has no owned captured identity")
       )
@@ -4614,7 +9313,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         value.owner == currentModule.handle && value.induction == reference
       )
         .getOrElse(fail("NODAL-SHAPE-043-006", "generated index escaped its active owning scope"))
-      if expression.resultType != Some(
+      if expression.resultDescriptor != Some(
           KernelTypeDescriptor("Integer")
         ) || expression.operands.nonEmpty
       then
@@ -4823,6 +9522,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     endpoint
 
   private def conservativeEndpointPath(index: ShapeIndexRecord): String =
+    closureCharge(1L)
+    closureCharge(index.indices.size.toLong)
     val indices = index.indices.map:
       case literal: Int => s"literal:$literal"
       case parameter: Param[?] => s"parameter:${declarationPath(declarationIds.get(parameter))}"
@@ -4835,9 +9536,21 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       case _ => fail("NODAL-SHAPE-043-006", "node-array selector lacks canonical identity")
     val suffix =
       index.generatedScope.map(region => s".in(${generatedRegionPath(region)})").getOrElse("")
-    s"${pathOfReference(index.input)}.at(${indices.mkString(",")})$suffix"
+    val input = pathOfReference(index.input)
+    if boundaryWorkActive then
+      indices.foreach(value => closureCharge(1L + value.length.toLong))
+    closureCharge(6L + input.length.toLong + suffix.length.toLong)
+    s"$input.at(${indices.mkString(",")})$suffix"
 
   private def digitalWidthBound(descriptor: KernelTypeDescriptor, owner: Long): StructuralBound =
+    digitalWidthFacts(descriptor, owner).getOrElse(
+      fail("NODAL-DIGITAL-054-001", "empty Generate induction has no attained bound")
+    )
+
+  private def digitalWidthFacts(
+      descriptor: KernelTypeDescriptor,
+      owner: Long
+  ): Option[StructuralBound] =
     if descriptor.arguments.size != 1 then
       fail("NODAL-DIGITAL-054-001", "digital scalar type requires exactly one width")
     val analysis = new StructuralBoundAnalysis(
@@ -4847,16 +9560,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       signed64Literals = true
     )
     val bound = descriptor.arguments.head match
-      case width: Int => analysis(width)
-      case width: Expr[?] => analysis(width.asInstanceOf[Expr[Integer]])
+      case width: Int => analysis.facts(width)
+      case width: Expr[?] => analysis.facts(width.asInstanceOf[Expr[Integer]])
       case _ => fail("NODAL-DIGITAL-054-001", "digital width requires a static Integer expression")
-    if bound.bounds.lower <= 0L then
+    if bound.exists(_.bounds.lower <= 0L) then
       fail(
         "NODAL-DIGITAL-054-001",
         "digital width must be positive for every legal parameter value"
       )
-    bound.parameters.distinct.foreach(markStructuralParameterEffect(_, "width"))
+    analysis.parameterDependencies.foreach(markStructuralParameterEffect(_, "width"))
     bound
+
+  def digitalLiteralWidthFacts(descriptor: KernelTypeDescriptor): Option[(Long, Long)] =
+    digitalWidthFacts(descriptor, currentModule.handle).map: fact =>
+      (fact.bounds.lower, fact.bounds.upper)
 
   def digitalWidthBounds(descriptor: KernelTypeDescriptor): (Long, Long) =
     val bounds = digitalWidthBound(descriptor, currentModule.handle).bounds
@@ -4882,7 +9599,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       cardinality: Boolean,
       storageContext: Boolean = false
   ): Unit =
-    val _ = shapeTypeFootprint(dataType, owner, cardinality, storageContext)
+    val _ = shapeTypeFootprint(dataType, owner, cardinality, storageContext, allowUnattained = true)
 
   private def shapeTypeFootprint(
       dataType: DataType[?],
@@ -4890,11 +9607,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       cardinality: Boolean,
       storageContext: Boolean,
       bitPatternOnly: Boolean = false,
-      fixedBitPattern: Boolean = false
+      fixedBitPattern: Boolean = false,
+      allowUnattained: Boolean = false
   ): Option[BigInt] =
+    // Outer absence is an unsupported type; inner absence is a checked empty template.
+    final case class Footprint(maximumBits: Option[BigInt])
     val active = new java.util.IdentityHashMap[DataType[?], java.lang.Boolean]()
     var remaining = 65536
     def identifier(name: String): Unit =
+      closureCharge(1L + name.length.toLong)
       if name.length > 1024 || !name.matches("[A-Za-z_][A-Za-z0-9_]*") then
         fail("NODAL-DIGITAL-054-004", "Struct and field names require bounded portable identifiers")
     def checkedFootprint(bits: BigInt): BigInt =
@@ -4904,7 +9625,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           "digital type maximum bit footprint exceeds positive signed 64-bit bounds"
         )
       bits
-    def visit(current: DataType[?], depth: Int, field: Boolean): Option[BigInt] =
+    def visit(current: DataType[?], depth: Int, field: Boolean): Option[Footprint] =
+      closureCharge(1L)
       chargeReduction(1)
       remaining -= 1
       if depth > 128 || remaining < 0 || active.containsKey(current) then
@@ -4924,12 +9646,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           )
         descriptor.kind match
           case "Bits" | "UInt" | "SInt" =>
-            val bounds = digitalWidthBound(descriptor, owner).bounds
-            if fixedBitPattern && bounds.lower != bounds.upper then
+            val facts = digitalWidthFacts(descriptor, owner)
+            if fixedBitPattern && facts.forall(value => value.bounds.lower != value.bounds.upper)
+            then
               crossingFailure("consumer requires a fixed whole digital bit pattern")
-            Some(BigInt(bounds.upper))
-          case "Bool" => Some(BigInt(1))
-          case "Integer" | "Real" => if field then Some(BigInt(64)) else None
+            Some(Footprint(facts.map(value => BigInt(value.bounds.upper))))
+          case "Bool" => Some(Footprint(Some(BigInt(1))))
+          case "Integer" | "Real" => if field then Some(Footprint(Some(BigInt(64)))) else None
           case "Struct" =>
             if descriptor.arguments.size != 2 then
               fail(
@@ -4941,84 +9664,111 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               case _ => fail("NODAL-DIGITAL-054-004", "Struct name is missing")
             identifier(name)
             val fields = descriptor.arguments(1) match
-              case values: Seq[?] => values.toVector.map:
+              case values: Seq[?] => closureElements(values).map:
                   case value: StructField[?] => value
                   case _ => fail("NODAL-DIGITAL-054-004", "Struct inventory contains a non-field")
+                .toVector
               case _ => fail("NODAL-DIGITAL-054-004", "Struct field inventory is missing")
-            if fields.isEmpty || fields.size > 65536 || fields.map(
+            // fields is now a Vector: size is O(1). Precharge the one distinct pass;
+            // the preceding name-map pass is charged element by element.
+            closureCharge(fields.size.toLong)
+            if fields.isEmpty || fields.size > 65536 || closureElements(fields).map(
                 _.name
-              ).distinct.size != fields.size
+              ).toVector.distinct.size != fields.size
             then
               fail("NODAL-DIGITAL-054-004", "Struct requires nonempty unique bounded fields")
-            val footprint = fields.foldLeft(BigInt(0)): (total, member) =>
+            val fieldsFacts = closureElements(fields).map: member =>
               identifier(member.name)
-              val bits = visit(member.dataType, depth + 1, field = true).getOrElse(
+              visit(member.dataType, depth + 1, field = true).getOrElse(
                 fail(
                   "NODAL-DIGITAL-054-004",
                   "Struct fields require storable digital scalar or aggregate types"
                 )
               )
-              checkedFootprint(total + bits)
-            Some(footprint)
+            .toVector
+            val maximum = if closureElements(fieldsFacts).forall(_.maximumBits.nonEmpty) then
+              Some(closureElements(fieldsFacts).foldLeft(BigInt(0))((total, member) =>
+                checkedFootprint(total + member.maximumBits.get)
+              ))
+            else None
+            Some(Footprint(maximum))
           case "Vec" =>
-            validateShapeDescriptor(descriptor, owner, cardinality)
+            validateShapeDescriptor(descriptor, owner, cardinality, allowUnattained)
             val element = descriptor.arguments.head.asInstanceOf[DataType[?]]
             val dimensions = descriptor.arguments(1).asInstanceOf[Seq[Dimension]]
             val analysis =
               new StructuralBoundAnalysis(owner, "NODAL-SHAPE-043-001", "Vec dimension")
-            visit(element, depth + 1, field).map: bits =>
-              checkedFootprint(dimensions.foldLeft(bits)((total, dimension) =>
-                val bounds = analysis(dimension).bounds
-                if fixedBitPattern && bounds.lower != bounds.upper then
-                  crossingFailure("consumer requires a fixed whole digital bit pattern")
-                total * BigInt(bounds.upper)
+            val dimensionFacts = closureElements(dimensions).map(analysis.facts).toVector
+            if fixedBitPattern && closureElements(dimensionFacts).exists(_.forall(value =>
+                value.bounds.lower != value.bounds.upper
               ))
+            then crossingFailure("consumer requires a fixed whole digital bit pattern")
+            visit(element, depth + 1, field).map: elementFacts =>
+              val maximum = if closureElements(dimensionFacts).forall(_.nonEmpty) then
+                elementFacts.maximumBits.map(bits =>
+                  checkedFootprint(
+                    closureElements(dimensionFacts).foldLeft(bits)((total, bound) =>
+                      total * BigInt(bound.get.bounds.upper)
+                    )
+                  )
+                )
+              else None
+              Footprint(maximum)
           case "Enum" =>
             descriptor.arguments match
-              case Vector(abi: ResolvedEnumAbi) => Some(BigInt(abi.width))
+              case Vector(abi: ResolvedEnumAbi) => Some(Footprint(Some(BigInt(abi.width))))
               case _ => fail("NODAL-DIGITAL-054-004", "enum type has no resolved ABI")
           case _ => None
       finally active.remove(current)
     val footprint = visit(dataType, 0, field = storageContext)
     if storageContext && footprint.isEmpty then
       fail("NODAL-DIGITAL-054-010", "digital storage requires a directionless storable value type")
-    footprint
+    if !allowUnattained && footprint.exists(_.maximumBits.isEmpty) then
+      fail("NODAL-DIGITAL-054-001", "empty Generate induction has no attained bound")
+    footprint.flatMap(_.maximumBits)
 
   private def validateShapeDescriptor(
       descriptor: KernelTypeDescriptor,
       owner: Long,
-      cardinality: Boolean
+      cardinality: Boolean,
+      allowUnattained: Boolean
   ): Unit =
+    closureCharge(1L)
     val element = descriptor.arguments.headOption.collect:
       case candidate: DataType[?] => candidate
     val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
-      case values: Seq[?] => values.toVector
+      case values: Seq[?] => closureElements(values).toVector
       case _ => Vector.empty
     if element.isEmpty || dimensions.isEmpty then
       fail("NODAL-SHAPE-043-001", "Vec requires an element type and at least one dimension")
 
     val analysis = new StructuralBoundAnalysis(owner, "NODAL-SHAPE-043-001", "Vec dimension")
-    val bounds = dimensions.map: dimension =>
+    val bounds = closureElements(dimensions).map: dimension =>
       val bound = dimension match
-        case value: Int => analysis(value)
-        case value: Param[?] => analysis(value.asInstanceOf[Expr[Integer]])
-        case value: KernelExpr[?] => analysis(value.asInstanceOf[Expr[Integer]])
+        case value: Int => analysis.facts(value)
+        case value: Param[?] => analysis.facts(value.asInstanceOf[Expr[Integer]])
+        case value: KernelExpr[?] => analysis.facts(value.asInstanceOf[Expr[Integer]])
         case _ =>
           fail(
             "NODAL-SHAPE-043-001",
             "Vec dimensions require a positive static Integer expression"
           )
-      if bound.bounds.lower <= 0L then
+      if !allowUnattained && bound.isEmpty then
+        fail("NODAL-SHAPE-043-001", "empty Generate induction has no attained bound")
+      if bound.exists(_.bounds.lower <= 0L) then
         fail(
           "NODAL-SHAPE-043-001",
           "Vec dimension must be positive for every legal parameter setting"
         )
       bound
-    if cardinality &&
-      bounds.foldLeft(BigInt(1))((size, bound) => size * BigInt(bound.bounds.upper)) >
+    .toVector
+    if cardinality && closureElements(bounds).forall(_.nonEmpty) &&
+      closureElements(bounds).flatten.foldLeft(BigInt(1))((size, bound) =>
+        size * BigInt(bound.bounds.upper)
+      ) >
         BigInt(Long.MaxValue)
     then fail("NODAL-SHAPE-043-001", "Vec maximum element count exceeds signed 64-bit bounds")
-    bounds.flatMap(_.parameters).distinct.foreach: reference =>
+    closureElements(analysis.parameterDependencies).foreach: reference =>
       markStructuralParameterEffect(reference, "shape")
       markStructuralParameterEffect(reference, "rank")
 
@@ -5046,7 +9796,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def structuralShapeInput[A <: Data](
       input: Expr[Vec[A]],
       owner: Long,
-      code: String
+      code: String,
+      retainedConstruction: Option[KernelExpr[?]] = None
   ): (DeclarationRef | ExpressionRef, Option[DataType[? <: Data]], String) =
     validateCollectionDependencies(Vector(input))
     activeValueRegion.foreach(region => bindCollectionValue(input, Some(region), owner))
@@ -5074,7 +9825,55 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             CandidateRuntime.proceduralShapeSource(input))
         then
           record.dataType
-        else None
+        else
+          retainedConstruction.map: destination =>
+            closureCharge(12L + records(owner).instances.size.toLong)
+            val destinationReference = Option(expressionIds.get(destination))
+            val exactInput = destination.constructionDependencies match
+              case Vector(value: AnyRef) => value eq input
+              case _ => false
+            if !destination.registeredConstructionOwnedBy(this) ||
+              !destination.constructionFinalized ||
+              !destination.constructionKind.exists(DigitalReductionContract.Kinds) ||
+              destination.constructionCallback.isEmpty || !exactInput ||
+              destination.constructionSourceSlot < 0 ||
+              !destinationReference.exists(ref =>
+                ref.module == owner &&
+                  expressionValues.get(ref).exists(_ eq destination)
+              ) ||
+              (record.value ne input)
+            then fail(code, "selected singleton lost its registered destination or actual input")
+            val boundary = instanceDigitalPorts.getOrElse(
+              declaration,
+              fail(code, "selected singleton requires its canonical digital boundary")
+            )
+            val child = records(boundary.port.module).declarations(boundary.port.index)
+            val expectedKind = child.kind match
+              case KernelSignalKind.Input => KernelSignalKind.InstanceInput
+              case KernelSignalKind.Output => KernelSignalKind.InstanceOutput
+              case _ => fail(code, "selected singleton requires an immediate digital child port")
+            if boundary.generated.nonEmpty || boundary.scope.nonEmpty ||
+              boundary.instance.generatedScope.nonEmpty ||
+              !records(owner).instances.exists(_ eq boundary.instance) ||
+              boundary.port.module != boundary.instance.child || record.kind != expectedKind
+            then fail(code, "selected singleton lost its exact root boundary provenance")
+            val deferred = record.dataType.collect { case value: KernelInstanceDataType[?] =>
+              value
+            }
+              .getOrElse(fail(code, "selected singleton lost its canonical deferred type"))
+            if !deferred.finalized ||
+              !CandidateRuntime.expressionDataType(input).exists(_ eq deferred) ||
+              !child.dataType.exists(value =>
+                DigitalEnumContract.sameType(
+                  deferred.formal,
+                  CandidateRuntime.typeDescriptor(value)
+                )
+              )
+            then fail(code, "selected singleton requires its finalized canonical input type")
+            boundaryClosureOwner.getOrElse(
+              fail(code, "selected singleton requires verified boundary closure")
+            ).requireVerifiedDigital(declaration, boundary)
+            deferred
       case expression: ExpressionRef =>
         val lexical = CandidateRuntime.proceduralShapeSource(input)
         val dimensions = Option.when(lexical)(CandidateRuntime.expressionDataType(input).toVector
@@ -5090,8 +9889,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               case _ => Vector.empty
           ))
           .orElse(shapeViews.get(expression).map(_.dimensions))
-          .orElse(shapeIndices.get(expression).filter(_.resultDimensions.nonEmpty)
-            .map(_.resultDimensions))
+          .orElse(shapeIndices.get(expression).flatMap: index =>
+            if index.resultDimensions.nonEmpty then Some(index.resultDimensions)
+            else
+              expressionValues.get(expression).flatMap(CandidateRuntime.expressionDataType)
+                .map(CandidateRuntime.typeDescriptor).filter(_.kind == "Vec").map(descriptor =>
+                  descriptor.arguments.lift(1).toVector.flatMap:
+                    case values: Seq[?] => values.toVector
+                    case _ => Vector.empty
+                ))
           .getOrElse(
             fail(code, "shape input is not a captured structural shaped result", Some(path))
           )
@@ -5117,13 +9923,27 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       indices: Vector[Dimension]
   ): Unit =
     val module = currentModule
+    val retained = Option(expressionIds.get(expression)).filter(_ =>
+      expression.constructionDependencies.nonEmpty
+    )
+    def captureIndex(): Option[ExpressionRef] = retained match
+      case Some(reference) =>
+        require(expression.constructionFinalized, "shape index construction is not sealed")
+        require(!shapeIndices.contains(reference), "shape index may register only once")
+        captureExpression(expression, retained = Some(reference), completingReserved = true)
+      case None => captureExpression(expression)
     val (inputReference, structuralInput, inputPath) =
-      structuralShapeInput(input, module.handle, "NODAL-SHAPE-043-002")
+      structuralShapeInput(
+        input,
+        module.handle,
+        "NODAL-SHAPE-043-002",
+        retained.flatMap(_ => Option.when(expression.constructionKind.nonEmpty)(expression))
+      )
     structuralInput match
       case None =>
         // Preserve the previously exposed inert expression surface until shaped
         // internal storage has an owned SSA carrier and lowering contract.
-        val _ = captureExpression(expression)
+        val _ = captureIndex()
       case Some(dataType) =>
         val descriptor = Option(CandidateRuntime.typeDescriptor(dataType))
           .filter(_.kind == "Vec")
@@ -5189,7 +10009,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           indices.collect { case value: Expr[?] => value }.foreach(value =>
             bindCollectionValue(value, Some(region), module.handle)
           )
-        val reference = captureExpression(expression).getOrElse(
+        val reference = captureIndex().getOrElse(
           fail("NODAL-SHAPE-043-002", "shape index requires an active Module")
         )
         if !CandidateRuntime.proceduralShapeSource(input) then
@@ -5262,7 +10082,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   ): Vector[ShapeViewFactor] = value match
     case literal: Int if literal > 0 =>
       Vector(ShapeViewFactor(Some(literal.toLong), None, literal.toLong, Vector.empty))
-    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+    case expression: KernelExpr[?]
+        if requireConstructionPayload(
+          expression
+        ) && expression.literal.exists(_.kind == "integer") =>
       val value = expression.literal.flatMap(_.value.toLongOption).filter(_ > 0).getOrElse(
         fail("NODAL-SHAPE-043-003", "fixed shape-view dimensions must be positive", Some(path))
       )
@@ -5529,9 +10352,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       value: AnyRef,
       structuralOperands: Vector[Any] = Vector.empty,
       retained: Option[ExpressionRef] = None,
-      scopeOverride: Option[Option[DigitalValueRegionRecord]] = None
+      scopeOverride: Option[Option[DigitalValueRegionRecord]] = None,
+      completingReserved: Boolean = false
   ): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
+      value match
+        case expression: KernelExpr[?] if expression.typeIntent.isEmpty =>
+          DeferredResultType.requireFinal(expression.operands, "expression construction")
+        case _ => ()
       if activeEventProcess.nonEmpty then
         value match
           case expression: KernelExpr[?] =>
@@ -5550,9 +10378,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 DigitalCollectionContract.Operation,
                 DigitalCollectionContract.Argument
               )(operation) ||
-              (expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+              (expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
                 IterationDomain.staticArithmetic(operation).nonEmpty)
-            if !pure || !expression.resultType.exists(dataType =>
+            if !pure || !expression.resultDescriptor.exists(dataType =>
                 DigitalCombinationalContract.isValueTypeKind(dataType) || dataType.kind == "Integer"
               )
             then eventFailure(s"unsupported hardware expression '$operation' in event process")
@@ -5562,7 +10390,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         case _ => validateFsmObservations(structuralOperands)
       if reductionProofBuilding then
         value match
-          case expression: KernelExpr[?] if expression.resultType.exists(_.kind == "Integer") => ()
+          case expression: KernelExpr[?]
+              if expression.resultDescriptor.exists(_.kind == "Integer") => ()
           case _ =>
             collectionFailure("reduction proof may construct only temporary static expressions")
       val scope = if reductionProofBuilding then None
@@ -5577,10 +10406,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         case expression: KernelExpr[?] => expression.operands
         case _ => structuralOperands)
       val reference = retained.getOrElse:
-        val fresh = ExpressionRef(module.handle, module.expressionCount)
+        val fresh = allocateExpressionReference(module)
         module.expressionCount += 1
         fresh
-      if !reductionProofBuilding then
+      if completingReserved then
+        require(
+          retained.nonEmpty && Option(expressionIds.get(value)) == retained,
+          "completion must retain its original expression identity"
+        )
+      if !reductionProofBuilding && !completingReserved then
         activeValueRegion.foreach: region =>
           if region.expressionCount >= 4098 then
             collectionFailure("collection body exceeds the 4098 expression budget")
@@ -5590,7 +10424,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       value match
         case expression: KernelExpr[?]
             if scope.nonEmpty &&
-              expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+              expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
               !collectionArguments.contains(reference) && loopAffine(expression).exists(value =>
                 scope.exists(_.isLoop) || value._1.loop.get.generated.isEmpty
               ) =>
@@ -5599,16 +10433,35 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       scope.foreach(region => expressionRegions.update(reference, region))
       val operands = value match
         case expression: KernelExpr[?] =>
+          if !expressionValues.contains(reference) then boundaryClosureOwner.foreach(_.markDirty())
           expressionValues.update(reference, expression)
+          boundaryClosureOwner.foreach(_.captured(reference, expression))
           analogStack.lastOption.foreach(_.expressions += reference)
           expression.operands
         case _ => structuralOperands
       // Private partition scaffold arguments have lexical paths, but no authored source identity.
       if !reductionProofBuilding && reference.index >= 0 then
-        semanticOrigin.captureExpression(module.handle, reference.index, value, operands)
+        if completingReserved then
+          val expression = value.asInstanceOf[KernelExpr[?]]
+          semanticOrigin.completeReservedExpression(
+            expression.constructionSourceSlot,
+            module.handle,
+            reference.index,
+            value,
+            operands
+          )
+        else semanticOrigin.captureExpression(module.handle, reference.index, value, operands)
       reference
 
   def registerExpression(value: AnyRef): Unit = value match
+    case expression: KernelExpr[?]
+        if expression.interfaceMember.nonEmpty || expression.operation.contains(
+          DigitalInterfaceContract.OrdinaryReadOperation
+        ) =>
+      fail(
+        "NODAL-INTERFACE-054-007",
+        "ordinary member reads require the owned Interface.read entrypoint"
+      )
     case expression: KernelExpr[?]
         if expression.operation.contains(ExecutableWaiverContract.Operation) =>
       crossingFailure("waivers require the owned Cdc.waive entrypoint")
@@ -5637,12 +10490,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           "digital expressions in generated scopes require the digital generation profile"
         )
       expression.operands.collect { case metadata: StructOperationMetadata => metadata.schema }
-        .foreach(validateShapeType(
-          _,
-          currentModule.handle,
-          cardinality = true,
-          storageContext = true
-        ))
+        .foreach: schema =>
+          validateShapeType(schema, currentModule.handle, cardinality = true, storageContext = true)
+          bindCollectionType(
+            CandidateRuntime.typeDescriptor(schema),
+            activeValueRegion,
+            currentModule.handle
+          )
       val _ = captureExpression(value)
     case expression: KernelExpr[?]
         if expression.operation.exists(_.startsWith(AnalogContextContract.Prefix)) =>
@@ -6007,10 +10861,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       captured,
       activeGeneratedRegion
     )
-    parent.instances += record
+    parent.instances += stampAllocation(parent, record)
     child.attached = true
     instanceIds.put(instance, record)
     instanceObjects.put(childModule, instance)
+    activeArea.foreach(_.instances += record)
     semanticOrigin.captureInstance(
       parent.handle,
       record.ordinal,
@@ -6052,7 +10907,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     requireInstanceScope(instanceRecord(instance))
 
   private def instanceRecord(instance: AnyRef): InstanceRecord =
-    Option(instanceIds.get(instance)).getOrElse(
+    val original = instance match
+      case value: InstanceSelectionRecord => value.instance
+      case value => value
+    Option(instanceIds.get(original)).getOrElse(
       fail("NODAL-BINDING-016", "binding targets an unknown Instance")
     )
 
@@ -6206,39 +11064,42 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     def declaration(reference: DeclarationRef): DeclarationRecord =
       records(reference.module).declarations(reference.index)
 
-    def visit(candidate: Any): Unit = candidate match
-      case _: String | _: Int | _: Long | _: Double | _: Float | _: Boolean | _: BigInt => ()
-      case parameter: Param[?] =>
-        Option(declarationIds.get(parameter)) match
-          case Some(reference) =>
-            referencedDeclarationOwners += reference.module
-            if declaration(reference).kind != KernelSignalKind.Parameter then
-              dynamicDependency = true
-          case None => dynamicDependency = true
-      case expression: KernelExpr[?] =>
-        if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
-          Option(expressionIds.get(expression)) match
-            case Some(reference) => expressionOwners += reference.module
-            case None if expression.literal.nonEmpty => ()
-            case None => dynamicDependency = true
-          if expression.literal.isEmpty then
-            expression.operation match
-              case Some(operation) => operations += operation
-              case None => operations += "<unknown>"
-          expression.operands.foreach(visit)
-      case reference: AnyRef =>
-        Option(declarationIds.get(reference)) match
-          case Some(declarationReference) =>
-            referencedDeclarationOwners += declarationReference.module
-            if declaration(declarationReference).kind != KernelSignalKind.Parameter then
-              dynamicDependency = true
-          case None =>
-            Option(expressionIds.get(reference)) match
-              case Some(expressionReference) => expressionOwners += expressionReference.module
+    val pending = mutable.ArrayBuffer[Iterator[Any]](Iterator.single(value))
+    while pending.nonEmpty do
+      val current = pending.last
+      if !current.hasNext then pending.remove(pending.size - 1)
+      else
+        current.next() match
+          case _: String | _: Int | _: Long | _: Double | _: Float | _: Boolean | _: BigInt => ()
+          case parameter: Param[?] =>
+            Option(declarationIds.get(parameter)) match
+              case Some(reference) =>
+                referencedDeclarationOwners += reference.module
+                if declaration(reference).kind != KernelSignalKind.Parameter then
+                  dynamicDependency = true
               case None => dynamicDependency = true
-      case _ => ()
-
-    visit(value)
+          case expression: KernelExpr[?] =>
+            if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
+              Option(expressionIds.get(expression)) match
+                case Some(reference) => expressionOwners += reference.module
+                case None if expression.literal.nonEmpty => ()
+                case None => dynamicDependency = true
+              if expression.literal.isEmpty then
+                expression.operation match
+                  case Some(operation) => operations += operation
+                  case None => operations += "<unknown>"
+              pending += expression.operands.iterator
+          case reference: AnyRef =>
+            Option(declarationIds.get(reference)) match
+              case Some(declarationReference) =>
+                referencedDeclarationOwners += declarationReference.module
+                if declaration(declarationReference).kind != KernelSignalKind.Parameter then
+                  dynamicDependency = true
+              case None =>
+                Option(expressionIds.get(reference)) match
+                  case Some(expressionReference) => expressionOwners += expressionReference.module
+                  case None => dynamicDependency = true
+          case _ => ()
 
     val targetType = target.dataType.map(renderType(_, instance.child))
     val requiresDimension =
@@ -6302,9 +11163,29 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Some(instancePath(parent.handle, record.ordinal))
       )
 
-    AnalogHierarchyOverridePolicy.validate(
-      overrideEvidence(parent, record, target, value)
-    ) match
+    val evidence = overrideEvidence(parent, record, target, value)
+    val checked =
+      if record.generatedScope.nonEmpty &&
+        target.dataType.exists(
+          CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Integer")
+        ) &&
+        value.isInstanceOf[Expr[?]] &&
+        CandidateRuntime.expressionDataType(value.asInstanceOf[Expr[?]]).exists(
+          CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Integer")
+        )
+      then
+        // requireInstanceScope above retains the exact active occurrence. The shared structural
+        // inspector proves real induction/capture ancestry and every operand, not its spelling.
+        validateGeneratedDependencies(Vector(value))
+        val proof = new StructuralBoundAnalysis(
+          parent.handle,
+          "NODAL-HIERARCHY-037",
+          "generated Integer override",
+          signed64Literals = true
+        ).facts(value.asInstanceOf[Expr[Integer]])
+        AnalogHierarchyOverridePolicy.validateGeneratedIntegerFacts(evidence, proof.map(_.bounds))
+      else AnalogHierarchyOverridePolicy.validate(evidence)
+    checked match
       case Left(rejection) =>
         fail(
           rejection.code,
@@ -6384,7 +11265,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       declaration: DeclarationRecord,
       name: String
   ): Option[Int] =
-    declaration.attributes.collectFirst:
+    closureElements(declaration.attributes).collectFirst:
       case (key, value: Int) if key == name => value
 
   // This analysis traverses captured expressions, not a second expression graph. Its cache lives
@@ -6396,23 +11277,33 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       signed64Literals: Boolean = false,
       allowUnboundedParameters: Boolean = false
   ):
-    private val cache = mutable.HashMap.empty[ExpressionRef, StructuralBound]
+    private val cache = mutable.HashMap.empty[ExpressionRef, Option[StructuralBound]]
+    private val observedParameters = mutable.LinkedHashSet.empty[DeclarationRef]
+    def parameterDependencies: Vector[DeclarationRef] = closureElements(observedParameters).toVector
     private val active = mutable.HashSet.empty[ExpressionRef]
     private val identityIds = mutable.HashMap.empty[(Int, String, Vector[Int]), Int]
     private val identityKeys = mutable.ArrayBuffer.empty[(Int, String, Vector[Int])]
+    // Selected-use facts are private to this query, never a template-domain mutation.
+    private val selectedInductions = mutable.HashMap.empty[ExpressionRef, StructuralBound]
+    private var work = 0
 
-    private def intern(key: (Int, String, Vector[Int])): Int = identityIds.getOrElseUpdate(
-      key, {
-        val id = identityKeys.size
-        identityKeys += key
-        id
-      }
-    )
+    private def intern(key: (Int, String, Vector[Int])): Int =
+      closureCharge(1L + key._3.size.toLong)
+      work += 1
+      if work > 65536 then invalid("structural Integer query exceeds its finite work budget")
+      identityIds.getOrElseUpdate(
+        key, {
+          val id = identityKeys.size
+          identityKeys += key
+          id
+        }
+      )
 
     private def parameterFact(
         parameter: Param[?],
         allowUnbounded: Boolean = false
     ): StructuralBound =
+      closureCharge(1L)
       val fact = parameterBound(
         parameter,
         owner,
@@ -6421,6 +11312,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         allowUnbounded || allowUnboundedParameters
       )
       val reference = fact.parameters.head
+      observedParameters += reference
       fact.copy(identity =
         Some(intern((1, s"${reference.module}:${reference.index}", Vector.empty)))
       )
@@ -6428,85 +11320,100 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     /** Predicate admission shares the same raw Integer DAG and checked arithmetic. An empty actual
       * Generate has no attained value: retain None while still checking every raw operand and op.
       */
+    private def generatedFact(
+        expression: KernelExpr[?],
+        generated: GeneratedRegionRecord
+    ): Option[StructuralBound] =
+      closureCharge(1L)
+      selectedInductions.get(generated.induction) match
+        case Some(selected) => return Some(selected)
+        case None => ()
+      if !closureElements(generationStack).contains(generated) then
+        invalid("Generate induction escaped its actual active lexical scope")
+      val domain =
+        closureElements(
+          loopRegions.valuesIterator
+        ).find(_.loop.exists(_.generated.contains(generated)))
+          .map(_.loop.get.domain).getOrElse(invalid(
+            "Generate induction lacks its actual domain"
+          ))
+      IterationDomain.attainedBounds(domain).map(bounds =>
+        StructuralBound(
+          expression,
+          bounds,
+          Vector.empty,
+          Some(intern((4, expressionPath(generated.induction), Vector.empty)))
+        )
+      )
+
     private val predicateCache = mutable.HashMap.empty[ExpressionRef, Option[StructuralBound]]
     private val predicateActive = mutable.HashSet.empty[ExpressionRef]
-    def predicateBound(value: Expr[Integer]): Option[StructuralBound] = value match
-      case parameter: Param[?] =>
-        // Analysis returns facts only. The consuming structural construct owns classification;
-        // behavioral guards must retain ordinary parameter identity without changing topology.
-        Some(parameterFact(parameter, allowUnbounded = true))
-      case expression: KernelExpr[?] =>
-        val reference = Option(expressionIds.get(expression)).getOrElse(
-          invalid("structural predicate Integer has no captured identity")
-        )
-        if reference.module != owner || expression.resultType != Some(
-            KernelTypeDescriptor("Integer")
+    def predicateBound(value: Expr[Integer]): Option[StructuralBound] =
+      closureCharge(1L)
+      value match
+        case parameter: Param[?] =>
+          // Analysis returns facts only. The consuming structural construct owns classification;
+          // behavioral guards must retain ordinary parameter identity without changing topology.
+          Some(parameterFact(parameter, allowUnbounded = true))
+        case expression: KernelExpr[?] =>
+          val reference = Option(expressionIds.get(expression)).getOrElse(
+            invalid("structural predicate Integer has no captured identity")
           )
-        then
-          invalid("structural predicate Integer belongs to another module or type")
-        predicateCache.get(reference) match
-          case Some(result) => result
-          case None =>
-            if predicateActive.size >= 128 || predicateCache.size >= 65536 || !predicateActive.add(
-                reference
-              )
-            then
-              invalid("static predicate Integer DAG is cyclic or exceeds its finite budget")
-            try
-              def generatedFact(generated: GeneratedRegionRecord): Option[StructuralBound] =
-                if !generationStack.contains(generated) then
-                  invalid("Generate induction escaped its actual active lexical scope")
-                val domain =
-                  loopRegions.valuesIterator.find(_.loop.exists(_.generated.contains(generated)))
-                    .map(_.loop.get.domain).getOrElse(invalid(
-                      "Generate induction lacks its actual domain"
-                    ))
-                IterationDomain.attainedBounds(domain).map(bounds =>
-                  StructuralBound(
-                    expression,
-                    bounds,
-                    Vector.empty,
-                    Some(intern((4, expressionPath(generated.induction), Vector.empty)))
-                  )
+          if reference.module != owner || expression.resultDescriptor != Some(
+              KernelTypeDescriptor("Integer")
+            )
+          then
+            invalid("structural predicate Integer belongs to another module or type")
+          predicateCache.get(reference) match
+            case Some(result) => result
+            case None =>
+              if predicateActive.size >= 128 || predicateCache.size >= 65536 || !predicateActive.add(
+                  reference
                 )
-              val result = collectionArguments.get(reference) match
-                case Some((region, _)) =>
-                  region.captures.valuesIterator.find(_._2 eq expression) match
-                    case Some((source, _)) => predicateBound(source.asInstanceOf[Expr[Integer]])
-                    case None
-                        if region.loop.exists(_.generated.nonEmpty) &&
-                          (region.arguments.head._1 eq expression) =>
-                      generatedFact(region.loop.get.generated.get)
-                    case _ => invalid(
-                        "procedural induction or unadmitted Integer formal in static predicate"
-                      )
-                case None if expression.operation.contains("generate_index") =>
-                  if expression.operands.nonEmpty then invalid("malformed Generate induction")
-                  val generated = records(owner).generatedRegions.find(_.induction == reference)
-                    .getOrElse(invalid("static index lacks an actual Generate owner"))
-                  generatedFact(generated)
-                case None if expression.literal.nonEmpty => Some(literalBound(expression))
-                case None =>
-                  val operation = expression.operation.flatMap(IterationDomain.staticArithmetic)
-                    .getOrElse(invalid("static predicate requires pure Integer arithmetic"))
-                  if expression.operands.size != operation.arity then
-                    invalid("static Integer operation has wrong arity")
-                  val facts = expression.operands.map:
-                    case operand: Expr[?] => predicateBound(operand.asInstanceOf[Expr[Integer]])
-                    case _ =>
-                      invalid("static Integer operation has an untyped or physical-unit operand")
-                  if facts.forall(_.nonEmpty) then
-                    Some(compose(
-                      expression.operation.get,
-                      facts.flatten,
-                      expression,
-                      Some(expressionPath(reference))
-                    ))
-                  else None
-              predicateCache.update(reference, result)
-              result
-            finally predicateActive.remove(reference)
-      case _ => invalid("structural predicate requires an owned Integer expression")
+              then
+                invalid("static predicate Integer DAG is cyclic or exceeds its finite budget")
+              try
+                val result = collectionArguments.get(reference) match
+                  case Some((region, _)) =>
+                    closureElements(region.captures.valuesIterator).find(_._2 eq expression) match
+                      case Some((source, _)) => predicateBound(source.asInstanceOf[Expr[Integer]])
+                      case None
+                          if region.loop.exists(_.generated.nonEmpty) &&
+                            (region.arguments.head._1 eq expression) =>
+                        generatedFact(expression, region.loop.get.generated.get)
+                      case _ => invalid(
+                          "procedural induction or unadmitted Integer formal in static predicate"
+                        )
+                  case None if expression.operation.contains("generate_index") =>
+                    if expression.operands.nonEmpty then invalid("malformed Generate induction")
+                    val generated = closureElements(
+                      records(owner).generatedRegions
+                    ).find(_.induction == reference)
+                      .getOrElse(invalid("static index lacks an actual Generate owner"))
+                    generatedFact(expression, generated)
+                  case None if expression.literal.nonEmpty => Some(literalBound(expression))
+                  case None =>
+                    val operation = expression.operation.flatMap(IterationDomain.staticArithmetic)
+                      .getOrElse(invalid("static predicate requires pure Integer arithmetic"))
+                    if expression.operands.size != operation.arity then
+                      invalid("static Integer operation has wrong arity")
+                    val facts = closureElements(expression.operands).map:
+                      case operand: Expr[?] => predicateBound(operand.asInstanceOf[Expr[Integer]])
+                      case _ =>
+                        invalid("static Integer operation has an untyped or physical-unit operand")
+                    .toVector
+                    if closureElements(facts).forall(_.nonEmpty) then
+                      Some(compose(
+                        expression.operation.get,
+                        closureElements(facts).flatten.toVector,
+                        expression,
+                        Some(expressionPath(reference))
+                      ))
+                    else None
+                predicateCache.update(reference, result)
+                result
+              finally predicateActive.remove(reference)
+        case _ => invalid("structural predicate requires an owned Integer expression")
 
     def sameIdentity(left: Dimension, right: Dimension): Boolean =
       apply(left).identity == apply(right).identity
@@ -6514,7 +11421,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     private def invalid(message: String, path: Option[String] = None): Nothing =
       fail(diagnosticCode, message.replace("hdlRange", subject), path)
 
-    private def expressionBound(expression: KernelExpr[?]): StructuralBound =
+    private def expressionBound(expression: KernelExpr[?]): Option[StructuralBound] =
+      closureCharge(1L)
       val reference = Option(expressionIds.get(expression)).getOrElse(
         invalid("compound hdlRange expression has no captured construction identity")
       )
@@ -6523,7 +11431,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           "compound hdlRange expression escapes its owning Module",
           Some(expressionPath(reference))
         )
-      if !expression.resultType.contains(KernelTypeDescriptor("Integer")) then
+      if !expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) then
         invalid("hdlRange expression must have Integer type", Some(expressionPath(reference)))
       cache.get(reference) match
         case Some(result) => result
@@ -6533,22 +11441,32 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           try
             chargeReduction(1)
             val result = reductionExact.get(expression) match
-              case Some(replacement) => apply(replacement)
+              case Some(replacement) => facts(replacement)
               case None if reductionDomains.contains(expression) =>
-                StructuralBound(
+                Some(StructuralBound(
                   expression,
                   reductionDomains(expression),
                   Vector.empty,
                   Some(intern((3, expressionPath(reference), Vector.empty)))
-                )
+                ))
               case None if collectionArguments.contains(reference) =>
                 val (region, _) = collectionArguments(reference)
-                region.captures.valuesIterator.find(_._2 eq expression) match
+                closureElements(region.captures.valuesIterator).find(_._2 eq expression) match
                   case Some((source, _))
-                      if expression.resultType.contains(KernelTypeDescriptor("Integer")) =>
-                    apply(source.asInstanceOf[Expr[Integer]])
+                      if expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) =>
+                    facts(source.asInstanceOf[Expr[Integer]])
+                  case None
+                      if region.loop.exists(_.generated.nonEmpty) &&
+                        (region.arguments.head._1 eq expression) =>
+                    generatedFact(expression, region.loop.get.generated.get)
                   case _ => invalid("unadmitted collection Integer formal")
-              case None if expression.literal.nonEmpty => literalBound(expression)
+              case None if expression.operation.contains("generate_index") =>
+                if expression.operands.nonEmpty then invalid("malformed Generate induction")
+                val generated =
+                  closureElements(records(owner).generatedRegions).find(_.induction == reference)
+                    .getOrElse(invalid("static index lacks an actual Generate owner"))
+                generatedFact(expression, generated)
+              case None if expression.literal.nonEmpty => Some(literalBound(expression))
               case None =>
                 val operation = expression.operation.flatMap(IterationDomain.staticArithmetic)
                   .getOrElse(invalid(
@@ -6557,17 +11475,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 val arity = operation.arity
                 if expression.operands.size != arity then
                   invalid("hdlRange Integer expression has invalid arity")
-                val operands = expression.operands.map:
+                val operands = closureElements(expression.operands).map:
                   case parameter: Param[?] =>
-                    parameterFact(parameter)
+                    Some(parameterFact(parameter))
                   case child: KernelExpr[?] => expressionBound(child)
                   case _ => invalid("hdlRange expression has a non-static or untyped operand")
-                compose(
-                  expression.operation.get,
-                  operands,
-                  expression,
-                  Some(expressionPath(reference))
-                )
+                .toVector
+                if closureElements(operands).forall(_.nonEmpty) then
+                  Some(compose(
+                    expression.operation.get,
+                    closureElements(operands).flatten.toVector,
+                    expression,
+                    Some(expressionPath(reference))
+                  ))
+                else None
             cache.update(reference, result)
             result
           finally
@@ -6589,14 +11510,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           operands(0).identity == operands(1).identity
         then IterationDomain.Bounds(0L, 0L)
         else
-          IterationDomain.arithmetic(operation, operands.map(_.bounds))
+          IterationDomain.arithmetic(operation, closureElements(operands).map(_.bounds).toVector)
             .fold(
               problem => invalid(problem.message, path),
               identity
             )
-      val operandIds = operands.map(_.identity.get)
+      val operandIds = closureElements(operands).map(_.identity.get).toVector
+      val neutral = IterationDomain.neutralArithmeticOperand(
+        operation,
+        closureElements(operandIds).map(id =>
+          val key = identityKeys(id)
+          Option.when(key._1 == 0)(key._2.toLong)
+        ).toVector
+      )
       val key =
-        if operation == IterationDomain.Arithmetic.Maximum &&
+        if neutral.nonEmpty then identityKeys(operandIds(neutral.get))
+        else if operation == IterationDomain.Arithmetic.Maximum &&
           operandIds(0) == operandIds(1)
         then identityKeys(operandIds.head)
         else if operation == IterationDomain.Arithmetic.ChooseZero &&
@@ -6607,19 +11536,78 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         else if operation == IterationDomain.Arithmetic.ChooseZero &&
           operandIds(1) == operandIds(2)
         then identityKeys(operandIds(1))
-        else if operandIds.forall(id => identityKeys(id)._1 == 0) then
+        else if closureElements(operandIds).forall(id => identityKeys(id)._1 == 0) then
           (0, bounds.lower.toString, Vector.empty[Int])
         else (2, name, operandIds)
+      val parameters = closureElements(operands)
+        .flatMap(operand => closureElements(operand.parameters)).toVector
+      closureCharge(parameters.size.toLong) // one distinct pass over the materialized Vector
       StructuralBound(
         value,
         bounds,
-        operands.flatMap(_.parameters).distinct,
+        parameters.distinct,
         Some(intern(key))
+      )
+
+    def selectedGeneratedDomain(record: GeneratedRegionRecord): IterationDomain.Structural =
+      if record.owner != owner || !closureElements(
+          records(owner).generatedRegions
+        ).exists(_ eq record)
+      then
+        invalid("selected domain requires its actual original Generate")
+      val inputs = Vector(record.lower, record.upperExclusive, record.step)
+        .map(value => apply(value.asInstanceOf[Dimension]))
+      val limits = inputs.map(_.bounds)
+      val domain = IterationDomain.structural(
+        limits(0),
+        limits(1),
+        limits(2),
+        record.maximum,
+        identicalBounds = inputs(0).identity == inputs(1).identity ||
+          (limits(0).lower == limits(0).upper && limits(1).lower == limits(1).upper &&
+            limits(0).lower >= limits(1).upper)
+      )
+        .fold(problem => invalid(problem.message), identity)
+      if domain.maximumTripCount > record.maximumTripCount then
+        invalid("selected domain exceeds its original template cardinality")
+      domain
+
+    def selectGeneratedInduction(record: GeneratedRegionRecord, ordinal: StructuralBound): Unit =
+      if record.owner != owner || !closureElements(
+          records(owner).generatedRegions
+        ).exists(_ eq record) ||
+        selectedInductions.size >= 128 || selectedInductions.contains(record.induction) ||
+        cache.contains(record.induction) || predicateCache.contains(record.induction) ||
+        closureElements(generationStack).contains(record) || !record.digitalRegion.exists(region =>
+          region.loop.exists(_.generated.contains(record)) &&
+            region.arguments.headOption.exists(value =>
+              value._2 == "induction" && Option(expressionIds.get(value._1))
+                .flatMap(collectionArguments.get).contains(region -> 0)
+            )
+        )
+      then invalid("selected induction requires a fresh exact prior family proof")
+      selectedInductions.update(record.induction, generatedCoordinate(record, ordinal))
+
+    def generatedCoordinate(
+        record: GeneratedRegionRecord,
+        ordinal: StructuralBound
+    ): StructuralBound =
+      compose(
+        "analog_add",
+        Vector(
+          apply(record.lower.asInstanceOf[Dimension]),
+          compose(
+            "analog_mul",
+            Vector(ordinal, apply(record.step.asInstanceOf[Dimension])),
+            ordinal.value
+          )
+        ),
+        ordinal.value
       )
 
     def shiftedBounds(base: IterationDomain.Bounds, offsets: Vector[(String, Dimension)])
         : IterationDomain.Bounds =
-      offsets.foldLeft(base): (current, offset) =>
+      closureElements(offsets).foldLeft(base): (current, offset) =>
         IterationDomain.arithmetic(
           IterationDomain.staticArithmetic(offset._1).get,
           Vector(current, apply(offset._2).bounds)
@@ -6628,9 +11616,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
     def shiftedAtMost(base: Dimension, offsets: Vector[(String, Dimension)], extent: Dimension)
         : Boolean =
-      val shifted = offsets.foldLeft(apply(base)): (current, offset) =>
+      val shifted = closureElements(offsets).foldLeft(apply(base)): (current, offset) =>
         compose(offset._1, Vector(current, apply(offset._2)), base)
       def containsWithNonnegativeSuffix(value: Dimension, depth: Int): Boolean =
+        closureCharge(1L)
         if depth > 128 then invalid("static selector relation exceeds its depth budget")
         if shifted.identity == apply(value).identity then true
         else
@@ -6651,10 +11640,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       containsWithNonnegativeSuffix(extent, 0)
 
     private def literalBound(expression: KernelExpr[?]): StructuralBound =
+      closureCharge(1L)
       val literal = expression.literal
         .filter(value =>
           value.kind == "integer" && value.dataType == KernelTypeDescriptor("Integer") &&
-            expression.resultType.contains(KernelTypeDescriptor("Integer"))
+            expression.resultDescriptor.contains(KernelTypeDescriptor("Integer"))
         )
         .flatMap(value =>
           if signed64Literals then value.value.toLongOption
@@ -6674,20 +11664,28 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Some(intern((0, literal.toString, Vector.empty)))
       )
 
-    def apply(value: Int | Expr[Integer]): StructuralBound = value match
-      case literal: Int =>
-        StructuralBound(
-          literal,
-          IterationDomain.Bounds(literal, literal),
-          Vector.empty,
-          Some(intern((0, literal.toString, Vector.empty)))
-        )
-      case parameter: Param[?] => parameterFact(parameter)
-      // Preserve the existing by-value handling of a direct immutable literal. A literal inside
-      // an expression graph, in contrast, needs a captured owner for canonical serialization.
-      case expression: KernelExpr[?] if expression.literal.nonEmpty => literalBound(expression)
-      case expression: KernelExpr[?] => expressionBound(expression)
-      case _ => invalid("hdlRange bound must be a static Integer expression")
+    def apply(value: Int | Expr[Integer]): StructuralBound =
+      facts(value).getOrElse(invalid("empty Generate induction has no attained bound"))
+
+    // Validity consumers may retain checked absence; numerical consumers still use apply.
+    def facts(value: Int | Expr[Integer]): Option[StructuralBound] =
+      closureCharge(1L)
+      value match
+        case literal: Int =>
+          Some(StructuralBound(
+            literal,
+            IterationDomain.Bounds(literal, literal),
+            Vector.empty,
+            Some(intern((0, literal.toString, Vector.empty)))
+          ))
+        case parameter: Param[?] => Some(parameterFact(parameter))
+        // Preserve the existing by-value handling of a direct immutable literal. A literal inside
+        // an expression graph, in contrast, needs a captured owner for canonical serialization.
+        case expression: KernelExpr[?]
+            if requireConstructionPayload(expression) && expression.literal.nonEmpty =>
+          Some(literalBound(expression))
+        case expression: KernelExpr[?] => expressionBound(expression)
+        case _ => invalid("hdlRange bound must be a static Integer expression")
 
   private def parameterBound(
       parameter: Param[?],
@@ -6772,7 +11770,36 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       step: Int | Expr[Integer],
       maximum: Option[Int]
   )(body: Expr[Integer] => Unit): Unit =
-    requireNoCollectionEffect("structural generation")
+    val guardedEntry = activeValueRegion.exists(_.structuralArm.nonEmpty)
+    val collectionDepth = collectionStack.size
+    val generationDepth = generationStack.size
+    try
+      val _ = captureGeneratedRegion(lower, upperExclusive, step, maximum, areaFamily = false)(body)
+    catch
+      case failure: Throwable =>
+        if guardedEntry then
+          poisonConstructor(failure, "guarded hdlRange")
+          // Setup can fail before captureGeneratedRegion installs its body cleanup.
+          while collectionStack.size > collectionDepth do
+            collectionStack.remove(collectionStack.size - 1)
+          while generationStack.size > generationDepth do
+            generationStack.remove(generationStack.size - 1)
+        throw failure
+
+  private def captureGeneratedRegion[A](
+      lower: Int | Expr[Integer],
+      upperExclusive: Int | Expr[Integer],
+      step: Int | Expr[Integer],
+      maximum: Option[Int],
+      areaFamily: Boolean
+  )(body: Expr[Integer] => A): (A, GeneratedRegionRecord) =
+    if guardedLegacyGeneration then
+      structuralFailure("nested generation is outside the guarded hdlRange profile")
+    val guardedLegacy = !areaFamily && activeValueRegion.exists(_.structuralArm.nonEmpty)
+    if areaFamily then requireAreaFamilyScope("generated Area family", requireBody = false)
+    else if guardedLegacy then requireGuardedLegacyScope()
+    else requireNoCollectionEffect("structural generation")
+    val structuralBody = areaFamily || guardedLegacy
     if activeLoop.exists(_.loop.get.generated.isEmpty) then
       collectionFailure("nested effectful iteration is outside the bounded loop profile")
     val module = currentModule
@@ -6808,12 +11835,26 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       markStructuralParameter
     )
 
+    def captureBound(value: Int | Expr[Integer]): Int | Expr[Integer] = value match
+      case literal: Int => literal
+      case expression: Expr[Integer] =>
+        if structuralBody then
+          bindCollectionValue(expression, activeValueRegion, module.handle)
+            .asInstanceOf[Expr[Integer]]
+        else expression
+    val capturedLower = captureBound(lower)
+    val capturedUpper = captureBound(upperExclusive)
+    val capturedStep = captureBound(step)
+
     val induction = new KernelExpr[Integer](
       Vector.empty,
       resultType = Some(KernelTypeDescriptor("Integer")),
       operation = Some("generate_index")
     )
-    val inductionReference = captureExpression(induction).getOrElse(
+    val inductionReference = captureExpression(
+      induction,
+      scopeOverride = Option.when(structuralBody)(None)
+    ).getOrElse(
       fail("NODAL-ITERATION-043-001", "hdlRange induction has no active construction owner")
     )
     val parentOrdinal = generationStack.lastOption
@@ -6824,11 +11865,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       module.generatedRegions.size,
       parentOrdinal,
       inductionReference,
-      lower,
-      upperExclusive,
-      step,
+      capturedLower,
+      capturedUpper,
+      capturedStep,
       maximum,
-      envelope.maximumTripCount
+      envelope,
+      areaFamily
     )
     module.generatedRegions += record
     generationStack += record
@@ -6836,17 +11878,31 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       generatedRegionPath(record) -> expressionPath(record.induction),
       record
     )
-    val digitalRegion = Option.when(activeLoop.isEmpty && analogStack.isEmpty)(
+    val nestedAreaFamily = areaFamily && activeLoop.exists(_.loop.exists(
+      _.generated.exists(_.areaFamily)
+    ))
+    val digitalRegion = Option.when(
+      (activeLoop.isEmpty || nestedAreaFamily) && analogStack.isEmpty
+    )(
       newLoopRegion(DigitalLoopHeader(
-        lower,
-        upperExclusive,
-        step,
+        capturedLower,
+        capturedUpper,
+        capturedStep,
         maximum,
         envelope,
-        nextEffectOrdinal(),
+        (if structuralBody then activeValueRegion else None).map: parent =>
+          val ordinal = parent.assignmentCount
+          parent.assignmentCount += 1
+          ordinal
+        .getOrElse(nextEffectOrdinal()),
         Some(record)
-      ))
+      ), retainParent = guardedLegacy)
     )
+    record.digitalRegion = digitalRegion
+    digitalRegion.foreach: region =>
+      if region.structuralGenerate != structuralBody then
+        beforeRegionMutation(region)
+        region.structuralGenerate = structuralBody
     val domainCount = module.domains.size
     val analogRegionCount = analogRegions.size
     val continuousOperatorCount = continuousOperators.size
@@ -6854,19 +11910,72 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val transferOperatorCount = transferOperators.size
     val noiseOperatorCount = noiseOperators.size
     try
-      body(induction)
+      val result = body(induction)
       val generatedContext =
         generatedRegionPath(record) -> expressionPath(record.induction)
       val unsupportedDeclaration = record.declarations.iterator
         .map(reference => module.declarations(reference.index))
         .find: declaration =>
+          val localInstancePort = areaFamily &&
+            Set(
+              KernelSignalKind.InstanceInput,
+              KernelSignalKind.InstanceOutput
+            )(declaration.kind) &&
+            instanceDigitalPorts.get(declaration.reference).exists: boundary =>
+              module.instances.exists(_ eq boundary.instance) &&
+                boundary.instance.generatedScope.contains(record) &&
+                boundary.port.module == boundary.instance.child
+          val localInterface = areaFamily &&
+            Set(
+              KernelSignalKind.InterfacePort,
+              KernelSignalKind.InterfaceArray
+            )(declaration.kind) &&
+            (declaration.value match
+              case endpoint: InterfaceEndpoint =>
+                val original = !endpoint.boundary && (endpoint match
+                  case value: InterfacePort[?, ?] => value.origin.isEmpty
+                  case _: InterfaceArray[?, ?] => true)
+                val child = instanceInterfacePorts.get(declaration.reference).exists(binding =>
+                  binding.generated.isEmpty && binding.scope == record.digitalRegion &&
+                    binding.instance.exists(instance =>
+                      module.instances.exists(_ eq instance) &&
+                        instance.generatedScope.contains(
+                          record
+                        ) && binding.port.module == instance.child
+                    )
+                )
+                val leaves = ConstructionInterfaceLayout.leaves(
+                  endpoint.definition,
+                  endpoint.role,
+                  charge = closureCharge
+                )
+                val conservative = endpoint match
+                  case port: InterfacePort[?, ?]
+                      if leaves.nonEmpty && leaves.forall(_.protocol == "conservative") =>
+                    val _ = requireConservativeInterfaceScope(port)
+                    true
+                  case _ => false
+                (original || child) && (conservative || leaves.forall(leaf =>
+                  leaf.analogType.isEmpty && leaf.mode.isEmpty &&
+                    leaf.dataType.forall(dataType => !isBoundaryCapability(dataType))
+                ))
+              case _ => false)
+          val localConservativeView = declaration.value match
+            case view: InterfaceTerminalView[?, ?] if areaFamily =>
+              val _ = requireConservativeInterfaceScope(view.endpoint)
+              declaration.kind == KernelSignalKind.ConservativeTerminal
+            case _ => false
+          !localConservativeView && !(areaFamily && Set(
+            KernelSignalKind.Wire,
+            KernelSignalKind.Register
+          )(declaration.kind)) && !localInstancePort && !localInterface &&
           declaration.kind != KernelSignalKind.AnalogNode &&
-            declaration.kind != KernelSignalKind.AnalogNodeArray &&
-            !(declaration.kind == KernelSignalKind.Variable &&
-              AnalogProceduralConstruction.retainsGeneratedVariable(
-                declaration.value,
-                generatedContext
-              ))
+          declaration.kind != KernelSignalKind.AnalogNodeArray &&
+          !(declaration.kind == KernelSignalKind.Variable &&
+            AnalogProceduralConstruction.retainsGeneratedVariable(
+              declaration.value,
+              generatedContext
+            ))
       unsupportedDeclaration.foreach: declaration =>
         fail(
           "NODAL-ITERATION-043-004",
@@ -6929,7 +12038,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val changedAnalog = generatedAnalogRegions.nonEmpty || generatedOperators.nonEmpty ||
         generatedWaveforms.nonEmpty || generatedTransfers.nonEmpty || generatedNoise.nonEmpty
       if digitalRegion.exists(_.structuralGenerate) &&
-        (changedAnalog || record.declarations.nonEmpty || module.domains.size != domainCount)
+        (changedAnalog || (!areaFamily && record.declarations.nonEmpty) || module.domains.size != domainCount)
       then
         structuralFailure(
           "structural hdlRange requires one pure/continuous digital body; mixed effects need a later profile"
@@ -6948,6 +12057,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           "generated domains require their own lexical ownership contract",
           Some(provisionalModulePath(module.handle))
         )
+      result -> record
     catch
       case failure: Throwable =>
         poisonConstructor(failure, generatedRegionPath(record))
@@ -7103,6 +12213,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   def withAnalogSemanticRegion[A](
       kind: AnalogEquationRuntime.RegionKind
   )(body: => A): A =
+    if guardedLegacyGeneration then
+      structuralFailure("analog regions are outside the guarded hdlRange profile")
     val module = currentModule
     if analogSemanticContext.nonEmpty then
       fail(
@@ -7225,7 +12337,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       owner
     )
 
+  private def requireConservativeContributionRights(target: Any): Unit = target match
+    case expression: KernelExpr[?] => expression.operands.foreach:
+        case view: ConservativeView[?, ?] if view.permission != "contribute" =>
+          fail("NODAL-INTERFACE-058-ANALOG", "contribution requires the actual contribute view")
+        case _ => ()
+    case _ => ()
+
   def recordShortAnalogContribution(target: Expr[Real], value: Expr[Real]): Unit =
+    requireConservativeContributionRights(target)
     analogSemanticContext match
       case Some(_) => recordAnalogContribution(target, value, ContributionOptions())
       case None => operation("analog-contribute", target, value)
@@ -7421,6 +12541,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             "contribution target must be a potential or flow access",
             pathOf(target)
           )
+      requireConservativeContributionRights(target)
       val (identity, orientation) = contributionTargetIdentity(expression.operands, owner)
       AnalogEquationRuntime.ContributionTarget(
         identity,
@@ -7453,7 +12574,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val endpoints = values.collect:
           case node: Node[?] => renderAnalogValue(node)
           case terminal: Terminal[?] => renderAnalogValue(terminal)
-          case view: TerminalView[?, ?] => renderAnalogValue(view.terminal)
+          case view: ConservativeView[?, ?] => renderAnalogValue(view.conservativeIdentity)
         endpoints match
           case Vector(positive, negative, _*) =>
             Some(s"$owner.branch.$positive->$negative" -> s"$positive->$negative")
@@ -7484,7 +12605,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       "authored analog expression exceeds the supported 1048576-character or 512-level limit, or is cyclic"
     )
     def describe(value: Any): Rendering = value match
-      case expression: KernelExpr[?] if expression.literal.nonEmpty =>
+      case expression: KernelExpr[?]
+          if requireConstructionPayload(expression) && expression.literal.nonEmpty =>
         val literal = expression.literal.map(_.value).getOrElse("")
         val unit = expression.operands.lift(1).collect { case text: String => text }.getOrElse("")
         Rendering(if unit.isEmpty then literal else s"$literal $unit")
@@ -7500,6 +12622,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           Rendering("", Vector(branch.positive, branch.negative), "->")
         )
       case state: AnalogState => Rendering(s"state:${state.name}")
+      case view: TerminalView[?, ?] => describe(view.terminal)
+      case view: InterfaceTerminalView[?, ?] =>
+        Rendering(pathOf(view).getOrElse(fail(
+          "NODAL-INTERFACE-058-ANALOG",
+          "unowned conservative view"
+        )))
       case terminal: Terminal[?] =>
         Rendering(pathOf(terminal).getOrElse(s"terminal:${terminal.name}"))
       case node: Node[?] => Rendering(pathOf(node).getOrElse("analog-node"))
@@ -7641,22 +12769,24 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
 
   private def memoryReadSnapshot(expression: KernelExpr[?]): Option[KernelMemoryPortSnapshot] =
-    val metadata = expression.operands.collect { case value: MemoryPortCapture => value }
-    if expression.operation.contains("memory_read") then
-      val reference = expressionIds.get(expression)
-      if metadata.size != 1 || expression.operands.size != 2 ||
-        expression.operands.lastOption != metadata.headOption || expressionRegions.contains(
-          reference
-        )
-      then memoryFailure("memory read has malformed operands or lexical ownership")
-      Some(memoryPortSnapshot(metadata.head, reference.module))
-    else
-      if metadata.nonEmpty then
-        memoryFailure("memory port metadata is attached to another operation")
-      None
+    publicationProbe:
+      val metadata =
+        publicationVector(expression.operands).collect { case value: MemoryPortCapture => value }
+      if expression.operation.contains("memory_read") then
+        val reference = expressionIds.get(expression)
+        if metadata.size != 1 || expression.operands.size != 2 ||
+          expression.operands.lastOption != metadata.headOption || expressionRegions.contains(
+            reference
+          )
+        then memoryFailure("memory read has malformed operands or lexical ownership")
+        Some(memoryPortSnapshot(metadata.head, reference.module))
+      else
+        if metadata.nonEmpty then
+          memoryFailure("memory port metadata is attached to another operation")
+        None
 
   private def memoryWriteRecords: Vector[(KernelMemoryWriteSnapshot, Operation)] =
-    val writes = operations.iterator.filter(_.kind == "memory-write").toVector
+    val writes = publicationElements(operations.iterator).filter(_.kind == "memory-write").toVector
     val bases = writes.groupMapReduce(_.owner)(_ => 1)(_ + _).map: (owner, count) =>
       owner -> Vector.tabulate(count)(ordinal => s"memory_write_$ordinal")
     val paths = semanticOrigin.auxiliaryPaths(semanticResult.get, bases)
@@ -7688,8 +12818,103 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   def operation(kind: String, values: Any*): Unit =
     captureOperation(kind, values.toVector, permitMemory = false)
 
+  private def validateAssignmentTypes(values: Vector[Any]): Unit =
+    val exactType =
+      for
+        target <- values.headOption.collect { case value: Expr[?] => value }
+        source <- values.lift(1).collect { case value: Expr[?] => value }
+        targetType <- CandidateRuntime.expressionDataType(target)
+        sourceType <- CandidateRuntime.expressionDataType(source)
+      yield DigitalEnumContract.sameType(
+        CandidateRuntime.typeDescriptor(targetType),
+        CandidateRuntime.typeDescriptor(sourceType)
+      )
+    if !exactType.contains(true) then
+      collectionFailure("digital assignment requires exactly matching recursive types")
+
   private def captureOperation(kind: String, values: Vector[Any], permitMemory: Boolean): Unit =
     validateCollectionDependencies(values)
+    val generatedConservativeConnection =
+      kind == "terminal-connect" && activeGeneratedRegion.nonEmpty
+    if generatedConservativeConnection then requireGeneratedConservativeConnection(values)
+    val interfaceEffect = Set("interface-connect", "interface-drive", "interface-observe")(kind)
+    val interfaceReferences = if interfaceEffect then
+      values.collect:
+        case endpoint: InterfaceEndpoint =>
+          val root: InterfaceEndpoint = endpoint match
+            case value: InterfacePort[?, ?] => DigitalInterfaceContract.root(value)
+            case value: InterfaceArray[?, ?] => DigitalInterfaceContract.root(value)
+          val reference = Option(declarationIds.get(root)).getOrElse(
+            fail("NODAL-INTERFACE-054-003", "Interface effect requires an actual captured endpoint")
+          )
+          if reference.module != currentModule.handle then
+            fail("NODAL-INTERFACE-054-003", "Interface effect belongs to another Module")
+          requireGeneratedDeclarationScope(reference)
+          valueRegion(reference).foreach: scope =>
+            if !collectionStack.exists(_ eq scope) then
+              fail("NODAL-INTERFACE-054-003", "Interface endpoint escaped its exact use region")
+          reference
+    else Vector.empty
+    if kind == "interface-connect" && values.exists {
+        case endpoint: InterfaceEndpoint =>
+          ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role, charge = closureCharge)
+            .exists(_.protocol == "conservative")
+        case _ => false
+      }
+    then
+      if activeGeneratedRegion.nonEmpty || activeValueRegion.nonEmpty || activeArea.nonEmpty ||
+        values.size != 2 ||
+        interfaceReferences.size != 2
+      then fail("NODAL-INTERFACE-058-ANALOG", "conservative forwarding requires ordinary whole arrays")
+      val endpoints = values.collect { case value: InterfaceEndpoint => value }
+      endpoints.zip(interfaceReferences).foreach: (endpoint, reference) =>
+        val leaves = ConstructionInterfaceLayout.leaves(
+          endpoint.definition, endpoint.role, charge = closureCharge
+        )
+        if !DigitalInterfaceContract.conservativeArrayProfile(endpoint, leaves, closureCharge) ||
+          valueRegion(reference).nonEmpty || areas.exists(_.declarations.contains(reference)) ||
+          records(reference.module).generatedRegions.exists(_.declarations.contains(reference))
+        then fail("NODAL-INTERFACE-058-ANALOG", "conservative forwarding lost its direct fixed array")
+        instanceInterfacePorts.get(reference) match
+          case None =>
+            endpoint match
+              case array: InterfaceArray[?, ?] if array.exported && !array.boundary => ()
+              case _ => fail("NODAL-INTERFACE-058-ANALOG", "forwarding needs an exported local array")
+          case Some(binding) =>
+            if binding.generated.nonEmpty || binding.scope.nonEmpty ||
+              !binding.instance.exists(instance =>
+                currentModule.instances.exists(_ eq instance) && instance.generatedScope.isEmpty &&
+                  !areas.exists(_.instances.exists(_ eq instance)) &&
+                  instance.child == binding.port.module) || valueRegion(binding.port).nonEmpty ||
+              areas.exists(_.declarations.contains(binding.port)) ||
+              records(binding.port.module).generatedRegions.exists(_.declarations.contains(binding.port))
+            then fail("NODAL-INTERFACE-058-ANALOG", "forwarding needs an ordinary immediate child")
+            records(binding.port.module).declarations(binding.port.index).value match
+              case array: InterfaceArray[?, ?]
+                  if array.exported && !array.boundary && array.origin.isEmpty => ()
+              case _ => fail("NODAL-INTERFACE-058-ANALOG", "forwarding child is not directly exported")
+      if interfaceReferences.count(instanceInterfacePorts.contains) != 1 then
+        fail("NODAL-INTERFACE-058-ANALOG", "forwarding requires one local and one child array")
+    val orderedInterface = interfaceEffect && (activeValueRegion.nonEmpty ||
+      interfaceReferences.exists(reference =>
+        instanceInterfacePorts.get(reference).exists(_.generated.nonEmpty)
+      ))
+    if orderedInterface then
+      requireAreaFamilyScope("Interface effect", requireBody = false)
+      if kind == "interface-drive" && interfaceReferences.exists(reference =>
+          instanceInterfacePorts.get(reference).exists(_.generated.nonEmpty)
+        )
+      then
+        if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
+          activeArea.nonEmpty || values.size != 3
+        then fail("NODAL-AREA-058-CAPABILITY", "selected Interface drive must be Module-local")
+        val reference = interfaceReferences.head
+        val member = values(1) match
+          case value: String => value
+          case _ => fail("NODAL-HIERARCHY-058-INTERFACE", "selected drive needs an exact leaf")
+        requireSelectedInterfaceInputTarget(
+          reference, instanceInterfacePorts(reference), member, currentModule.handle
+        )
     val digitalAssignment = Set("assignment", "value-connect").contains(kind) &&
       analogStack.isEmpty && analogSemanticContext.isEmpty &&
       !AnalogProceduralConstruction.generatedProcedureActive &&
@@ -7716,13 +12941,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     closeBehavioralChain()
     if activeBehavioral.nonEmpty && !digitalAssignment && !memoryWrite then
       behavioralFailure(s"hardware '$kind' effect is not permitted in a behavioral update")
-    requireNoCollectionEffect(
-      s"hardware '$kind' effect",
-      assignment = digitalAssignment || memoryWrite
-    )
+    if !generatedConservativeConnection then
+      requireNoCollectionEffect(
+        s"hardware '$kind' effect",
+        assignment = digitalAssignment || memoryWrite || orderedInterface
+      )
     val loop = Option.when(digitalAssignment)(activeLoop).flatten
     val effectRegion =
-      Option.when(digitalAssignment || memoryWrite)(
+      Option.when(digitalAssignment || memoryWrite || orderedInterface)(
         activeValueRegion.filter(_.permitsAssignment)
       ).flatten
     if !digitalAssignment then requireLoopEffect(s"hardware '$kind' effect")
@@ -7731,6 +12957,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       then
         collectionFailure("digital assignments require their exact loop lexical scope")
       validateDigitalLoopDomain(region)
+    if orderedInterface then
+      values.foreach:
+        case value: Expr[?] =>
+          val _ = bindCollectionValue(value, effectRegion, currentModule.handle)
+        case _ => ()
     if memoryWrite then
       if collectionStack.exists(region => !sequentialRegion(region)) then
         memoryFailure("memory write cannot escape the sequential effect profile")
@@ -7755,18 +12986,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         )
       if privateFsmStorage(target) then
         FlatFsmRuntime.fail("private machine state cannot be assigned by source actions")
-      val exactType =
-        for
-          target <- values.headOption.collect { case value: Expr[?] => value }
-          source <- values.lift(1).collect { case value: Expr[?] => value }
-          targetType <- CandidateRuntime.expressionDataType(target)
-          sourceType <- CandidateRuntime.expressionDataType(source)
-        yield DigitalEnumContract.sameType(
-          CandidateRuntime.typeDescriptor(targetType),
-          CandidateRuntime.typeDescriptor(sourceType)
-        )
-      if !exactType.contains(true) then
-        collectionFailure("digital loop assignment requires exactly matching recursive types")
+      if values.exists(DeferredResultType.pending) then
+        val _ = requireDeferredValueScope(Some(region), currentModule.handle)
+      else validateAssignmentTypes(values)
       values.foreach:
         case expression: Expr[?] =>
           val _ = bindCollectionValue(expression, Some(region), currentModule.handle)
@@ -7783,7 +13005,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       "node-array-connect",
       "instance-node-array",
       "deferred-node-array"
-    ).contains(kind)
+    ).contains(kind) || generatedConservativeConnection
     if !generatedAnalogContribution && !structuralTopology && effectRegion.isEmpty &&
       activeEventProcess.isEmpty
     then
@@ -7815,16 +13037,31 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           region.assignmentCount += 1
           ordinal
         case None =>
-          if Set("assignment", "value-connect", "memory-write")(kind) then nextEffectOrdinal()
+          if Set("assignment", "value-connect", "memory-write")(kind) || orderedInterface then
+            nextEffectOrdinal()
           else 0
+      val capturedValues = values.toVector
+      val preparedSource =
+        if kind == "assignment" && digitalAssignment && effectRegion.isEmpty && activeGeneratedRegion.isEmpty &&
+          activeEventProcess.isEmpty && constructionCapturePrefixAllowed(semanticOrigin) &&
+          boundaryClosureOwner.exists(_.boundDomainAccountingCandidate)
+        then
+          boundaryClosureOwner.map: closure =>
+            closure.guard:
+              semanticOrigin.prepareOperationSource(owner, kind, capturedValues)
+        else None
       val captured = Operation(
         owner,
         kind,
-        values.toVector,
+        capturedValues,
         if effectRegion.nonEmpty then None else activeGeneratedRegion,
-        if digitalAssignment || memoryWrite || (structuralTopology && activeGeneratedRegion.nonEmpty)
+        if digitalAssignment || memoryWrite || orderedInterface || (structuralTopology && activeGeneratedRegion.nonEmpty)
         then
-          semanticOrigin.captureSemanticSource()
+          preparedSource match
+            case Some(prepared) =>
+              try semanticOrigin.captureSemanticSource(prepared)
+              catch case failure: Throwable => boundaryClosureOwner.get.guard(throw failure)
+            case None => semanticOrigin.captureSemanticSource()
         else None,
         effectRegion,
         sourceOrdinal,
@@ -7834,30 +13071,45 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       moduleStack.lastOption.foreach(module =>
         // Admission distinguishes analog storage effects; source naming retains
         // the shared assignment sink-affinity semantics for both kinds.
-        semanticOrigin.captureOperation(
-          module.handle,
-          if kind == "analog-assignment" then "assignment" else kind,
-          captured.values
-        )
+        preparedSource match
+          case Some(prepared) if prepared.canReuse =>
+            consumePreparedOperationSource(prepared, module.handle, kind, captured.values)
+          case _ =>
+            semanticOrigin.captureOperation(
+              module.handle,
+              if kind == "analog-assignment" then "assignment" else kind,
+              captured.values
+            )
       )
 
+  private def consumePreparedOperationSource(
+      prepared: semanticOrigin.PreparedOperationSource,
+      module: Long,
+      kind: String,
+      values: Vector[Any]
+  ): Unit =
+    boundaryClosureOwner.get.guard:
+      semanticOrigin.consumeOperationSource(prepared, module, kind, values)
+
   private def provisionalModulePath(handle: Long): String =
+    closureCharge(1L)
     val record = records(handle)
+    closureCharge(record.className.length.toLong)
     record.parentAtConstruction match
       case None => record.className
       case Some(parentHandle) =>
         val parent = records(parentHandle)
-        val ordinal = parent.instances
+        val ordinal = closureElements(parent.instances)
           .find(_.child == handle)
           .map(_.ordinal)
           .orElse:
-            if !record.attached && moduleStack.exists(_.handle == handle) then
+            if !record.attached && closureElements(moduleStack).exists(_.handle == handle) then
               Some(parent.instances.size)
             else None
           .getOrElse(
             fail("NODAL-HIERARCHY-020", "child Module has no Instance record")
           )
-        s"${provisionalModulePath(parentHandle)}.${record.className}_$ordinal"
+        closurePathAppend(provisionalModulePath(parentHandle), s".${record.className}_$ordinal")
 
   private def modulePath(handle: Long): String =
     semanticResult.flatMap(_.modulePaths.get(handle)).getOrElse(provisionalModulePath(handle))
@@ -7887,52 +13139,69 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       .getOrElse(s"${modulePath(reference.module)}.${declarationName(reference)}")
 
   private def expressionPath(reference: ExpressionRef): String =
+    closureCharge(1L)
     fsmResults.get(reference).map((record, role) =>
-      s"${expressionPath(record.reference)}.$role"
+      closurePathAppend(expressionPath(record.reference), s".$role")
     ).orElse(
       fsmActionRegions.get(reference).flatMap(_.fsmAction).map(header =>
-        s"${expressionPath(header.machine)}.action${header.ordinal}"
+        closurePathAppend(expressionPath(header.machine), s".action${header.ordinal}")
       )
     ).orElse(enumSwitchArms.get(reference).flatMap(_.switchArm).map(header =>
-      s"${expressionPath(header.switch)}.arm${header.index}"
+      closurePathAppend(expressionPath(header.switch), s".arm${header.index}")
     )).orElse(collectionArguments.get(reference).map: (region, ordinal) =>
       if ordinal == 0 && region.structuralGenerate then
         expressionPath(region.loop.get.generated.get.induction)
-      else s"${expressionPath(region.reference)}.arg$ordinal").orElse(structuralArms.get(
-      reference
-    ).flatMap(_.structuralArm).map(arm =>
-      s"${expressionPath(arm.conditional)}.${if arm.whenTrue then "then" else "else"}"
-    ))
+      else closurePathAppend(expressionPath(region.reference), s".arg$ordinal")).orElse(
+      structuralArms.get(
+        reference
+      ).flatMap(_.structuralArm).map(arm =>
+        closurePathAppend(
+          expressionPath(arm.conditional),
+          if arm.whenTrue then ".then" else ".else"
+        )
+      )
+    )
       .orElse(behavioralArms.get(reference).flatMap(_.behavioralArm).map(arm =>
-        s"${expressionPath(arm.conditional)}.${if arm.whenTrue then "then" else "else"}"
+        closurePathAppend(
+          expressionPath(arm.conditional),
+          if arm.whenTrue then ".then" else ".else"
+        )
       ))
       .orElse(loopRegions.get(reference).flatMap(region =>
         region.loop.flatMap(_.generated).map(record =>
           if region.structuralGenerate then generatedRegionPath(record)
-          else s"${generatedRegionPath(record)}.digital_loop"
+          else closurePathAppend(generatedRegionPath(record), ".digital_loop")
         )
       ))
       .orElse(semanticResult.flatMap(_.expressionPaths.get(reference.module -> reference.index)))
-      .getOrElse(s"${modulePath(reference.module)}.expr_${reference.index}")
+      .getOrElse(closurePathAppend(modulePath(reference.module), s".expr_${reference.index}"))
 
   private def instancePath(parent: Long, ordinal: Int): String =
     semanticResult
       .flatMap(_.instancePaths.get(parent -> ordinal))
       .getOrElse(s"${modulePath(parent)}.instance_$ordinal")
 
-  def pathOf(value: Any): Option[String] = value match
-    case node: Node[?] if node.endpointReference.nonEmpty =>
-      Option(expressionIds.get(node)).orElse(node.endpointReference).flatMap(
-        shapeIndices.get
-      ).map(conservativeEndpointPath)
-    case reference: AnyRef =>
-      Option(declarationIds.get(reference))
-        .map(declarationPath)
-        .orElse(Option(expressionIds.get(reference)).map(expressionPath))
-        .orElse(Option(domainIds.get(reference)).map(domainPath))
-        .orElse(Option(moduleIds.get(reference)).map(handle => modulePath(handle.longValue)))
-    case _ => None
-
+  def pathOf(value: Any): Option[String] =
+    closureCharge(1L)
+    value match
+      case view: TerminalView[?, ?] => pathOf(view.terminal)
+      case family: GeneratedRegionRecord => Some(generatedRegionPath(family))
+      case argument: GeneratedFamilyArgument =>
+        Some(closurePathAppend(
+          expressionPath(argument.region.reference),
+          s".arg${argument.position}"
+        ))
+      case node: Node[?] if node.endpointReference.nonEmpty =>
+        Option(expressionIds.get(node)).orElse(node.endpointReference).flatMap(
+          shapeIndices.get
+        ).map(conservativeEndpointPath)
+      case reference: AnyRef =>
+        Option(declarationIds.get(reference))
+          .map(declarationPath)
+          .orElse(Option(expressionIds.get(reference)).map(expressionPath))
+          .orElse(Option(domainIds.get(reference)).map(domainPath))
+          .orElse(Option(moduleIds.get(reference)).map(handle => modulePath(handle.longValue)))
+      case _ => None
   private def selectedPath(value: AnyRef): Option[String] =
     if declarationIds.containsKey(value) || expressionIds.containsKey(value) ||
       domainIds.containsKey(value) || moduleIds.containsKey(value)
@@ -8001,38 +13270,45 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val name = value.getClass.getSimpleName.stripSuffix("$")
     if name.isEmpty then value.getClass.getName.split("\\.").last.stripSuffix("$") else name
 
-  private def renderAny(value: Any, owner: Long): String = value match
-    case candidate if Option(candidate).isEmpty => "null"
-    case text: String => text
-    case boolean: Boolean => boolean.toString
-    case integer: Int => integer.toString
-    case long: Long => long.toString
-    case double: Double => java.lang.Double.toString(double)
-    case big: BigInt => big.toString
-    case expression: KernelExpr[?] if expression.literal.nonEmpty =>
-      expression.literal.map(_.value).getOrElse("")
-    case discipline: NamedDiscipline => discipline.name
-    case Electrical => "electrical"
-    case mode: DriveMode.Value[?] => mode.name
-    case placement: InoutPlacement => placement.toString
-    case profile: ResolutionProfile => profile.toString
-    case policy: ReadUnderWrite => policy.toString
-    case ordering: MemoryOrdering => ordering.toString
-    case dataType: DataType[?] => renderType(dataType, owner)
-    case field: StructField[?] => s"${field.name}:${renderType(field.dataType, owner)}"
-    case option: Option[?] => option.map(renderAny(_, owner)).getOrElse("none")
-    case sequence: Seq[?] => sequence.map(renderAny(_, owner)).mkString("[", ",", "]")
-    case set: Set[?] => set.toVector.map(renderAny(_, owner)).sorted.mkString("[", ",", "]")
-    case reference: AnyRef =>
-      Option(declarationIds.get(reference)).map(declarationPath)
-        .orElse(
-          Option(expressionIds.get(reference)).map(expressionPath)
-        )
-        .orElse(Option(domainIds.get(reference)).map(domainPath))
-        .getOrElse(stableClassName(reference))
-    case other => other.toString
+  private def renderAny(value: Any, owner: Long): String = closureDescriptorVisit:
+    value match
+      case candidate if Option(candidate).isEmpty => "null"
+      case text: String => text
+      case boolean: Boolean => boolean.toString
+      case integer: Int => integer.toString
+      case long: Long => long.toString
+      case double: Double => java.lang.Double.toString(double)
+      case big: BigInt => big.toString
+      case expression: KernelExpr[?]
+          if requireConstructionPayload(expression) && expression.literal.nonEmpty =>
+        expression.literal.map(_.value).getOrElse("")
+      case discipline: NamedDiscipline => discipline.name
+      case Electrical => "electrical"
+      case mode: DriveMode.Value[?] => mode.name
+      case placement: InoutPlacement => placement.toString
+      case profile: ResolutionProfile => profile.toString
+      case policy: ReadUnderWrite => policy.toString
+      case ordering: MemoryOrdering => ordering.toString
+      case dataType: DataType[?] => renderType(dataType, owner)
+      case field: StructField[?] => s"${field.name}:${renderType(field.dataType, owner)}"
+      case option: Option[?] => option.map(renderAny(_, owner)).getOrElse("none")
+      case sequence: Seq[?] =>
+        closureElements(sequence).map(renderAny(_, owner)).mkString("[", ",", "]")
+      case set: Set[?] =>
+        closureElements(set).map(renderAny(_, owner)).toVector.sortWith((left, right) =>
+          closureCharge(1L)
+          left.compareTo(right) < 0
+        ).mkString("[", ",", "]")
+      case reference: AnyRef =>
+        Option(declarationIds.get(reference)).map(declarationPath)
+          .orElse(
+            Option(expressionIds.get(reference)).map(expressionPath)
+          )
+          .orElse(Option(domainIds.get(reference)).map(domainPath))
+          .getOrElse(stableClassName(reference))
+      case other => other.toString
 
-  private def renderType(dataType: DataType[?], owner: Long): String =
+  private def renderType(dataType: DataType[?], owner: Long): String = closureDescriptorVisit:
     val descriptor = CandidateRuntime.typeDescriptor(dataType)
     descriptor.kind match
       case "Enum" =>
@@ -8044,7 +13320,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           value
         }.getOrElse("Struct")
         val fields = descriptor.arguments.lift(1).toVector.flatMap:
-          case values: Seq[?] => values.collect:
+          case values: Seq[?] => closureElements(values).collect:
               case field: StructField[?] =>
                 s"${field.name}:${renderType(field.dataType, owner)}"
           case _ => Vector.empty
@@ -8053,7 +13329,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val element = descriptor.arguments.headOption.collect:
           case value: DataType[?] => renderType(value, owner)
         val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
-          case values: Seq[?] => values.map(renderShapeDimension(_, owner))
+          case values: Seq[?] => closureElements(values).map(renderShapeDimension(_, owner))
           case _ => Vector.empty
         s"Vec(${element.getOrElse("unknown")};${dimensions.mkString("x")})"
       case kind @ ("Bits" | "UInt" | "SInt") =>
@@ -8061,39 +13337,45 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           fail("NODAL-DIGITAL-054-001", "digital scalar type requires exactly one width")
         s"$kind(${renderShapeDimension(descriptor.arguments.head, owner)})"
       case kind if descriptor.arguments.nonEmpty =>
-        s"$kind(${descriptor.arguments.map(renderAny(_, owner)).mkString(",")})"
+        s"$kind(${closureElements(descriptor.arguments).map(renderAny(_, owner)).mkString(",")})"
       case kind => kind
 
-  private def renderShapeDimension(value: Any, owner: Long): String = value match
-    case literal: Int => literal.toString
-    case parameter: Param[?] =>
-      Option(declarationIds.get(parameter)) match
-        case Some(reference) if reference.module == owner => declarationName(reference)
-        case Some(reference) =>
-          fail(
-            "NODAL-SHAPE-043-001",
-            "symbolic Vec dimension escapes its owning Module",
-            Some(declarationPath(reference))
-          )
-        case None => fail("NODAL-SHAPE-043-001", "symbolic Vec dimension has no identity")
-    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
-      expression.literal.map(_.value).getOrElse("")
-    case expression: KernelExpr[?] =>
-      Option(expressionIds.get(expression)) match
-        case Some(reference) if reference.module == owner => expressionPath(reference)
-        case Some(reference) =>
-          fail(
-            "NODAL-SHAPE-043-001",
-            "compound Vec dimension escapes its owning Module",
-            Some(expressionPath(reference))
-          )
-        case None =>
-          fail("NODAL-SHAPE-043-001", "compound Vec dimension has no identity")
-    case _ =>
-      fail("NODAL-SHAPE-043-001", "Vec dimension has no canonical static spelling")
+  private def renderShapeDimension(value: Any, owner: Long): String =
+    closureCharge(1L)
+    value match
+      case literal: Int => literal.toString
+      case parameter: Param[?] =>
+        Option(declarationIds.get(parameter)) match
+          case Some(reference) if reference.module == owner => declarationName(reference)
+          case Some(reference) =>
+            fail(
+              "NODAL-SHAPE-043-001",
+              "symbolic Vec dimension escapes its owning Module",
+              Some(declarationPath(reference))
+            )
+          case None => fail("NODAL-SHAPE-043-001", "symbolic Vec dimension has no identity")
+      case expression: KernelExpr[?]
+          if requireConstructionPayload(
+            expression
+          ) && expression.literal.exists(_.kind == "integer") =>
+        expression.literal.map(_.value).getOrElse("")
+      case expression: KernelExpr[?] =>
+        Option(expressionIds.get(expression)) match
+          case Some(reference) if reference.module == owner => expressionPath(reference)
+          case Some(reference) =>
+            fail(
+              "NODAL-SHAPE-043-001",
+              "compound Vec dimension escapes its owning Module",
+              Some(expressionPath(reference))
+            )
+          case None =>
+            fail("NODAL-SHAPE-043-001", "compound Vec dimension has no identity")
+      case _ =>
+        fail("NODAL-SHAPE-043-001", "Vec dimension has no canonical static spelling")
 
   private def resolveDomains(): Map[DomainRef, String] =
     val resolved = mutable.LinkedHashMap.empty[DomainRef, String]
+    boundDomainCharge(selectedRequirementBindings.size.toLong + records.size.toLong * 2L)
     selectedRequirementBindings.clear()
     val roots = records.values.filter(_.parentAtConstruction.isEmpty).toVector
     if roots.size != 1 then fail("NODAL-ROOT-016", s"expected one root Module, found ${roots.size}")
@@ -8101,13 +13383,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val visited = mutable.HashSet.empty[Long]
     var edges = 0L
     while pending.nonEmpty do
+      boundDomainCharge()
       val (handle, depth) = pending.removeHead()
       if depth > 128 || visited.size >= 65536 || !visited.add(handle) then
         fail("NODAL-HIERARCHY-057-002", "recursive or excessive concrete hierarchy")
       val module = records(handle)
+      boundDomainCharge(module.domains.size.toLong)
       module.domains.filter(_.kind != KernelDomainKind.Required).foreach: domain =>
+        boundDomainCharge()
         resolved.update(domain.reference, domainPath(domain.reference))
       if module.parentAtConstruction.isEmpty then
+        boundDomainCharge(module.domains.size.toLong)
         module.domains.filter(_.kind == KernelDomainKind.Required).foreach: requirement =>
           fail(
             "NODAL-ROOT-DOMAIN-016",
@@ -8115,12 +13401,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             Some(modulePath(handle))
           )
       module.instances.foreach: instance =>
+        boundDomainCharge()
         edges += 1
         if edges > 262144 then
           fail("NODAL-HIERARCHY-057-002", "hierarchy binding edge budget exceeded")
         val child = records(instance.child)
+        boundDomainCharge(child.domains.size.toLong * 2L)
         val requirements = child.domains.filter(_.kind == KernelDomainKind.Required).toVector
         requirements.foreach: requirement =>
+          boundDomainCharge(1L + instance.namedBindings.size.toLong)
           val named = instance.namedBindings.collectFirst:
             case (selected, actual) if selected eq requirement.domain => actual -> "named"
           val binding = named
@@ -8143,6 +13432,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 reference,
                 fail("NODAL-BINDING-020", "bound domain is not resolved in its parent occurrence")
               )
+              boundDomainCharge(2L)
               selectedRequirementBindings(requirement.reference) =
                 (reference, origin, handle, instance.ordinal)
               resolved.update(requirement.reference, physical)
@@ -8155,45 +13445,76 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         pending.append((instance.child, depth + 1))
     if visited.size != records.size then
       fail("NODAL-HIERARCHY-057-002", "construction contains an unreachable module occurrence")
-    val byPath = records.valuesIterator.flatMap(_.domains).map(domain =>
+    val byPath = records.valuesIterator.flatMap(module =>
+      boundDomainCharge(1L + module.domains.size.toLong)
+      module.domains
+    ).map(domain =>
+      boundDomainCharge()
       domainPath(domain.reference) -> domain
     ).toMap
+    boundDomainCharge(selectedRequirementBindings.size.toLong * 2L)
     selectedRequirementBindings.keysIterator.map(reference => resolved(reference)).toSet.foreach:
       path =>
+        boundDomainCharge()
         val actual = byPath(path).domain
         Option(effectiveResets.get(actual)).foreach: reset =>
+          boundDomainCharge()
           if !clockResetSafe(reset, actual) then
             fail(
               "NODAL-RDC-057-001",
               "instance actual reset does not release safely for its exact receiving clock",
               Some(path)
             )
+    boundDomainCharge(resolved.size.toLong)
     occurrenceDomains = resolved.toMap
     occurrenceDomains
 
   /** An outer lexical domain supplies the instance binding, never a foreign child symbol. */
-  private def declarationCandidate(declaration: DeclarationRecord): Option[ClockDomain] =
-    declaration.domainCandidate.map: domain =>
-      if domainRef(domain).module == declaration.reference.module then domain
+  private def localDomainCandidate(
+      owner: Long,
+      candidate: Option[ClockDomain],
+      path: => String
+  ): Option[ClockDomain] =
+    candidate.map: domain =>
+      if domainRef(domain).module == owner then domain
       else
-        val requirements =
-          records(declaration.reference.module).domains.filter(_.kind == KernelDomainKind.Required)
+        closureCharge(records(owner).domains.size.toLong)
+        val requirements = records(owner).domains.filter(_.kind == KernelDomainKind.Required)
         if requirements.size != 1 then
           fail(
             "NODAL-DECL-DOMAIN-016",
             "inherited declaration requires one exact child-local requirement",
-            Some(declarationPath(declaration.reference))
+            Some(path)
           )
         requirements.head.domain
+
+  private def declarationCandidate(declaration: DeclarationRecord): Option[ClockDomain] =
+    publicationProbe:
+      localDomainCandidate(
+        declaration.reference.module,
+        instanceInterfaceDomain(declaration.reference).map(reference =>
+          records(reference.module).domains(reference.index).domain
+        ).orElse(declaration.domainCandidate),
+        declarationPath(declaration.reference)
+      )
 
   private def localDeclarationDomain(
       declaration: DeclarationRecord,
       resolved: Map[DomainRef, String]
-  ): Option[String] =
+  ): Option[String] = publicationProbe:
     declarationCandidate(declaration).map(domain => domainPath(domainRef(domain))).orElse:
       declarationDomain(declaration, resolved).map: actual =>
         val local = records(declaration.reference.module).domains.filter(domain =>
-          domainPath(domain.reference) == actual || resolved.get(domain.reference).contains(actual)
+          publicationProbe {
+            val path = domainPath(domain.reference)
+            publicationCharge(path.length.toLong + actual.length.toLong)
+            val matches = path == actual || resolved.get(domain.reference).exists { value =>
+              publicationCharge(value.length.toLong + actual.length.toLong)
+              value == actual
+            }
+            if matches then publicationCharge(1L)
+            matches
+          }
         )
         if local.size != 1 then
           fail("NODAL-DECL-DOMAIN-016", "declaration requires one exact local domain identity")
@@ -8202,7 +13523,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def declarationDomain(
       declaration: DeclarationRecord,
       resolved: Map[DomainRef, String]
-  ): Option[String] = declarationCandidate(declaration) match
+  ): Option[String] = publicationProbe(declarationCandidate(declaration)) match
     case Some(domain) =>
       resolved.get(domainRef(domain)).orElse(
         fail(
@@ -8231,9 +13552,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           )
     case None if declaration.dataType.exists(isBoundaryCapability) =>
       val actual = records(declaration.reference.module).domains.filter(domain =>
-        (domain.domain.clock.toVector :+ domain.domain.reset).exists(value =>
-          capabilitySourceRoot(value).contains(declaration.reference)
-        )
+        publicationProbe {
+          publicationCharge(domain.domain.clock.size.toLong + 1L)
+          val controls = domain.domain.clock.toVector :+ domain.domain.reset
+          val matches = controls.exists(value =>
+            publicationProbe {
+              capabilitySourceRoot(value).contains(declaration.reference)
+            }
+          )
+          if matches then publicationCharge(1L)
+          matches
+        }
       )
       if actual.size == 1 then resolved.get(actual.head.reference)
       else if declaration.dataType.exists(value =>
@@ -8254,30 +13583,48 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     .getOrElse(default)
 
   private def resolvedNets(): Vector[KernelResolvedNetSnapshot] =
-    val nets = records.values.toVector.flatMap: module =>
-      module.declarations.collect:
-        case declaration if declaration.kind == KernelSignalKind.DigitalInout =>
-          val related = operations.iterator
-            .filter: operation =>
-              operation.values.exists:
-                case reference: AnyRef => reference eq declaration.value
-                case _ => false
-            .map(_.kind)
-            .toVector
-          KernelResolvedNetSnapshot(
-            declarationPath(declaration.reference),
-            declaration.dataType.map(renderType(_, module.handle)).getOrElse("Bits"),
-            attribute(declaration, "mode", module.handle, "unknown"),
-            attribute(declaration, "placement", module.handle, "unknown"),
-            attribute(declaration, "profile", module.handle, "unknown"),
-            related
-          )
-    nets.sortBy(_.path)
+    val declarations = publicationElements(records.valuesIterator).flatMap(module =>
+      publicationElements(
+        module.declarations.iterator
+      ).filter(_.kind == KernelSignalKind.DigitalInout)
+        .map(module -> _)
+    ).toVector
+    // A per-snapshot reporting index, not another physical-net registry.
+    val related = new IdentityHashMap[AnyRef, mutable.ArrayBuffer[String]]()
+    declarations.foreach: (_, declaration) =>
+      if related.put(declaration.value, mutable.ArrayBuffer.empty[String]) != null then
+        fail("NODAL-INTERFACE-054-007", "resolved declaration identity is duplicated")
+    val lastOperation = new IdentityHashMap[AnyRef, java.lang.Integer]()
+    publicationElements(operations.iterator).zipWithIndex.foreach: (operation, ordinal) =>
+      publicationElements(operation.values).foreach:
+        case reference: AnyRef =>
+          publicationCharge(1L)
+          val kinds = related.get(reference)
+          if kinds != null && !Option(lastOperation.get(reference)).contains(ordinal) then
+            kinds += operation.kind
+            lastOperation.put(reference, ordinal)
+        case _ => ()
+    declarations.map: (module, declaration) =>
+      KernelResolvedNetSnapshot(
+        declarationPath(declaration.reference),
+        declaration.dataType.map(renderType(_, module.handle)).getOrElse("Bits"),
+        attribute(declaration, "mode", module.handle, "unknown"),
+        attribute(declaration, "placement", module.handle, ""),
+        attribute(declaration, "profile", module.handle, ""),
+        related.get(declaration.value).toVector,
+        instanceDigitalInouts.get(declaration.reference).map: (instance, port) =>
+          KernelInterfaceBoundarySnapshot(
+            instancePath(module.handle, instance.ordinal),
+            declarationPath(port)
+          ),
+        resolvedMemberSnapshot(declaration)
+      )
+    .sortBy(_.path)
 
   private def conservativeArrayBindingRecords
       : Vector[(KernelConservativeArrayBindingSnapshot, ConservativeArrayBindingRecord)] =
     val ordinals = mutable.HashMap.empty[Long, Int]
-    operations.toVector.collect:
+    publicationOperationVector.collect:
       case operation if operation.kind == "node-array-connect" =>
         val binding = operation.values match
           case Vector(value: ConservativeArrayBindingRecord) => value
@@ -8294,7 +13641,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         ) -> binding
 
   private def instanceArrayRootSnapshots(): Vector[KernelInstanceArrayRootSnapshot] =
-    operations.toVector.flatMap: operation =>
+    publicationOperationVector.flatMap: operation =>
+      publicationCharge(operation.values.size.toLong)
       operation.values.collect:
         case root: InstanceArrayRootRecord =>
           KernelInstanceArrayRootSnapshot(
@@ -8310,40 +13658,244 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             generatedScopeSnapshot(operation.generatedScope)
           )
 
+  private def markInstanceShapeDependencies(instance: InstanceRecord, roots: Iterable[Any]): Unit =
+    val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    def visit(value: Any): Unit = value match
+      case parameter: Param[?]
+          if Option(visited.put(parameter, java.lang.Boolean.TRUE)).isEmpty =>
+        val reference = Option(declarationIds.get(parameter)).getOrElse(
+          fail("NODAL-SHAPE-043-007", "instance shape dependency has no owned declaration")
+        )
+        markStructuralParameterEffect(reference, "shape")
+        markStructuralParameterEffect(reference, "rank")
+        if reference.module == instance.child then
+          val overrideValue = instance.parameterOverrides.collectFirst:
+            case (target: AnyRef, actual)
+                if Option(declarationIds.get(target)).contains(reference) => actual
+          visit(overrideValue.getOrElse(parameter.default))
+      case expression: KernelExpr[?]
+          if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty =>
+        if !constructionPayloadAvailable(expression) then
+          fail(
+            "NODAL-HIERARCHY-058-CONSTRUCTION",
+            "pending construction cannot supply a static shape"
+          )
+        expression.operands.foreach(visit)
+      case _ => ()
+    roots.foreach(visit)
+
   private def markConservativeBindingDependencies(): Unit =
     operations.foreach: operation =>
+      boundDomainCharge(1L + operation.values.size.toLong)
       operation.values.foreach:
         case root: InstanceArrayRootRecord =>
-          val instance = records(operation.owner).instances(root.instanceOrdinal)
-          val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
-          def visit(value: Any): Unit = value match
-            case parameter: Param[?]
-                if Option(visited.put(parameter, java.lang.Boolean.TRUE)).isEmpty =>
-              val reference = Option(declarationIds.get(parameter)).getOrElse(
-                fail("NODAL-SHAPE-043-007", "instance shape dependency has no owned declaration")
-              )
-              markStructuralParameterEffect(reference, "shape")
-              markStructuralParameterEffect(reference, "rank")
-              if reference.module == instance.child then
-                val overrideValue = instance.parameterOverrides.collectFirst:
-                  case (target: AnyRef, actual)
-                      if Option(declarationIds.get(target)).contains(reference) => actual
-                visit(overrideValue.getOrElse(parameter.default))
-            case expression: KernelExpr[?]
-                if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty =>
-              expression.operands.foreach(visit)
-            case _ => ()
-          records(
-            root.port.module
-          ).declarations(root.port.index).conservativeDimensions.foreach(visit)
+          markInstanceShapeDependencies(
+            records(operation.owner).instances(root.instanceOrdinal),
+            records(root.port.module).declarations(root.port.index).conservativeDimensions
+          )
+        case _ => ()
+    instanceInterfacePorts.foreach: (_, binding) =>
+      boundDomainCharge()
+      val port = binding.port
+      records(port.module).declarations(port.index).value match
+        case array: InterfaceArray[?, ?] =>
+          binding.instance.foreach(markInstanceShapeDependencies(_, Vector(array.formalCount)))
         case _ => ()
 
+  private def prepareInterfaceFormalTypes(): Vector[DataType[?]] =
+    // Type validation records structural effects on parameter declarations. Capture
+    // endpoint identities first, before those existing declaration entries mutate.
+    val endpoints = records.valuesIterator.flatMap: module =>
+      boundDomainCharge(1L + module.declarations.size.toLong)
+      module.declarations.iterator.collect:
+        case declaration
+            if declaration.value.isInstanceOf[InterfaceEndpoint] &&
+              !declaration.value.asInstanceOf[InterfaceEndpoint].boundary =>
+          module.handle -> declaration.value.asInstanceOf[InterfaceEndpoint]
+    .toVector
+    endpoints.flatMap: (owner, endpoint) =>
+      val leaves = ConstructionInterfaceLayout.leaves(
+        endpoint.definition,
+        endpoint.role,
+        charge = closureCharge
+      )
+      leaves.foreach: leaf =>
+        withInterfaceDefinitionScope(leaf.definition, owner):
+          leaf.dataType.foreach(validateShapeType(_, owner, cardinality = true))
+      leaves.flatMap(_.dataType)
+
+  private def materializeInstanceInterfaceDimensions(
+      queries: StructuralParameterBinding.InstanceQueries,
+      snapshot: ConstructionSnapshot
+  ): Unit =
+    closureCharge(instanceInterfacePorts.size.toLong)
+    val contexts = new InstanceTypeContext(snapshot, queries)
+    instanceInterfacePorts.iterator.filter((reference, _) =>
+      closureAccepts("interface", reference)
+    ).foreach: (reference, binding) =>
+      val port = binding.port
+      val owner = records(reference.module)
+      val declaration = owner.declarations(reference.index)
+      val endpoint = declaration.value.asInstanceOf[InterfaceEndpoint]
+      val formals = ConstructionInterfaceLayout.leaves(
+        endpoint.definition,
+        endpoint.role,
+        charge = closureCharge
+      )
+        .flatMap(_.dataType).map(CandidateRuntime.typeDescriptor).distinct
+      val previousModules = moduleStack.toVector
+      val previousCollections = collectionStack.toVector
+      val previousGenerations = generationStack.toVector
+      installValueScope(reference.module, binding.scope)
+      try
+        val query = binding.instance.map(instance =>
+          contexts.query(reference.module, instance, binding.generated, binding.scope)
+        )
+        val directContext = Option.when(binding.instance.isEmpty && binding.generated.nonEmpty)(
+          contexts.selected(reference.module, binding.generated.get, binding.scope)
+        )
+        val actuals = binding.instance.map(instance =>
+          materializeInstanceTypeDescriptors(
+            reference.module,
+            instance,
+            port,
+            formals,
+            queries,
+            query
+          )
+        ).getOrElse(directContext.map: selected =>
+          val originalQueries =
+            ConstructionInterfaceLayout.leaves(
+              endpoint.definition,
+              endpoint.role,
+              charge = closureCharge
+            )
+              .flatMap(leaf =>
+                leaf.dataType.map(value =>
+                  CandidateRuntime.typeDescriptor(value) ->
+                    contexts.definitionQuery(port.module, leaf.definition)
+                )
+              ).toMap
+          materializeTypeDescriptors(
+            reference.module,
+            formals,
+            (formal, value) =>
+              val original = originalQueries(formal)
+              val id =
+                original.resolve(modulePath(port.module), renderShapeDimension(value, port.module))
+              original.positive(id)
+              val actual = selected.importValues(original, Vector(id)).head
+              selected.query.positive(actual)
+              actual
+            ,
+            values => selected.query.exportDimensions(modulePath(reference.module), values)
+          )
+        .getOrElse(formals)).map(CandidateRuntime.dataTypeFromDescriptor)
+        actuals.foreach(validateShapeType(_, reference.module, cardinality = true))
+        instanceInterfaceTypes(reference) = formals.zip(actuals).toMap
+        if declaration.kind == KernelSignalKind.InterfaceArray then
+          val original =
+            records(port.module).declarations(port.index).value.asInstanceOf[InterfaceArray[?, ?]]
+          val dimensions = query.map: query =>
+            val token = renderShapeDimension(original.formalCount, port.module)
+            val id = query.resolve(modulePath(port.module), token)
+            query.positive(id)
+            materializeStructuralDimensions(query.exportDimensions(
+              modulePath(reference.module),
+              Vector(id)
+            ))
+          .getOrElse(directContext.map: selected =>
+            val originalScope = valueRegion(port).map(value => expressionPath(value.reference))
+            val originalQuery = originalScope.map(
+              contexts.lexicalQuery
+            ).getOrElse(new StructuralParameterBinding.Query(snapshot, meter = closureMeter))
+            val id = originalQuery.resolve(
+              modulePath(port.module),
+              renderShapeDimension(original.formalCount, port.module)
+            )
+            originalQuery.positive(id)
+            val actual = selected.importValues(originalQuery, Vector(id)).head
+            selected.query.positive(actual)
+            materializeStructuralDimensions(selected.query.exportDimensions(
+              modulePath(reference.module),
+              Vector(actual)
+            ))
+          .getOrElse(Vector(original.formalCount)))
+          instanceInterfaceDimensions(reference) = dimensions
+          owner.declarations.update(
+            reference.index,
+            declaration.copy(attributes = declaration.attributes :+ ("count" -> dimensions.head))
+          )
+      finally
+        moduleStack.clear(); moduleStack ++= previousModules
+        collectionStack.clear(); collectionStack ++= previousCollections
+        generationStack.clear(); generationStack ++= previousGenerations
+
+  private def materializeStructuralDimensions(
+      graph: StructuralParameterBinding.ResolvedDimensions
+  ): Vector[Dimension] =
+    val closure = boundaryClosureOwner.getOrElse(
+      fail("NODAL-HIERARCHY-058-CLOSURE", "structural materialization requires its closure owner")
+    )
+    closure.meter.checkLive()
+    closure.meter.consumeGraph(graph)
+    val ownedValues = closure.structuralValues.getOrElse:
+      closureCharge(
+        records.valuesIterator.map(_.declarations.size.toLong).sum + expressionValues.size.toLong
+      )
+      val values = records.valuesIterator.flatMap(_.declarations.iterator)
+        .map(value => declarationPath(value.reference) -> value.value).toMap ++
+        expressionValues.iterator.map((reference, value) =>
+          expressionPath(reference) -> value
+        ).toMap
+      closure.structuralValues = Some(values)
+      values
+    val values = mutable.HashMap.empty[Int, Dimension]
+    def asExpression(value: Dimension): Expr[Integer] = value match
+      case literal: Int => makeLiteral(literal.toLong)
+      case expression: Expr[Integer] => expression
+    def makeLiteral(value: Long): Expr[Integer] =
+      val expression = new KernelExpr[Integer](
+        Vector.empty,
+        Some(KernelTypeDescriptor("Integer")),
+        Some(KernelLiteral("integer", value.toString, KernelTypeDescriptor("Integer"))),
+        Some("integer")
+      )
+      captureExpression(expression)
+      expression
+    def materialize(id: Int): Dimension =
+      closure.meter.checkLive()
+      closureCharge(1L)
+      values.getOrElseUpdate(
+        id,
+        graph.existing.get(id).flatMap(path =>
+          ownedValues.get(path)
+        ) match
+          case Some(value: Expr[?]) => value.asInstanceOf[Expr[Integer]]
+          case _ =>
+            val node = graph.nodes(id)
+            node.literal match
+              case Some(value) => if value.isValidInt then value.toInt else makeLiteral(value)
+              case None => node.parameter match
+                  case Some(path) => ownedValues.getOrElse(
+                      path,
+                      fail("NODAL-SHAPE-043-007", "substituted parent parameter is missing")
+                    )
+                      .asInstanceOf[Expr[Integer]]
+                  case None =>
+                    val expression = new KernelExpr[Integer](
+                      node.operands.map(value => asExpression(materialize(value))),
+                      Some(KernelTypeDescriptor("Integer")),
+                      operation = node.operation
+                    )
+                    captureExpression(expression)
+                    expression
+      )
+    graph.dimensions.map(materialize)
+
   private def materializeConservativeIntents(base: ConstructionSnapshot): Unit =
-    val declarations = records.valuesIterator.flatMap(_.declarations.iterator)
-      .map(value => declarationPath(value.reference) -> value.value).toMap
-    val expressions =
-      expressionValues.iterator.map((reference, value) => expressionPath(reference) -> value).toMap
-    val captured = operations.toVector
+    closureCharge(operations.size.toLong)
+    val captured = operations.toVector.filter(value => closureAccepts("conservative", value))
     def inScope[A](operation: Operation)(body: => A): A =
       val previousModules = moduleStack.toVector
       val previousGeneration = generationStack.toVector
@@ -8363,53 +13915,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       operation.values.foreach:
         case root: InstanceArrayRootRecord => inScope(operation):
             val graph = try
-              StructuralParameterBinding.resolveDimensions(
-                base,
-                modulePath(operation.owner),
-                instancePath(operation.owner, root.instanceOrdinal),
-                declarationPath(root.port)
-              )
+              boundaryClosureOwner.filter(_.incremental) match
+                case Some(closure) => StructuralParameterBinding.resolveDimensions(
+                    closure.queries,
+                    modulePath(operation.owner),
+                    instancePath(operation.owner, root.instanceOrdinal),
+                    declarationPath(root.port)
+                  )
+                case None => StructuralParameterBinding.resolveDimensions(
+                    base,
+                    modulePath(operation.owner),
+                    instancePath(operation.owner, root.instanceOrdinal),
+                    declarationPath(root.port)
+                  )
             catch
               case error: IllegalArgumentException => fail("NODAL-SHAPE-043-007", error.getMessage)
-            val values = mutable.HashMap.empty[Int, Dimension]
-            def asExpression(value: Dimension): Expr[Integer] = value match
-              case literal: Int => makeLiteral(literal.toLong)
-              case expression: Expr[Integer] => expression
-            def makeLiteral(value: Long): Expr[Integer] =
-              val expression = new KernelExpr[Integer](
-                Vector.empty,
-                Some(KernelTypeDescriptor("Integer")),
-                Some(KernelLiteral("integer", value.toString, KernelTypeDescriptor("Integer"))),
-                Some("integer")
-              )
-              captureExpression(expression)
-              expression
-            def materialize(id: Int): Dimension = values.getOrElseUpdate(
-              id,
-              graph.existing.get(id).flatMap(path =>
-                declarations.get(path).orElse(expressions.get(path))
-              ) match
-                case Some(value: Expr[?]) => value.asInstanceOf[Expr[Integer]]
-                case _ =>
-                  val node = graph.nodes(id)
-                  node.literal match
-                    case Some(value) => if value.isValidInt then value.toInt else makeLiteral(value)
-                    case None => node.parameter match
-                        case Some(path) => declarations.getOrElse(
-                            path,
-                            fail("NODAL-SHAPE-043-007", "substituted parent parameter is missing")
-                          )
-                            .asInstanceOf[Expr[Integer]]
-                        case None =>
-                          val expression = new KernelExpr[Integer](
-                            node.operands.map(value => asExpression(materialize(value))),
-                            Some(KernelTypeDescriptor("Integer")),
-                            operation = node.operation
-                          )
-                          captureExpression(expression)
-                          expression
-            )
-            root.dimensions = Some(graph.dimensions.map(materialize))
+            root.dimensions = Some(materializeStructuralDimensions(graph))
         case deferred: DeferredNodeArrayRecord => inScope(operation):
             deferred.projection match
               case Some(projection) => materializeNodeArrayProjection(
@@ -8426,15 +13947,42 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         case _ => ()
 
   private def finalizeConservativeArrayBindings(snapshot: ConstructionSnapshot): Unit =
-    val dimensions = snapshot.modules.flatMap(_.declarations).map(value =>
-      value.path -> value.conservativeDimensions
-    ).toMap ++
-      snapshot.instanceArrayRoots.map(value => value.path -> value.dimensions) ++
-      snapshot.shapeViews.map(value => value.path -> value.dimensions) ++
-      snapshot.shapeIndices.map(value => value.path -> value.resultDimensions)
+    def merge[K, V](left: Map[K, V], right: Iterable[(K, V)]): Map[K, V] =
+      if !publicationWorkActive then left ++ right
+      else left ++ publicationElements(right)
+    val declarations = snapshot.modules.flatMap(module =>
+      publicationProbe {
+        publicationCharge(module.declarations.size.toLong)
+        module.declarations
+      }
+    )
+    val declarationPairs = publicationVector(declarations).map(value =>
+      publicationProbe(value.path -> value.conservativeDimensions)
+    )
+    val declarationMap =
+      if !publicationWorkActive then declarationPairs.toMap
+      else publicationElements(declarationPairs).toMap
+    val dimensions = merge(
+      merge(
+        merge(
+          declarationMap,
+          publicationVector(snapshot.instanceArrayRoots).map(value =>
+            publicationProbe(value.path -> value.dimensions)
+          )
+        ),
+        publicationVector(snapshot.shapeViews).map(value =>
+          publicationProbe(value.path -> value.dimensions)
+        )
+      ),
+      publicationVector(snapshot.shapeIndices).map(value =>
+        publicationProbe(value.path -> value.resultDimensions)
+      )
+    )
     try
-      snapshot.instanceArrayRoots.foreach(StructuralParameterBinding.validateRoot(snapshot, _))
-      snapshot.conservativeArrayBindings.foreach: binding =>
+      publicationElements(
+        snapshot.instanceArrayRoots
+      ).foreach(StructuralParameterBinding.validateRoot(snapshot, _))
+      publicationElements(snapshot.conservativeArrayBindings).foreach: binding =>
         StructuralParameterBinding.validateRelation(
           snapshot,
           binding,
@@ -8442,8 +13990,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           dimensions.getOrElse(binding.right, Vector.empty)
         )
     catch case error: IllegalArgumentException => fail("NODAL-SHAPE-043-007", error.getMessage)
-    snapshot.modules.foreach: module =>
-      module.instances.foreach: instance =>
+    publicationElements(snapshot.modules).foreach: module =>
+      publicationElements(module.instances).foreach: instance =>
         val child = snapshot.modules.find(_.path == instance.childModule).get
         child.declarations.filter(value =>
           conservativePortKinds.exists(_.label == value.kind) &&
@@ -8461,10 +14009,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
   private def topologyRecords(): Vector[(KernelTopologyEdge, Operation)] =
     val ordinals = mutable.HashMap.empty[Long, Int]
-    val edges = operations.toVector.flatMap: operation =>
+    val edges = publicationOperationVector.flatMap: operation =>
       if Set("node-connect", "terminal-connect", "inout-pass-through").contains(operation.kind) &&
         operation.values.size >= 2
       then
+        if operation.kind == "terminal-connect" then
+          operation.values.foreach:
+            case view: InterfaceTerminalView[?, ?] if view.permission != "connect" =>
+              fail("NODAL-INTERFACE-058-ANALOG", "connection requires the actual connect view")
+            case _ => ()
         (pathOf(operation.values(0)), pathOf(operation.values(1))) match
           case (Some(left), Some(right)) =>
             val (first, second) =
@@ -8472,7 +14025,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               else left -> right
             val ordinal = ordinals.getOrElse(operation.owner, 0)
             ordinals.update(operation.owner, ordinal + 1)
-            val path = operation.generatedScope.map(_ =>
+            val selectedOperand = operation.values.exists:
+              case view: InterfaceTerminalView[?, ?] =>
+                val root = DigitalInterfaceContract.root(view.endpoint)
+                Option(declarationIds.get(root)).exists(reference =>
+                  reference.module == operation.owner &&
+                    instanceInterfacePorts.get(reference).exists(_.generated.nonEmpty)
+                )
+              case _ => false
+            val path = Option.when(operation.generatedScope.nonEmpty || selectedOperand)(
               s"${modulePath(operation.owner)}.connection_$ordinal"
             )
             Some(KernelTopologyEdge(
@@ -8488,6 +14049,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     edges.sortBy((edge, _) => (edge.owner, edge.kind, edge.left, edge.right, edge.path))
 
   private def inheritedClockEdge(domain: ClockDomain, depth: Int = 0): Option[ClockEdge] =
+    publicationCharge(1L)
     if depth > 128 then resetFailure("clock parent ancestry exceeds depth budget")
     domain.edge.orElse(domain.parent.flatMap(inheritedClockEdge(_, depth + 1)))
 
@@ -8534,27 +14096,54 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       Vector("clock_relation" -> "asynchronous")
     case ClockRelation.Unknown => Vector("clock_relation" -> "unknown")
 
-  private def domainSourcePath(value: AnyRef): String = selectedPath(value).getOrElse(
-    fail("NODAL-DOMAIN-020", "ClockDomain source is outside this construction transaction")
-  )
+  private def domainSourcePath(value: AnyRef): String =
+    publicationProbe(selectedPath(value)).getOrElse(
+      fail("NODAL-DOMAIN-020", "ClockDomain source is outside this construction transaction")
+    )
 
   private def snapshots(resolved: Map[DomainRef, String]): Vector[KernelModuleSnapshot] =
-    val byPath = records.valuesIterator.flatMap(_.domains).map(domain =>
+    snapshotCharge(1L)
+    val byPath = snapshotElements(records.valuesIterator).flatMap(module =>
+      snapshotElements(module.domains)
+    ).map { domain =>
+      snapshotCharge(1L)
       domainPath(domain.reference) -> domain
-    ).toMap
+    }.toMap
     val demandedResets = mutable.HashSet.empty[DomainRef]
-    records.valuesIterator.flatMap(_.declarations).foreach: declaration =>
-      if declaration.attributes.exists {
+    snapshotElements(records.valuesIterator).flatMap(module =>
+      snapshotElements(module.declarations)
+    ).foreach: declaration =>
+      if !snapshotProbe(
+          contextualFsmInitializer(declaration)
+        ) && snapshotElements(declaration.attributes).exists {
           case ("initial", Some(_: Expr[?])) => true
           case _ => false
         }
-      then declarationCandidate(declaration).foreach(domain => demandedResets += domainRef(domain))
-    selectedRequirementBindings.valuesIterator.foreach: (actual, _, _, _) =>
+      then
+        snapshotProbe(declarationCandidate(declaration)).foreach(domain =>
+          demandedResets += domainRef(domain)
+        )
+    snapshotElements(selectedRequirementBindings.valuesIterator).foreach: (actual, _, _, _) =>
       if effectiveResets.containsKey(byPath(resolved(actual)).domain) then demandedResets += actual
-    records.values.toVector.sortBy(record => modulePath(record.handle)).map: module =>
+    snapshotCharge(records.size.toLong)
+    records.values.toVector.sortBy(record => snapshotProbe(modulePath(record.handle)))(using
+      snapshotStringOrdering
+    ).map: module =>
+      snapshotCharge(1L)
+      snapshotCharge(module.domains.size.toLong)
       val domains = module.domains.toVector.map: domain =>
+        snapshotCharge(1L)
+        publicationCharge(domain.domain.resetPolicy.size.toLong)
         val policyAttributes =
-          domain.domain.resetPolicy.toVector.flatMap(resetPolicyAttributes)
+          publicationProbe(domain.domain.resetPolicy.toVector.flatMap(resetPolicyAttributes))
+        // Exact publication admits only a direct external Sync domain: parent, relation and
+        // clock-record metadata are absent. Its fixed assembly shares the domain visit debit;
+        // charge each actual optional/source entry separately before constructing its vector.
+        publicationCharge(
+          domain.domain.resetPolarity.size.toLong + domain.domain.frequency.size.toLong +
+            domain.domain.clock.size.toLong + 1L +
+            (if effectiveResets.containsKey(domain.domain) then 1L else 0L)
+        )
         val metadata =
           domain.domain.resetPolarity.orElse(Option(effectiveResets.get(domain.domain)).map(value =>
             resetRecord(value).polarity
@@ -8593,7 +14182,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               else "async"
             )
           ),
-          if domain.kind == KernelDomainKind.Required then Vector.empty else metadata.sortBy(_._1),
+          if domain.kind == KernelDomainKind.Required then Vector.empty
+          else
+            publicationCharge(metadata.size.toLong)
+            metadata.sortBy(_._1)(using publicationStringOrdering)
+          ,
           relationshipSnapshot(domain),
           Option.when(
             domain.kind == KernelDomainKind.Required
@@ -8602,23 +14195,47 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             domainSourcePath(domain.domain.reset)
           )
         )
+      snapshotCharge(module.declarations.size.toLong)
       val declarations = module.declarations.toVector.map: declaration =>
+        snapshotCharge(1L)
         val retainedAttributes = declaration.attributes ++
           Option.when(Set(
             KernelSignalKind.Register,
             KernelSignalKind.Memory
           ).contains(declaration.kind))(
-            declarationCandidate(declaration).toVector.map(domain =>
+            snapshotProbe(declarationCandidate(declaration)).toVector.map(domain =>
               "declared_domain" -> domainPath(domainRef(domain))
             )
           ).toVector.flatten
         KernelDeclarationSnapshot(
-          declarationPath(declaration.reference),
+          snapshotProbe(declarationPath(declaration.reference)),
           declaration.kind.label,
-          declarationName(declaration.reference),
-          declaration.dataType.map(renderType(_, module.handle)),
-          localDeclarationDomain(declaration, resolved),
+          snapshotProbe(declarationName(declaration.reference)),
+          declaration.dataType.map: dataType =>
+            val typeOwner = dataType match
+              case deferred: KernelInstanceDataType[?] if !deferred.finalized =>
+                instanceDigitalPorts.get(declaration.reference).map(binding =>
+                  binding.instance -> binding.port
+                )
+                  .orElse(
+                    instanceDigitalInouts.get(declaration.reference)
+                  ).orElse(declaration.value match
+                    case view: InterfaceResolvedMember[?, ?] =>
+                      instanceInterfacePorts.get(
+                        declarationIds.get(DigitalInterfaceContract.root(view.endpoint))
+                      ).flatMap(binding => binding.instance.map(_ -> binding.port))
+                    case _ => None).map(_._2.module).getOrElse(
+                    fail(
+                      "NODAL-HIERARCHY-057-001",
+                      "deferred type lost its exact child declaration"
+                    )
+                  )
+              case _ => module.handle
+            renderType(dataType, typeOwner)
+          ,
+          snapshotProbe(localDeclarationDomain(declaration, resolved)),
           retainedAttributes.map: (name, value) =>
+            snapshotCharge(1L)
             val rendered =
               if name == "initial" && declaration.kind == KernelSignalKind.Register then
                 value match
@@ -8631,84 +14248,126 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                   case None => "none"
                   case _ =>
                     fail("NODAL-DIGITAL-054-010", "register initializer is not a typed expression")
+              else if Set("stream_payload", "stream_valid")(name) then
+                value match
+                  case expression: Expr[?] => pathOf(expression).getOrElse(
+                      fail(
+                        "NODAL-STREAM-057-001",
+                        "Stream carrier lost its actual captured identity"
+                      )
+                    )
+                  case _ => fail("NODAL-STREAM-057-001", "Stream carrier is not a typed expression")
+              else if name == "count" && declaration.kind == KernelSignalKind.InterfaceArray then
+                renderShapeDimension(value, module.handle)
               else renderAny(value, module.handle)
             name -> rendered
           ,
           declaration.conservativeDimensions.map(renderShapeDimension(_, module.handle)),
-          if declaration.kind == KernelSignalKind.AnalogNodeArray then
-            generatedScopeSnapshot(module.generatedRegions.find(
-              _.declarations.contains(declaration.reference)
-            ))
-          else None,
-          declarationDomain(declaration, resolved),
-          instanceDigitalPorts.get(declaration.reference).map: (instance, port) =>
+          snapshotProbe(generatedScopeSnapshot(module.generatedRegions.find(region =>
+            region.declarations.contains(declaration.reference) &&
+              (region.areaFamily || declaration.kind == KernelSignalKind.AnalogNodeArray)
+          ))),
+          snapshotProbe(declarationDomain(declaration, resolved)),
+          instanceDigitalPorts.get(declaration.reference).map: boundary =>
             KernelInstancePortSnapshot(
-              instancePath(module.handle, instance.ordinal),
-              declarationPath(port),
-              if declaration.kind == KernelSignalKind.InstanceInput then "input" else "output"
-            )
+              snapshotProbe(instancePath(module.handle, boundary.instance.ordinal)),
+              snapshotProbe(declarationPath(boundary.port)),
+              if declaration.kind == KernelSignalKind.InstanceInput then "input" else "output",
+              boundary.generated.map(generatedSymbolSnapshot(_, boundary.scope)),
+              boundary.generated.flatMap(_ =>
+                boundary.scope.map(region => expressionPath(region.reference))
+              )
+            ),
+          instanceInterfacePorts.get(declaration.reference).map: binding =>
+            interfaceBoundarySnapshot(module.handle, binding),
+          instanceDigitalInouts.get(declaration.reference).map: (instance, port) =>
+            KernelInterfaceBoundarySnapshot(
+              snapshotProbe(instancePath(module.handle, instance.ordinal)),
+              declarationPath(port)
+            ),
+          snapshotProbe(resolvedMemberSnapshot(declaration)),
+          snapshotProbe(conservativeMemberSnapshot(declaration))
         )
+      snapshotCharge(module.instances.size.toLong)
       val instances = module.instances.toVector.map: instance =>
+        snapshotCharge(1L)
         val child = records(instance.child)
+        snapshotCharge(1L)
+        boundDomainCharge(child.domains.size.toLong)
         val bindings = child.domains.filter(_.kind == KernelDomainKind.Required).map: domain =>
+          boundDomainCharge()
           domain.name -> domainPath(selectedRequirementBindings(domain.reference)._1)
         val actualBindings =
+          boundDomainCharge(child.domains.size.toLong)
+          snapshotCharge(1L)
           child.domains.filter(_.kind == KernelDomainKind.Required).flatMap: requirement =>
+            boundDomainCharge()
             val (actualRef, origin, _, _) = selectedRequirementBindings(requirement.reference)
             val actual = records(actualRef.module).domains(actualRef.index)
-            actual.domain.clock.toVector.map: clock =>
-              val physical = byPath(resolved(actualRef))
-              val reset = Option(effectiveResets.get(physical.domain)).map: value =>
-                if actual.kind == KernelDomainKind.Required then
-                  domainSourcePath(actual.domain.reset)
-                else domainSourcePath(value)
+            val (clock, reset) = actualDomainControls(actual, byPath(resolved(actualRef)))
+            boundDomainCharge(clock.size.toLong)
+            clock.toVector.map: clock =>
+              boundDomainCharge()
               KernelInstanceDomainBindingSnapshot(
-                instancePath(module.handle, instance.ordinal) + "." + requirement.name,
+                boundDomainBindingPath(
+                  snapshotProbe(instancePath(
+                    module.handle,
+                    instance.ordinal
+                  )),
+                  requirement.name
+                ),
                 domainPath(requirement.reference),
                 domainPath(actualRef),
                 domainSourcePath(clock),
-                reset,
+                reset.map(domainSourcePath),
                 origin
               )
+        snapshotCharge(instance.parameterOverrides.size.toLong)
         val parameters = instance.parameterOverrides.toVector.map:
           case (parameter, value) =>
+            snapshotCharge(1L)
             val reference = parameter match
               case candidate: AnyRef =>
                 Option(declarationIds.get(candidate)).getOrElse(
                   fail(
                     "NODAL-PARAMETER-BINDING-016",
                     "instance parameter override targets an unknown parameter",
-                    Some(instancePath(module.handle, instance.ordinal))
+                    Some(snapshotProbe(instancePath(module.handle, instance.ordinal)))
                   )
                 )
               case _ =>
                 fail(
                   "NODAL-PARAMETER-BINDING-016",
                   "instance parameter override is not a declaration",
-                  Some(instancePath(module.handle, instance.ordinal))
+                  Some(snapshotProbe(instancePath(module.handle, instance.ordinal)))
                 )
             if reference.module != instance.child then
               fail(
                 "NODAL-PARAMETER-BINDING-017",
                 "instance parameter override targets another Module",
-                Some(instancePath(module.handle, instance.ordinal))
+                Some(snapshotProbe(instancePath(module.handle, instance.ordinal)))
               )
-            declarationName(reference) -> renderAny(value, module.handle)
+            snapshotProbe(declarationName(reference)) -> renderAny(value, module.handle)
         KernelInstanceSnapshot(
-          instancePath(module.handle, instance.ordinal),
-          modulePath(instance.child),
-          instance.lexicalDomain.flatMap(domain => resolved.get(domainRef(domain))),
-          bindings.toVector.sortBy(_._1),
-          parameters.sortBy(_._1),
-          generatedScopeSnapshot(instance.generatedScope),
-          actualBindings.toVector
+          snapshotProbe(instancePath(module.handle, instance.ordinal)),
+          snapshotProbe(modulePath(instance.child)),
+          instance.lexicalDomain.flatMap(domain => resolved.get(domainRef(domain))), {
+            snapshotCharge(bindings.size.toLong)
+            bindings.toVector.sortBy(_._1)(using snapshotStringOrdering)
+          },
+          parameters.sortBy(_._1)(using snapshotStringOrdering),
+          snapshotProbe(generatedScopeSnapshot(instance.generatedScope)), {
+            snapshotCharge(actualBindings.size.toLong)
+            actualBindings.toVector
+          }
         )
       KernelModuleSnapshot(
-        modulePath(module.handle),
+        snapshotProbe(modulePath(module.handle)),
         module.className,
         domains,
         declarations,
-        instances
+        instances,
+        module.externalName
       )
 
   private def generatedBound(value: Any): String = value match
@@ -8717,7 +14376,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       Option(declarationIds.get(parameter)).map(declarationPath).getOrElse(
         fail("NODAL-ITERATION-043-001", "generated bound parameter has no semantic identity")
       )
-    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+    case expression: KernelExpr[?]
+        if requireConstructionPayload(
+          expression
+        ) && expression.literal.exists(_.kind == "integer") =>
       expression.literal.map(_.value).getOrElse(
         fail("NODAL-ITERATION-043-001", "generated integer literal has no value")
       )
@@ -8729,18 +14391,27 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       fail("NODAL-ITERATION-043-001", "generated bound has no canonical symbolic representation")
 
   private def generatedRegionPath(record: GeneratedRegionRecord): String =
+    closureCharge(1L)
     val module = records(record.owner)
     val local = s"generate_${record.ordinal}"
-    record.parentOrdinal match
-      case None => s"${modulePath(record.owner)}.$local"
-      case Some(parent) =>
-        val parentRecord = module.generatedRegions(parent)
-        s"${generatedRegionPath(parentRecord)}.$local"
+    record.digitalRegion.flatMap(_.parent).filter(_.structuralArm.nonEmpty) match
+      case Some(arm) => closurePathAppend(expressionPath(arm.reference), s".$local")
+      case None => record.parentOrdinal match
+          case None => closurePathAppend(modulePath(record.owner), s".$local")
+          case Some(parent) =>
+            val parentRecord = module.generatedRegions(parent)
+            closurePathAppend(generatedRegionPath(parentRecord), s".$local")
 
-  private def generatedSnapshots(): Vector[KernelGeneratedRegionSnapshot] =
+  private def generatedSnapshots(staticDependenciesOnly: Boolean = false)
+      : Vector[KernelGeneratedRegionSnapshot] =
+    closureCharge(records.size.toLong)
+    // The module inventory's sort has at most quadratic comparisons; precharge it
+    // independently even when every generated-region registry is empty.
+    closureCharge(records.size.toLong * records.size.toLong * 2L)
     records.values.toVector
-      .sortBy(record => modulePath(record.handle))
+      .sortBy(record => snapshotProbe(modulePath(record.handle)))(using snapshotStringOrdering)
       .flatMap: module =>
+        snapshotCharge(1L)
         module.generatedRegions.toVector.map: region =>
           KernelGeneratedRegionSnapshot(
             path = generatedRegionPath(region),
@@ -8755,15 +14426,23 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             maximum = region.maximum,
             maximumTripCount = region.maximumTripCount,
             declarations = region.declarations.toVector.map(declarationPath),
-            digitalBody = loopRegions.valuesIterator.find(value =>
-              value.structuralGenerate && value.loop.exists(_.generated.contains(region))
-            ).map(value =>
+            digitalBody = region.digitalRegion.filter(_.structuralGenerate).map(value =>
+              val (captures, arguments) = if staticDependenciesOnly then
+                staticRegionSignature(value)
+              else
+                value.captures.valuesIterator.map(capture => pathOf(capture._1).get).toVector ->
+                  regionArguments(value)
               KernelDigitalGeneratedBody(
-                value.captures.valuesIterator.map(capture => pathOf(capture._1).get).toVector,
-                regionArguments(value),
-                value.loop.get.sourceOrdinal
+                captures,
+                arguments,
+                value.loop.get.sourceOrdinal,
+                value.parent.map(parent => expressionPath(parent.reference))
               )
-            )
+            ),
+            yieldedArea = region.yieldedArea.map(value =>
+              (Vector(modulePath(value.owner)) ++ areaComponents(value)).mkString(".")
+            ),
+            exports = generatedAreaExports(region)
           )
 
   private def canonicalGeneratedOwnership(
@@ -8838,10 +14517,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         region = expressionRegions.get(view.reference).map(value => expressionPath(value.reference))
       )
 
+  private def publicationSourceIndex(entries: Vector[SourceMapEntry]) =
+    val pairs = publicationVector(entries).map(entry =>
+      publicationProbe(entry.semanticPath -> entry.source)
+    )
+    if !publicationWorkActive then pairs.toMap
+    else publicationElements(pairs).toMap
+
   private def waiverSnapshots(
       sourceMap: Vector[SourceMapEntry]
   ): Vector[KernelWaiverSnapshot] =
-    val sourceByPath = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    val sourceByPath = publicationSourceIndex(sourceMap)
     executableWaivers.toVector.map: (reference, waiver) =>
       val path = expressionPath(reference)
       KernelWaiverSnapshot(
@@ -8859,7 +14545,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def continuousOperatorSnapshots(
       sourceMap: Vector[SourceMapEntry]
   ): Vector[KernelContinuousOperatorSnapshot] =
-    val sourceByPath = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    val sourceByPath = publicationSourceIndex(sourceMap)
+    publicationCharge(6L)
     val allAnalyses = Vector(
       "ac",
       "dc",
@@ -8913,7 +14600,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
   private def transferOperatorSnapshots(sourceMap: Vector[SourceMapEntry])
       : Vector[KernelTransferOperatorSnapshot] =
-    val sources = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    val sources = publicationSourceIndex(sourceMap)
     transferOperators.toVector.map: (reference, kind, n, d, inputs, dimension) =>
       val path = expressionPath(reference)
       val generatedOwnership = analogRegions.find(_.expressions.contains(reference))
@@ -8939,7 +14626,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
   private def noiseOperatorSnapshots(sourceMap: Vector[SourceMapEntry])
       : Vector[KernelNoiseOperatorSnapshot] =
-    val sources = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    val sources = publicationSourceIndex(sourceMap)
     noiseOperators.toVector
       .sortBy: (reference, _, _, _, _) =>
         modulePath(reference.module) -> reference.index
@@ -8967,7 +14654,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def waveformOperatorSnapshots(
       sourceMap: Vector[SourceMapEntry]
   ): Vector[KernelWaveformOperatorSnapshot] =
-    val sources = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    val sources = publicationSourceIndex(sourceMap)
     waveformOperators.toVector.map:
       case (
             reference,
@@ -9008,15 +14695,29 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     .sortBy(_.path)
 
   private def structuralShapeExpressionRoots: Iterator[Any] =
-    shapeIndices.valuesIterator.flatMap(index =>
-      index.indices.iterator ++ index.resultDimensions.iterator ++
-        index.sourceUses.iterator.flatMap(_._2.iterator)
-    ) ++ operations.iterator.flatMap(_.values.collect { case root: InstanceArrayRootRecord =>
-      root
-    })
-      .flatMap(_.dimensions.iterator.flatten) ++ shapeViews.valuesIterator.flatMap(view =>
-      view.dimensions.iterator ++ view.slice.iterator.flatMap(selection =>
-        Iterator(selection.lower, selection.upperExclusive)
+    snapshotElements(shapeIndices.valuesIterator).flatMap(index =>
+      snapshotElements(index.indices.iterator) ++ snapshotElements(
+        index.resultDimensions.iterator
+      ) ++
+        snapshotElements(index.sourceUses.iterator).flatMap(use =>
+          snapshotElements(use._2.iterator)
+        )
+    ) ++ snapshotElements(operations.iterator).flatMap(operation =>
+      // Keep the original eager payload collect, including rejected payload entries.
+      operation.values.collect {
+        case value if { snapshotCharge(1L); value.isInstanceOf[InstanceArrayRootRecord] } =>
+          value.asInstanceOf[InstanceArrayRootRecord]
+      }
+    )
+      .flatMap(root =>
+        snapshotCharge(1L)
+        snapshotElements(root.dimensions.iterator).flatMap(dimensions =>
+          snapshotElements(dimensions.iterator)
+        )
+      ) ++ snapshotElements(shapeViews.valuesIterator).flatMap(view =>
+      snapshotElements(view.dimensions.iterator) ++ snapshotElements(view.slice.iterator).flatMap(
+        selection =>
+          snapshotElements(Iterator(selection.lower, selection.upperExclusive))
       )
     )
 
@@ -9099,33 +14800,78 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         )
 
   private def capturedExpressionClosure(roots: Iterator[Any]): Set[ExpressionRef] =
-    val reachable = mutable.LinkedHashSet.empty[ExpressionRef]
-    val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    if !exportAccountingActive then
+      val reachable = mutable.LinkedHashSet.empty[ExpressionRef]
+      val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
 
-    def visit(value: Any): Unit = value match
-      case expression: KernelExpr[?] =>
-        if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
-          val reference = Option(expressionIds.get(expression)).getOrElse(
-            fail(
-              "NODAL-PARAMETER-BINDING-021",
-              "static parameter expression has no captured semantic identity"
+      def visit(value: Any): Unit = value match
+        case expression: KernelExpr[?] =>
+          if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
+            val reference = Option(expressionIds.get(expression)).getOrElse(
+              fail(
+                "NODAL-PARAMETER-BINDING-021",
+                "static parameter expression has no captured semantic identity"
+              )
             )
-          )
-          reachable += reference
-          if expression.literal.isEmpty then expression.operands.foreach(visit)
-      case _: Param[?] => ()
-      case _ => ()
+            if !constructionPayloadAvailable(expression) then
+              fail(
+                "NODAL-HIERARCHY-058-CONSTRUCTION",
+                "pending construction cannot enter static closure"
+              )
+            reachable += reference
+            if expression.literal.isEmpty then expression.operands.foreach(visit)
+        case _: Param[?] => ()
+        case _ => ()
 
-    roots.foreach(visit)
-    reachable.toSet
+      roots.foreach(visit)
+      reachable.toSet
+    else
+      val reachable = mutable.LinkedHashSet.empty[ExpressionRef]
+      val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+      var stack = List.empty[Iterator[Any]]
+      snapshotCharge(1L)
+      stack = roots :: stack
+      // The stack preserves recursive preorder without imposing a new DAG depth bound.
+      while stack.nonEmpty do
+        val current = stack.head
+        if current.hasNext then
+          // Every root/operand edge is charged before consumption, including memo hits.
+          snapshotCharge(1L)
+          current.next() match
+            case expression: KernelExpr[?] =>
+              if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
+                val reference = Option(expressionIds.get(expression)).getOrElse(
+                  fail(
+                    "NODAL-PARAMETER-BINDING-021",
+                    "static parameter expression has no captured semantic identity"
+                  )
+                )
+                if !constructionPayloadAvailable(expression) then
+                  fail(
+                    "NODAL-HIERARCHY-058-CONSTRUCTION",
+                    "pending construction cannot enter static closure"
+                  )
+                reachable += reference
+                if expression.literal.isEmpty then
+                  snapshotCharge(1L)
+                  stack = expression.operands.iterator :: stack
+            case _: Param[?] => ()
+            case _ => ()
+        else
+          snapshotCharge(1L)
+          stack = stack.tail
+      snapshotCharge(reachable.size.toLong)
+      reachable.toSet
 
   private def boundaryElementKind(dataType: DataType[?]): String =
     var current = dataType
     var depth = 0
+    snapshotCharge(1L)
     var descriptor = CandidateRuntime.typeDescriptor(current)
     while descriptor.kind == "Vec" && depth <= 128 do
       current = descriptor.arguments.headOption.collect { case value: DataType[?] => value }
         .getOrElse(fail("NODAL-DIGITAL-054-018", "capability Vec has no element type"))
+      snapshotCharge(1L)
       descriptor = CandidateRuntime.typeDescriptor(current)
       depth += 1
     if depth > 128 then fail("NODAL-DIGITAL-054-018", "capability type exceeds depth bound")
@@ -9139,6 +14885,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       .contains(boundaryElementKind(dataType))
 
   private def capabilitySourceRoot(value: AnyRef): Option[DeclarationRef] =
+    publicationCharge(1L)
     var current =
       Option(declarationIds.get(value)).map(identity[DeclarationRef | ExpressionRef])
         .orElse(Option(expressionIds.get(value)))
@@ -9206,13 +14953,235 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         )
     case _ => fail("NODAL-DIGITAL-054-010", "digital assignment requires an actual typed value")
 
+  /** Query-local admission of the outer grouping body, using the existing captured owners. */
+  private def verifySelectedInputOuterFamilies(instances: IterableOnce[InstanceRecord]): Unit =
+    val nested = mutable.LinkedHashMap.empty[GeneratedRegionRecord, GeneratedRegionRecord]
+    def invalid(): Nothing = fail(
+      "NODAL-HIERARCHY-058-001",
+      "selected input outer family must only group its exact inner family and necessary Integer bounds"
+    )
+    publicationElements(instances).foreach: instance =>
+      instance.generatedScope.foreach: inner =>
+        inner.parentOrdinal.foreach: ordinal =>
+          publicationCharge(3L) // original parent lookup and query-local deduplication
+          val outer = records(inner.owner).generatedRegions(ordinal)
+          if nested.get(outer).exists(_ ne inner) then invalid()
+          nested.update(outer, inner)
+    if nested.nonEmpty then
+      val boundClosures = mutable.HashMap.empty[DigitalValueRegionRecord, Set[ExpressionRef]]
+      publicationElements(nested.iterator).foreach: (outer, inner) =>
+        publicationCharge(5L)
+        val body = outer.digitalRegion.getOrElse(invalid())
+        if outer.declarations.nonEmpty || body.assignmentCount != 1 ||
+          !inner.digitalRegion.exists(region =>
+            region.parent.contains(body) && region.loop.exists(_.sourceOrdinal == 0)
+          )
+        then invalid()
+        val target = generatedRegionPath(inner)
+        val exports = generatedAreaExports(outer)
+        if exports.isEmpty || !publicationElements(exports).forall(exported =>
+            publicationCharge(3L)
+            exported.kind == "family" && exported.access == "read_only" && exported.target == target
+          )
+        then invalid()
+        // Capture arguments are aliases to parent-owned values, not executable outer producers.
+        // Host Int bounds need no source nodes; their i64 producers are emitted by the bridge.
+        val closure = capturedExpressionClosure(Iterator(inner.lower, inner.upperExclusive, inner.step))
+        publicationCharge(1L)
+        boundClosures.update(body, closure)
+      publicationElements(records.valuesIterator).foreach: module =>
+        publicationElements(module.instances).foreach: instance =>
+          publicationCharge(2L)
+          if instance.generatedScope.exists(nested.contains) then invalid()
+      publicationElements(expressionRegions.iterator).foreach: (reference, region) =>
+        publicationCharge(2L)
+        boundClosures.get(region).foreach: closure =>
+          publicationCharge(1L)
+          collectionArguments.get(reference) match
+            case Some((actual, index)) =>
+              publicationCharge(4L)
+              if (actual ne region) || !actual.arguments.lift(index).exists((argument, role) =>
+                  Option(expressionIds.get(argument)).contains(reference) &&
+                    Set("induction", "capture", "static_capture", "index_capture")(role)
+                )
+              then invalid()
+            case None =>
+              publicationCharge(3L)
+              val structural = expressionValues.get(reference).exists(expression =>
+                expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
+                  (expression.literal.exists(_.kind == "integer") ||
+                    expression.operation.flatMap(IterationDomain.staticArithmetic).nonEmpty)
+              )
+              if !closure(reference) || !structural then invalid()
+
+  /** A guarded selected input keeps the original root statement arm as its sole scope. */
+  private def selectedInputGuardedArm(
+      family: GeneratedRegionRecord,
+      scope: Option[DigitalValueRegionRecord],
+      owner: Long
+  ): Option[DigitalValueRegionRecord] =
+    publicationCharge(12L)
+    family.digitalRegion.flatMap(_.parent).filter: arm =>
+      family.owner == owner && family.parentOrdinal.isEmpty && arm.parent.isEmpty &&
+        arm.reference.module == owner && scope.exists(_ eq arm) &&
+        structuralArms.get(arm.reference).exists(_ eq arm) &&
+        arm.structuralArm.exists: header =>
+          structuralIfs.get(header.conditional).exists: conditional =>
+            conditional.reference.module == owner && conditional.parent.isEmpty &&
+              conditional.result.isEmpty &&
+              ((if header.whenTrue then conditional.trueArm else conditional.falseArm) eq arm)
+
+  /** Admission only: writer coverage remains owned by the existing assignment proof. */
+  private def requireSelectedInputTarget(
+      root: DeclarationRef,
+      binding: InstancePortBoundaryRecord,
+      owner: Long
+  ): Unit =
+    def invalid(): Nothing = fail(
+      "NODAL-HIERARCHY-058-001",
+      "selected input requires a whole scalar port of a direct fixed generated Instance",
+      Some(declarationPath(root))
+    )
+    val selection = binding.generated.getOrElse(invalid())
+    val reference = selection.reference
+    val family = reference.family.generatedRegion
+    val original = records(binding.port.module).declarations(binding.port.index)
+    val proxy = records(root.module).declarations(root.index)
+    val scalar = original.dataType.exists(value =>
+      val dataType = CandidateRuntime.typeDescriptor(value)
+      dataType.kind == "Bool" || Set("UInt", "Bits")(dataType.kind) &&
+        dataType.arguments.size == 1 &&
+        conservativeIntegerLiteral(dataType.arguments.head).exists(_ > 0L)
+    )
+    def fixedAxis(value: GeneratedRegionRecord): Boolean =
+      publicationCharge(12L) // fixed-size owned axis facts, including three literal bounds
+      value.owner == owner && value.areaFamily && value.yieldedArea.nonEmpty &&
+        value.familyHandle.exists(_.generatedRegion eq value) && value.digitalRegion.nonEmpty &&
+        Vector(value.lower, value.upperExclusive, value.step).forall(_.isInstanceOf[Int]) &&
+        conservativeIntegerLiteral(value.step).exists(_ > 0L) && value.maximumTripCount > 0
+    val direct = reference.family.selectionPrefix.isEmpty &&
+      family.familyHandle.exists(_ eq reference.family) && family.parentOrdinal.isEmpty &&
+      family.digitalRegion.exists(_.parent.isEmpty) && binding.scope.isEmpty
+    val guarded = binding.scope.nonEmpty && reference.family.selectionPrefix.isEmpty && fixedAxis(family) &&
+      family.familyHandle.exists(_ eq reference.family) &&
+      selectedInputGuardedArm(family, binding.scope, owner).nonEmpty
+    val nested = reference.family.selectionPrefix match
+      case Vector(prefix) if binding.scope.isEmpty && fixedAxis(family) && fixedAxis(prefix.family) =>
+        val outer = prefix.family
+        publicationCharge(records(owner).generatedRegions.size.toLong + prefix.members.size.toLong + 5L)
+        outer.parentOrdinal.isEmpty && outer.digitalRegion.exists(_.parent.isEmpty) &&
+          records(owner).generatedRegions.exists(_ eq outer) && prefix.members.nonEmpty &&
+          conservativeIntegerLiteral(prefix.ordinal).exists(value =>
+            value >= 0L && value < outer.maximumTripCount.toLong
+          ) && generatedAreaPath(outer, prefix.members.dropRight(1)).members
+            .get(prefix.members.last).exists(member =>
+              generatedFamilyExportTarget(outer, member) eq family
+            )
+      case _ => false
+    boundDomainCharge(records(owner).generatedRegions.size.toLong + records(owner).instances.size.toLong)
+    if root.module != owner || family.owner != owner || !family.areaFamily ||
+      !records(owner).generatedRegions.exists(_ eq family) || (!direct && !nested && !guarded) ||
+      reference.members.nonEmpty ||
+      !Vector(family.lower, family.upperExclusive, family.step).forall(value =>
+        conservativeIntegerLiteral(value).nonEmpty
+      ) || family.maximumTripCount <= 0 ||
+      !conservativeIntegerLiteral(reference.ordinal).exists(value =>
+        value >= 0L && value < family.maximumTripCount.toLong
+      ) || !binding.instance.generatedScope.contains(family) ||
+      !records(owner).instances.exists(_ eq binding.instance) ||
+      binding.port.module != binding.instance.child || original.kind != KernelSignalKind.Input ||
+      proxy.kind != KernelSignalKind.InstanceInput || !scalar ||
+      !family.yieldedArea.flatMap(_.members.get(selection.member)).exists(member =>
+        generatedInstanceExportTarget(family, member)._2 eq binding.instance
+      )
+    then invalid()
+    val exact = for
+      left <- proxy.dataType
+      right <- original.dataType
+    yield DigitalEnumContract.sameType(
+      CandidateRuntime.typeDescriptor(left), CandidateRuntime.typeDescriptor(right)
+    )
+    if !exact.contains(true) then invalid()
+
+  /** Selected Interface writes retain the original exported endpoint and declared input leaf. */
+  private def requireSelectedInterfaceInputTarget(
+      root: DeclarationRef,
+      binding: InterfaceBoundaryRecord,
+      member: String,
+      owner: Long
+  ): Unit =
+    def invalid(): Nothing = fail(
+      "NODAL-HIERARCHY-058-INTERFACE",
+      "selected Interface input requires a plain scalar leaf of a direct fixed generated child",
+      Some(declarationPath(root))
+    )
+    val selection = binding.generated.getOrElse(invalid())
+    val instance = binding.instance.getOrElse(invalid())
+    val reference = selection.reference
+    val family = reference.family.generatedRegion
+    val original = records(binding.port.module).declarations(binding.port.index)
+    val endpoint = original.value match
+      case value: InterfacePort[?, ?]
+          if value.exported && !value.boundary && value.origin.isEmpty => value
+      case _ => invalid()
+    val proxy = records(root.module).declarations(root.index).value match
+      case value: InterfacePort[?, ?] if value.origin.isEmpty => value
+      case _ => invalid()
+    boundDomainCharge(records(owner).generatedRegions.size.toLong +
+      records(owner).instances.size.toLong + areas.size.toLong)
+    if root.module != owner || family.owner != owner || !family.areaFamily ||
+      !records(owner).generatedRegions.exists(_ eq family) ||
+      !family.familyHandle.exists(_ eq reference.family) ||
+      family.parentOrdinal.nonEmpty || family.digitalRegion.isEmpty ||
+      family.digitalRegion.exists(_.parent.nonEmpty) || reference.family.selectionPrefix.nonEmpty ||
+      reference.members.nonEmpty || binding.scope.nonEmpty ||
+      !Vector(family.lower, family.upperExclusive, family.step).forall(value =>
+        conservativeIntegerLiteral(value).nonEmpty
+      ) || family.maximumTripCount <= 0 ||
+      !conservativeIntegerLiteral(reference.ordinal).exists(value =>
+        value >= 0L && value < family.maximumTripCount.toLong
+      ) || !instance.generatedScope.contains(family) ||
+      !records(owner).instances.exists(_ eq instance) || binding.port.module != instance.child ||
+      valueRegion(binding.port).nonEmpty || areas.exists(area =>
+        boundDomainCharge(area.declarations.size.toLong)
+        area.declarations.contains(binding.port)
+      ) || records(instance.child).generatedRegions.exists(region =>
+        boundDomainCharge(1L + region.declarations.size.toLong)
+        region.declarations.contains(binding.port)
+      ) ||
+      (proxy.definition ne endpoint.definition) || proxy.role != endpoint.role ||
+      !family.yieldedArea.flatMap(_.members.get(selection.member)).exists(value =>
+        generatedInstanceExportTarget(family, value)._2 eq instance
+      )
+    then invalid()
+    val leaves = ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role)
+    boundDomainCharge(leaves.size.toLong)
+    val leaf = leaves.find(_.name == member).getOrElse(invalid())
+    val scalar = leaf.dataType.exists(value =>
+      val dataType = CandidateRuntime.typeDescriptor(value)
+      dataType.kind == "Bool" || Set("UInt", "Bits")(dataType.kind) &&
+        dataType.arguments.size == 1 &&
+        conservativeIntegerLiteral(dataType.arguments.head).exists(_ > 0L)
+    )
+    if leaf.protocol != "plain" || leaf.mode.nonEmpty || leaf.access != "in" ||
+      leaf.nestedRoles.nonEmpty || leaf.nestedInterfaces.nonEmpty || !scalar ||
+      endpoint.role.name == "monitor"
+    then invalid()
+
+  private def sameSelectedInputLane(
+      left: GeneratedSymbolSelectionRecord,
+      right: GeneratedSymbolSelectionRecord
+  ): Boolean = left == right
+
   /** Resolve only actual canonical shape edges, never an operation spelling or materialized alias.
     */
   private def digitalAssignmentRoot(
       value: Any,
       owner: Long,
-      allowRootRegister: Boolean
+      allowRootRegister: Boolean,
+      generatedScope: Option[GeneratedRegionRecord] = activeGeneratedRegion
   ): DeclarationRef =
+    boundDomainCharge()
     val selected = assignmentReference(value)
     var current = selected
     val visited = mutable.HashSet.empty[ExpressionRef]
@@ -9229,13 +15198,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         )
       val index = shapeIndices.get(reference)
       val view = shapeViews.get(reference)
-      if index.flatMap(_.generatedScope).nonEmpty || view.flatMap(_.generatedScope).nonEmpty then
-        fail("NODAL-DIGITAL-054-010", "digital assignment projection requires direct-module scope")
+      val projectionScope = index.flatMap(_.generatedScope).orElse(view.flatMap(_.generatedScope))
+      if projectionScope.exists(region => !generatedScope.contains(region) || !region.areaFamily)
+      then
+        fail(
+          "NODAL-DIGITAL-054-010",
+          "digital assignment projection requires its actual generated scope"
+        )
       val capture = collectionArguments.get(reference).filter(_._1.permitsAssignment).flatMap:
         (region, _) =>
           region.captures.valuesIterator.find(value =>
             Option(expressionIds.get(value._2)).contains(reference)
-          ).map(value => valueReference(value._1))
+          ).map(value => valueReference(dataCapture(value._1)))
       val input = capture.orElse(index.map(_.input)).orElse(view.map(_.input)).getOrElse(
         fail(
           "NODAL-DIGITAL-054-010",
@@ -9258,7 +15232,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       current = input
     val root = current.asInstanceOf[DeclarationRef]
     val declaration = records(root.module).declarations(root.index)
-    val direct = !records(root.module).generatedRegions.exists(_.declarations.contains(root))
+    instanceDigitalPorts.get(root).filter(_.generated.nonEmpty).foreach: binding =>
+      if selected != root || generatedScope.nonEmpty then
+        fail("NODAL-HIERARCHY-058-001", "selected input assignment must be whole and Module-local")
+      requireSelectedInputTarget(root, binding, owner)
+    val rootScope = records(root.module).generatedRegions.find(_.declarations.contains(root))
+    val ownedScope = rootScope.isEmpty || rootScope.exists(region =>
+      region.areaFamily && generatedScope.contains(region)
+    )
     val writable = Set(
       KernelSignalKind.Wire,
       KernelSignalKind.Output,
@@ -9266,7 +15247,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     ).contains(declaration.kind)
     val rootRegister = allowRootRegister && selected == root &&
       declaration.kind == KernelSignalKind.Register
-    if root.module != owner || !direct || (!writable && !rootRegister) then
+    if root.module != owner || !ownedScope || (!writable && !rootRegister) then
       fail(
         "NODAL-DIGITAL-054-010",
         "digital assignment target requires an owned wire/output; projected register updates are unsupported"
@@ -9310,7 +15291,49 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       resolved: Map[DomainRef, String]
   ): Vector[(KernelDigitalAssignmentSnapshot, Operation)] =
     val ordinals = mutable.HashMap.empty[Long, Int]
-    operations.toVector.filter(operation =>
+    // Publication sees both completed callbacks. Do not decide opposite-arm emptiness while
+    // constructing the first arm, and do not rescan the registries for every lane writer.
+    lazy val checkedGuardedArms =
+      publicationCharge(1L)
+      mutable.HashSet.empty[DigitalValueRegionRecord]
+    def verifyGuardedArm(family: GeneratedRegionRecord, arm: DigitalValueRegionRecord): Unit =
+      publicationCharge(2L)
+      if checkedGuardedArms.add(arm) then
+        def invalid(): Nothing = fail(
+          "NODAL-HIERARCHY-058-001",
+          "guarded selected inputs require one direct family and an empty opposite statement arm"
+        )
+        val header = arm.structuralArm.getOrElse(invalid())
+        val conditional = structuralIfs.getOrElse(header.conditional, invalid())
+        val opposite = if header.whenTrue then conditional.falseArm else conditional.trueArm
+        publicationCharge(8L)
+        if opposite.parent.nonEmpty || opposite.yielded.nonEmpty ||
+          opposite.arguments.nonEmpty || opposite.captures.nonEmpty ||
+          !structuralArms.get(opposite.reference).exists(_ eq opposite) ||
+          !opposite.structuralArm.contains(StructuralArmHeader(header.conditional, !header.whenTrue))
+        then invalid()
+        publicationElements(allValueRegions).foreach: region =>
+          publicationCharge(3L)
+          if region.parent.exists(_ eq opposite) ||
+            (region.parent.exists(_ eq arm) && !family.digitalRegion.exists(_ eq region))
+          then invalid()
+        publicationElements(expressionRegions.iterator).foreach: (_, region) =>
+          publicationCharge(1L)
+          if region eq opposite then invalid()
+        publicationElements(operations.iterator).foreach: operation =>
+          publicationCharge(1L)
+          if operation.digitalRegion.exists(_ eq opposite) then invalid()
+        publicationElements(instanceDigitalPorts.valuesIterator).foreach: binding =>
+          publicationCharge(1L)
+          if binding.scope.exists(_ eq opposite) then invalid()
+        publicationElements(instanceInterfacePorts.valuesIterator).foreach: binding =>
+          publicationCharge(1L)
+          if binding.scope.exists(_ eq opposite) then invalid()
+        publicationElements(records(family.owner).generatedRegions).foreach: other =>
+          publicationCharge(3L)
+          if other.digitalRegion.flatMap(_.parent).exists(_ eq arm) && (other ne family) then
+            invalid()
+    publicationOperationVector.filter(operation =>
       Set("assignment", "value-connect").contains(operation.kind)
     ).map: operation =>
       if operation.generatedScope.nonEmpty || operation.values.size != 2 then
@@ -9318,11 +15341,51 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val target = digitalAssignmentRoot(
         operation.values.head,
         operation.owner,
-        allowRootRegister = true
+        allowRootRegister = true,
+        generatedScope = assignmentGeneratedScope(operation)
       )
+      instanceDigitalPorts.get(target).filter(_.generated.nonEmpty).foreach: binding =>
+        def invalid(): Nothing = fail(
+          "NODAL-HIERARCHY-058-001",
+          "selected input requires a whole continuous writer in its exact admitted scope"
+        )
+        if operation.eventProcess.nonEmpty then invalid()
+        if binding.scope.nonEmpty || operation.digitalRegion.nonEmpty then
+          val family = binding.generated.get.reference.family.generatedRegion
+          val arm = selectedInputGuardedArm(family, binding.scope, operation.owner)
+            .getOrElse(invalid())
+          if !operation.digitalRegion.exists(_ eq arm) then invalid()
+          verifyGuardedArm(family, arm)
+          // Only a genuine Module-owned source entering through the existing capture owner
+          // is admitted. An arm-local expression, sibling value or forged alias is not one.
+          val source = operation.values(1) match
+            case value: Expr[?] => value
+            case _ => invalid()
+          val reference = valueReference(source)
+          publicationCharge(4L)
+          val sourceOwner = reference match
+            case value: DeclarationRef => value.module
+            case value: ExpressionRef => value.module
+          if sourceOwner != operation.owner || valueRegion(reference).nonEmpty then invalid()
+          val bound = bindCollectionValue(source, Some(arm), operation.owner, create = false)
+          val boundReference = valueReference(bound) match
+            case value: ExpressionRef => value
+            case _ => invalid()
+          publicationCharge(5L)
+          val captured = arm.captures.get(reference).exists:
+            case (original: Expr[?], argument: KernelExpr[?]) =>
+              (original eq source) && (argument eq bound) &&
+                collectionArguments.get(boundReference).exists: (actual, index) =>
+                  (actual eq arm) && arm.arguments.lift(index).exists: (value, role) =>
+                    (value eq argument) && role == "capture"
+            case _ => false
+          if !captured then invalid()
+      boundDomainCharge(2L) // ordinal map read and write
       val ordinal = ordinals.getOrElse(operation.owner, 0)
       ordinals.update(operation.owner, ordinal + 1)
+      boundDomainCharge() // cached module path dispatch
       val owner = modulePath(operation.owner)
+      boundDomainCharge(2L) // canonical declaration lookup and bounded scalar capability test
       val declaration = records(target.module).declarations(target.index)
       if declaration.dataType.exists(isBoundaryCapability) then
         if declaration.kind != KernelSignalKind.Output then
@@ -9330,6 +15393,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         operation.values(1) match
           case value: Expr[?] => validateBoundarySource(value, declaration, resolved)
           case _ => fail("NODAL-DIGITAL-054-018", "capability assignment requires a typed source")
+      // This scoped profile has exactly ordinal zero. Pay the emitted path characters and
+      // the record/tuple constructions; existing operand-path probes remain unchanged.
+      boundDomainCharge(owner.length.toLong + ".digital_assignment_0".length.toLong + 2L)
       KernelDigitalAssignmentSnapshot(
         s"$owner.digital_assignment_$ordinal",
         owner,
@@ -9363,45 +15429,68 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         .orElse(Option(expressionIds.get(reference)).map(_.module)).map(modulePath)
     case _ => None
 
-  private def digitalValueSnapshots(interfaces: DigitalInterfaceContract.Capture)
+  private def digitalValueSnapshots(
+      interfaces: DigitalInterfaceContract.Capture,
+      nets: Vector[KernelResolvedNetSnapshot]
+  )
       : (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
-    val expressions = expressionValues.toVector.map: (reference, expression) =>
+    publicationCharge(1L + expressionValues.size.toLong)
+    val expressions = publicationVector(expressionValues.toVector).map: (reference, expression) =>
       (expression, expressionPath(reference), modulePath(reference.module), reference.module)
-    DigitalInterfaceContract.validateValues(
-      expressions.map((expression, _, owner, _) => expression -> owner),
+    val contextualSplits = DigitalInterfaceContract.validateValues(
+      publicationVector(expressions).map((expression, _, owner, _) => expression -> owner),
       interfaces,
       pathOf,
-      digitalOwnerOf
+      digitalOwnerOf,
+      publicationVector(nets).flatMap(net =>
+        net.boundary.map(boundary => net.path -> boundary.endpoint)
+      ),
+      publicationElements(records.valuesIterator).filter(_.externalName.nonEmpty)
+        .flatMap(_.declarations.iterator.map(declaration =>
+          declarationPath(declaration.reference)
+        )).toSet ++ interfaces.interfaces.filter(endpoint =>
+        records.valuesIterator.exists(module =>
+          module.externalName.nonEmpty && modulePath(module.handle) == endpoint.owner
+        )
+      ).flatMap(_.members.map(_.path))
     )
-    val storageRoots = records.valuesIterator.flatMap(_.declarations.iterator)
+    val storageRoots = publicationElements(records.valuesIterator).flatMap(module =>
+      publicationElements(module.declarations.iterator)
+    )
       .filter(declaration =>
         Set(KernelSignalKind.Register, KernelSignalKind.Wire).contains(declaration.kind)
       )
-      .flatMap(_.attributes.iterator.collect { case ("initial", value) => value }).flatMap:
+      .flatMap(declaration =>
+        publicationElements(declaration.attributes.iterator).collect {
+          case ("initial", value) => value
+        }
+      ).flatMap:
         case expression: Expr[?] => Vector(expression)
         case Some(expression: Expr[?]) => Vector(expression)
         case _ => Vector.empty
-    val assignmentRoots = operations.iterator.filter(operation =>
+    val assignmentRoots = publicationElements(operations.iterator).filter(operation =>
       Set("assignment", "value-connect").contains(operation.kind)
-    ).flatMap(_.values.collect:
-      case expression: KernelExpr[?]
-          if expression.literal.nonEmpty || Option(expressionIds.get(expression)).exists(
-            reference =>
-              shapeIndices.contains(reference) || shapeViews.contains(reference)
-          ) || expression.operation.exists(operation =>
-            operation.startsWith(
-              DigitalEnumContract.Prefix
-            ) || DigitalScalarContract.Operations.contains(
-              operation
-            ) || DigitalInterfaceContract.ValueOperations.contains(operation) ||
-              operation == DigitalMaterializationContract.Operation ||
-              DigitalCombinationalContract.Operations.contains(operation) ||
-              DigitalAggregateContract.Operations.contains(operation) ||
-              DigitalCombinationalContract.ReachableBooleanOperations.contains(operation)
-          ) => expression)
-    DigitalValueConstruction.snapshot(
-      records.valuesIterator.flatMap(
-        _.declarations.iterator.flatMap(_.dataType)
+    ).flatMap(operation =>
+      publicationVector(operation.values).collect:
+        case expression: KernelExpr[?]
+            if expression.literal.nonEmpty || Option(expressionIds.get(expression)).exists(
+              reference =>
+                shapeIndices.contains(reference) || shapeViews.contains(reference)
+            ) || expression.operation.exists(operation =>
+              operation.startsWith(
+                DigitalEnumContract.Prefix
+              ) || DigitalScalarContract.Operations.contains(
+                operation
+              ) || DigitalInterfaceContract.ValueOperations.contains(operation) ||
+                operation == DigitalMaterializationContract.Operation ||
+                DigitalCombinationalContract.Operations.contains(operation) ||
+                DigitalAggregateContract.Operations.contains(operation) ||
+                DigitalCombinationalContract.ReachableBooleanOperations.contains(operation)
+            ) => expression
+    )
+    val (enums, values) = DigitalValueConstruction.snapshot(
+      publicationElements(records.valuesIterator).flatMap(module =>
+        publicationElements(module.declarations.iterator).flatMap(_.dataType)
       ).toVector ++ interfaces.dataTypes ++ flatFsms.valuesIterator.map(
         _.definition.canonicalType
       ).toVector ++
@@ -9409,35 +15498,50 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           new KernelDataType[Data](KernelTypeDescriptor("Enum", Vector(record.canonical)))
         ).toVector,
       storageRoots.toVector ++ assignmentRoots.toVector ++
-        operations.iterator.filter(_.kind == "memory-write").flatMap(_.values.collect {
+        publicationElements(
+          operations.iterator
+        ).filter(_.kind == "memory-write").flatMap(_.values.collect {
           case value: Expr[?] => value
         }).toVector ++ interfaces.valueRoots ++
         collectionRegions.valuesIterator.flatMap(_.yielded).toVector ++
         structuralArms.valuesIterator.flatMap(_.yielded).toVector ++
         behavioralIfs.valuesIterator.map(_.predicate).toVector ++
-        flatFsms.valuesIterator.flatMap(_.transitions.map(_.guard)).toVector ++
+        flatFsms.valuesIterator.flatMap(record =>
+          record.controlInputs ++ record.transitions.map(_.guard)
+        ).toVector ++
         enumSwitches.valuesIterator.map(_.selector).toVector ++
         Option.when(!stimulusOnly)(
-          records.valuesIterator.flatMap(
-            _.domains.iterator.filter(_.kind != KernelDomainKind.Required).flatMap(_.domain.clock)
+          publicationElements(records.valuesIterator).flatMap(module =>
+            publicationElements(module.domains.iterator).filter(
+              _.kind != KernelDomainKind.Required
+            ).flatMap(_.domain.clock)
           ).toVector
-        ).toVector.flatten,
-      (shapeIndices.keysIterator.map(expressionPath) ++ shapeViews.keysIterator.map(
-        expressionPath
-      )).toSet,
+        ).toVector.flatMap(values => publicationProbe(publicationVector(values))),
+      (publicationElements(shapeIndices.keysIterator).map(reference =>
+        val path = expressionPath(reference)
+        publicationCharge(1L + path.length.toLong)
+        path
+      ) ++
+        publicationElements(shapeViews.keysIterator).map(
+          expressionPath
+        )).toSet,
       expressions,
       (dataType, owner, region) =>
-        renderCollectionType(
-          dataType,
-          owner,
-          region.flatMap(path =>
-            allValueRegions
-              .find(value => expressionPath(value.reference) == path)
+        publicationProbe:
+          renderCollectionType(
+            dataType,
+            owner,
+            region.flatMap(path =>
+              allValueRegions
+                .find(value => expressionPath(value.reference) == path)
+            )
           )
-        ),
+      ,
       expression =>
-        Option(expressionIds.get(expression)).flatMap(expressionRegions.get)
-          .map(value => expressionPath(value.reference)),
+        publicationProbe:
+          Option(expressionIds.get(expression)).flatMap(expressionRegions.get)
+            .map(value => expressionPath(value.reference))
+      ,
       (expression, operand) =>
         val reference = expressionIds.get(expression)
         collectionOperandPath(operand, expressionRegions.get(reference), reference.module)
@@ -9447,98 +15551,219 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       executableCrossingSnapshot,
       executableWaiverSnapshot,
       resetSnapshot,
-      clockSnapshot
+      clockSnapshot,
+      generatedMemberSnapshot
+    )
+    val ordinaryReads = publicationVector(expressions).flatMap: (expression, path, _, _) =>
+      expression.interfaceMember.map: read =>
+        val endpoint = declarationIds.get(DigitalInterfaceContract.root(read.endpoint))
+        val actual = ConstructionInterfaceLayout.exactMemberPath(
+          read.endpoint.definition,
+          read.field,
+          read.through
+        )
+        if actual != read.member || !expression.operation.contains(
+            DigitalInterfaceContract.OrdinaryReadOperation
+          )
+        then
+          fail("NODAL-INTERFACE-054-003", "ordinary read lost its exact member witness")
+        path -> KernelInterfaceMemberOrigin(
+          declarationPath(endpoint),
+          actual,
+          read.endpoint.role.name
+        )
+    val ordinaryByPath = publicationVector(ordinaryReads).toMap
+    // Registered regions own the complete final operand inventory, including Integer captures
+    // created by deferred type inference after the original result expression was captured.
+    val collectionOperands = collectionRegions.valuesIterator.map: region =>
+      val result = region.result.collect { case expression: KernelExpr[?] => expression }
+        .getOrElse(collectionFailure("final collection has no actual result"))
+      if !Option(expressionIds.get(result)).contains(region.reference) ||
+        !result.operation.contains(DigitalCollectionContract.Operation) || !result.typeFinalized
+      then
+        collectionFailure("final collection lost its registered result identity")
+      expressionPath(region.reference) ->
+        (region.inputs ++ region.seed ++ region.captures.valuesIterator.map(_._1)).map(value =>
+          collectionOperandPath(value, region.parent, region.reference.module).getOrElse(
+            collectionFailure("final collection operand lost its actual lexical identity")
+          )
+        )
+    .toMap
+    enums -> publicationVector(values).map(value =>
+      publicationCharge(1L + value.path.length.toLong)
+      value.copy(
+        operands = collectionOperands.getOrElse(value.path, value.operands),
+        hierarchyDriver = contextualSplits(value.path),
+        interfaceMember = ordinaryByPath.get(value.path)
+      )
     )
 
   private def parameterExpressionSnapshots(
-      additionalTypes: Vector[DataType[?]] = Vector.empty
+      additionalTypes: Vector[DataType[?]]
   ): Vector[KernelParameterExpressionSnapshot] =
-    val roots = rootParameterBindings.iterator.map(_._2) ++ records.valuesIterator.flatMap(
-      _.instances.iterator.flatMap(_.parameterOverrides.iterator.map(_._2))
+    val roots = snapshotElements(rootParameterBindings.iterator).map(_._2) ++
+      snapshotElements(records.valuesIterator).flatMap(module =>
+        snapshotElements(module.instances.iterator).flatMap(instance =>
+          snapshotElements(instance.parameterOverrides.iterator).map(_._2)
+        )
+      )
+    val defaultRoots = snapshotElements(records.valuesIterator).flatMap(module =>
+      snapshotElements(module.declarations.iterator).filter(
+        _.kind == KernelSignalKind.Parameter
+      ).flatMap(_.attributes.collect {
+        case (key, value) if { snapshotCharge(1L); key == "default" } => value
+      })
     )
-    val defaultRoots = records.valuesIterator.flatMap(_.declarations.iterator.filter(
-      _.kind == KernelSignalKind.Parameter
-    ).flatMap(_.attributes.collect { case ("default", value) => value }))
-    val generatedRoots = records.valuesIterator.flatMap(
-      _.generatedRegions.iterator.flatMap(region =>
-        Iterator(region.lower, region.upperExclusive, region.step)
+    val generatedRoots = snapshotElements(records.valuesIterator).flatMap(module =>
+      snapshotElements(module.generatedRegions.iterator).flatMap(region =>
+        snapshotElements(Iterator(region.lower, region.upperExclusive, region.step))
       )
     )
-    def shapeDimensionRoots(dataType: DataType[?]): Vector[Any] =
+    def shapeDimensionRoots(dataType: DataType[?]): Vector[Any] = snapshotTraversal {
+      snapshotCharge(1L)
       val descriptor = CandidateRuntime.typeDescriptor(dataType)
       if Set("Bits", "UInt", "SInt").contains(descriptor.kind) then descriptor.arguments
       else if descriptor.kind == "Struct" then
+        snapshotCharge(descriptor.arguments.lift(1).size.toLong)
         descriptor.arguments.lift(1).toVector.flatMap:
-          case fields: Seq[?] => fields.toVector.flatMap:
-              case field: StructField[?] => shapeDimensionRoots(field.dataType)
-              case _ => Vector.empty
-          case _ => Vector.empty
+          case fields: Seq[?] =>
+            snapshotCharge(1L)
+            val result = snapshotSeqVector(fields).flatMap: value =>
+              snapshotCharge(1L)
+              value match
+                case field: StructField[?] =>
+                  val roots = shapeDimensionRoots(field.dataType)
+                  snapshotCharge(roots.size.toLong)
+                  roots
+                case _ => Vector.empty
+            snapshotCharge(result.size.toLong)
+            result
+          case _ =>
+            snapshotCharge(1L)
+            Vector.empty
       else if descriptor.kind != "Vec" then Vector.empty
       else
+        // Preserve the original eager recursion before inspecting dimensions.
         val nested = descriptor.arguments.headOption.collect:
           case element: DataType[?] => shapeDimensionRoots(element)
+        snapshotCharge(descriptor.arguments.lift(1).size.toLong)
         val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
-          case values: Seq[?] => values.toVector
-          case _ => Vector.empty
-        dimensions ++ nested.getOrElse(Vector.empty)
+          case values: Seq[?] =>
+            snapshotCharge(1L)
+            val copied = snapshotSeqVector(values)
+            snapshotCharge(copied.size.toLong)
+            copied
+          case _ =>
+            snapshotCharge(1L)
+            Vector.empty
+        val nestedRoots = nested.getOrElse(Vector.empty)
+        if dimensions.nonEmpty && nestedRoots.nonEmpty then
+          snapshotCharge(dimensions.size.toLong + nestedRoots.size.toLong)
+        dimensions ++ nestedRoots
+    }
 
-    val shapeDimensionExpressionRoots = records.valuesIterator.flatMap(
-      _.declarations.iterator.flatMap(declaration =>
+    val shapeDimensionExpressionRoots = snapshotElements(records.valuesIterator).flatMap(module =>
+      snapshotElements(module.declarations.iterator).flatMap(declaration =>
         val cardinalityRoots = declaration.kind match
-          case KernelSignalKind.Memory => declaration.attributes.collect { case ("depth", value) =>
-              value
+          case KernelSignalKind.Memory => declaration.attributes.collect {
+              case (key, value)
+                  if { snapshotCharge(1L); key == "depth" } =>
+                value
             }
           case KernelSignalKind.InterfaceArray =>
-            declaration.attributes.collect { case ("count", value) => value }
+            declaration.attributes.collect {
+              case (key, value)
+                  if { snapshotCharge(1L); key == "count" } => value
+            }
           case _ => Vector.empty
-        declaration.dataType.iterator.flatMap(shapeDimensionRoots) ++
-          declaration.conservativeDimensions.iterator ++ cardinalityRoots.iterator
+        snapshotElements(declaration.dataType.iterator).flatMap(dataType =>
+          snapshotElements(shapeDimensionRoots(dataType).iterator)
+        ) ++ snapshotElements(declaration.conservativeDimensions.iterator) ++
+          snapshotElements(cardinalityRoots.iterator)
       )
     )
-    val interfaceTypeRoots = additionalTypes.iterator.flatMap(shapeDimensionRoots)
-    val expressionTypeRoots = expressionValues.valuesIterator.flatMap(expression =>
-      (CandidateRuntime.expressionDataType(
-        expression
-      ).iterator ++ expression.operands.iterator.collect {
-        case metadata: StructOperationMetadata => metadata.schema
-      }).flatMap(shapeDimensionRoots)
+    val interfaceTypeRoots = snapshotElements(additionalTypes.iterator).flatMap(dataType =>
+      snapshotElements(shapeDimensionRoots(dataType).iterator)
     )
-    val lexicalShapeRoots = expressionValues.valuesIterator
-      .filter(CandidateRuntime.proceduralShapeSource(_)).flatMap: expression =>
-        val dimensions =
-          CandidateRuntime.expressionDataType(expression).toVector.flatMap(shapeDimensionRoots)
-        dimensions.iterator ++
-          (if expression.operation.contains("analog_array_fill") then Iterator.empty
-           else expression.operands.drop(1).iterator)
-    val retainedLoops =
-      retainedLoopRegions ++ loopRegions.valuesIterator.filter(_.structuralGenerate)
-    val predicateRoots = (staticPredicates.valuesIterator.flatMap(_.operands) ++
-      allValueRegions.flatMap(_.captures.valuesIterator.map(_._1))).collect {
-      case value: KernelExpr[?]
-          if value.resultType.contains(KernelTypeDescriptor("Integer")) &&
-            !runtimeSequentialInteger(value) => value
-    }.toVector
-    val loopStaticRoots = (loopRegions.valuesIterator.filter(retainedLoops).flatMap(region =>
-      Iterator(region.loop.get.lower, region.loop.get.upperExclusive, region.loop.get.step) ++
-        region.captures.valuesIterator.map(_._1).filter(value =>
-          CandidateRuntime.expressionDataType(value).exists(dataType =>
-            CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Integer")
-          )
+    val expressionTypeRoots =
+      snapshotElements(expressionValues.valuesIterator).filter(constructionPayloadAvailable)
+        .flatMap(expression =>
+          (snapshotElements(CandidateRuntime.expressionDataType(
+            expression
+          ).iterator) ++ snapshotElements(expression.operands.iterator).collect {
+            case metadata: StructOperationMetadata => metadata.schema
+          }).flatMap(dataType => snapshotElements(shapeDimensionRoots(dataType).iterator))
         )
-    ) ++ expressionValues.iterator.collect:
-      case (reference, value)
-          if expressionRegions.get(reference).exists(retainedLoops) &&
-            value.resultType.contains(KernelTypeDescriptor("Integer")) => value
-    ).toVector
-    val loopStaticReferences = (loopStaticRoots ++ predicateRoots).iterator.collect {
-      case expression: KernelExpr[?] if expressionIds.containsKey(expression) =>
-        expressionIds.get(expression)
-    }.toSet
+    val lexicalShapeRoots =
+      snapshotElements(expressionValues.valuesIterator).filter(constructionPayloadAvailable)
+        .filter(CandidateRuntime.proceduralShapeSource(_)).flatMap: expression =>
+          val expressionType = CandidateRuntime.expressionDataType(expression)
+          snapshotCharge(expressionType.size.toLong)
+          val dimensions = expressionType.toVector.flatMap(dataType =>
+            snapshotCharge(1L)
+            val roots = shapeDimensionRoots(dataType)
+            snapshotCharge(roots.size.toLong)
+            roots
+          )
+          snapshotElements(dimensions.iterator) ++
+            (if expression.operation.contains("analog_array_fill") then Iterator.empty
+             else
+               // operands is a Vector; dropping its first entry retains the original operation.
+               snapshotCharge(math.max(0, expression.operands.size - 1).toLong)
+               snapshotElements(expression.operands.drop(1).iterator))
+    val retainedLoops =
+      retainedLoopRegions ++ snapshotElements(
+        snapshotElements(loopRegions.valuesIterator).filter(_.structuralGenerate)
+      )
+    val predicateRoots =
+      snapshotElements(snapshotElements(staticPredicates.valuesIterator).flatMap(predicate =>
+        snapshotElements(predicate.operands.iterator)
+      ) ++ snapshotElements(allValueRegions).flatMap(region =>
+        snapshotElements(region.captures.valuesIterator).map(_._1)
+      )).collect {
+        case value: KernelExpr[?]
+            if requireConstructionPayload(
+              value
+            ) && value.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
+              !runtimeSequentialInteger(value) =>
+          snapshotCharge(1L)
+          value
+      }.toVector
+    val loopStaticRoots =
+      (snapshotElements(loopRegions.valuesIterator).filter(retainedLoops).flatMap(region =>
+        snapshotElements(Iterator(
+          region.loop.get.lower,
+          region.loop.get.upperExclusive,
+          region.loop.get.step
+        )) ++
+          snapshotElements(region.captures.valuesIterator).map(value =>
+            dataCapture(value._1)
+          ).filter(value =>
+            CandidateRuntime.expressionDataType(value).exists(dataType =>
+              CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Integer")
+            )
+          )
+      ) ++ snapshotElements(expressionValues.iterator).collect:
+        case (reference, value)
+            if expressionRegions.get(reference).exists(retainedLoops) &&
+              requireConstructionPayload(value) && value.resultDescriptor.contains(
+                KernelTypeDescriptor("Integer")
+              ) => value
+      ).map(value => { snapshotCharge(1L); value }).toVector
+    snapshotCharge(loopStaticRoots.size.toLong + predicateRoots.size.toLong)
+    val loopStaticReferences =
+      snapshotElements((loopStaticRoots ++ predicateRoots).iterator).collect {
+        case expression: KernelExpr[?] if expressionIds.containsKey(expression) =>
+          snapshotCharge(1L)
+          expressionIds.get(expression)
+      }.toSet
     val reachable = capturedExpressionClosure(
-      (predicateRoots.iterator ++ loopStaticRoots.iterator ++ interfaceTypeRoots ++ expressionTypeRoots ++ lexicalShapeRoots ++ roots ++ defaultRoots ++ generatedRoots ++ structuralShapeExpressionRoots ++
+      snapshotElements(predicateRoots.iterator ++ loopStaticRoots.iterator ++ interfaceTypeRoots ++ expressionTypeRoots ++ lexicalShapeRoots ++ roots ++ defaultRoots ++ generatedRoots ++ structuralShapeExpressionRoots ++
         shapeDimensionExpressionRoots).collect:
         case expression: KernelExpr[?]
-            if (expression.literal.isEmpty || loopStaticReferences.contains(
+            if requireConstructionPayload(
+              expression
+            ) && (expression.literal.isEmpty || loopStaticReferences.contains(
               expressionIds.get(expression)
             )) &&
               !expression.operation.contains("generate_index") &&
@@ -9546,9 +15771,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           expression
     )
 
+    snapshotCharge(expressionValues.size.toLong)
     expressionValues.toVector.collect:
       case (reference, expression)
-          if reachable.contains(reference) &&
+          if { snapshotCharge(1L); reachable.contains(reference) } &&
             !collectionArguments.contains(reference) &&
             (!iterationIndices.contains(
               reference
@@ -9579,6 +15805,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           if expression.literal.nonEmpty then Vector.empty
           else
             expression.operands.map: operand =>
+              snapshotCharge(1L)
               val scoped = operand match
                 case value: Expr[?] if expressionRegions.contains(reference) =>
                   bindCollectionValue(
@@ -9597,7 +15824,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               )
         KernelParameterExpressionSnapshot(
           path,
-          modulePath(reference.module),
+          snapshotProbe(modulePath(reference.module)),
           expression.operation.orElse(expression.literal.map(_.kind)).getOrElse(
             fail(
               "NODAL-PARAMETER-BINDING-024",
@@ -9613,7 +15840,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         )
 
   private def classify(snapshot: ConstructionSnapshot): DesignKind =
-    val kinds = snapshot.modules.flatMap(_.declarations.map(_.kind)).toSet
+    val kindValues = snapshot.modules.flatMap(module =>
+      publicationProbe {
+        val mapped =
+          publicationVector(module.declarations).map(value => publicationProbe(value.kind))
+        publicationVector(mapped)
+      }
+    )
+    val kinds =
+      if !publicationWorkActive then kindValues.toSet
+      else publicationElements(kindValues).toSet
+    publicationCharge(7L)
     val analogKinds = Set(
       "analog-input",
       "analog-output",
@@ -9624,17 +15861,30 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       "analog-signal"
     )
     val analog =
-      snapshot.interfaceContracts.exists(_.members.exists(member =>
-        Set("conservative", "signal-flow").contains(member.protocol)
-      )) || kinds.exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty ||
+      publicationElements(snapshot.interfaceContracts).exists(endpoint =>
+        publicationElements(endpoint.members).exists(member =>
+          Set("conservative", "signal-flow").contains(member.protocol)
+        )
+      ) || publicationElements(
+        kinds
+      ).exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty ||
         snapshot.waveformOperators.nonEmpty || snapshot.noiseOperators.nonEmpty ||
         snapshot.transferOperators.nonEmpty || snapshot.analogFunctions.nonEmpty ||
         snapshot.analogRegions.nonEmpty ||
         snapshot.analogProcedural.nonEmpty || snapshot.analogSemantics.equations.nonEmpty ||
         snapshot.analogSemantics.contributions.nonEmpty || snapshot.analogSemantics.states.nonEmpty ||
         snapshot.analogSemantics.components.nonEmpty
-    val storageKinds = if analog then Set("parameter", "variable") else Set.empty[String]
-    val digital = (kinds -- analogKinds -- storageKinds).nonEmpty ||
+    val storageKinds = if analog then
+      publicationCharge(2L)
+      Set("parameter", "variable")
+    else Set.empty[String]
+    val nonAnalog =
+      if !publicationWorkActive then kinds -- analogKinds
+      else kinds -- publicationElements(analogKinds)
+    val digitalKinds =
+      if !publicationWorkActive then nonAnalog -- storageKinds
+      else nonAnalog -- publicationElements(storageKinds)
+    val digital = digitalKinds.nonEmpty ||
       snapshot.interfaceAbi.nonEmpty ||
       snapshot.resolvedNets.nonEmpty
     (digital, analog) match
@@ -9643,6 +15893,2167 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       case (false, true) => DesignKind.AnalogOnly
       case _ => DesignKind.Unsupported
 
+  // C1 prerequisite: one canonical owner for the original single-epoch phase.
+  // Incremental activation, queues and epoch advance are deliberately not admitted here yet.
+  private final class BoundaryClosureOwner(
+      rootHandle: Long,
+      private var resolved: Map[DomainRef, String],
+      private var interfaceFormalTypes: Vector[DataType[?]]
+  ):
+    // Diagnostics must remain available after the meter is exhausted or poisoned.
+    // Capture only this diagnostic site before enable; semantic names use canonical helpers.
+    private val diagnosticRootPath = modulePath(rootHandle)
+    private var drained = false
+    var structuralValues: Option[Map[String, AnyRef]] = None
+
+    // INSERT INSIDE BoundaryClosureOwner. Proposal only; not a separately compiled source.
+    // Required existing owner members:
+    //   incremental: Boolean
+    //   charge(amount: Long): Unit              // global lifetime incremental budget
+    //   reject(message: String): Nothing       // poison owner/session, retire epoch, preserve cause
+    //   markDirty(): Unit                      // semantic revision + actual owning proof/type queue
+    //
+    // markDirty must also make a preverified region proof pending, including when no new
+    // ExpressionRef is allocated. One shared revision can conservatively invalidate a
+    // whole not-yet-verified closure pass; this does not authorize resealing verified nodes.
+    // Owner reads regionSignatureRevision immediately before its complete region proof
+    // pass, and freezes only if this version is unchanged, all jobs/descendants closed,
+    // and those actual validators succeeded. A changed version means another drain/pass.
+    // No ordinary single-epoch behavior, limits, or validation phase order is changed.
+
+    private sealed trait RegionSignatureAtom
+    private final case class RegionIdentity(value: AnyRef) extends RegionSignatureAtom
+    private final case class RegionText(value: String) extends RegionSignatureAtom
+    private final case class RegionNumber(value: Long) extends RegionSignatureAtom
+    private final case class RegionBigInteger(value: BigInt) extends RegionSignatureAtom
+
+    private val frozenRegionSignatures =
+      new java.util.IdentityHashMap[DigitalValueRegionRecord, Vector[RegionSignatureAtom]]()
+    private var signatureRevision = 0L
+
+    def regionSignatureRevision: Long = signatureRevision
+
+    /** Stronger reuse identity check is incremental-only; old mode remains unchanged. */
+    def verifyRegionCaptureReuse(valid: => Boolean): Unit =
+      if incremental then
+        charge(1L)
+        if !valid then reject("incremental capture reuse lost its exact parent edge or argument")
+
+    /** Hook runs before allocation and side effects. Existing exact reuse skips it. */
+    def beforeRegionMutation(region: DigitalValueRegionRecord): Unit =
+      if incremental then
+        charge(1L)
+        if frozenRegionSignatures.containsKey(region) then
+          reject("verified digital region signature cannot change in incremental C1")
+        if signatureRevision == Long.MaxValue then reject("region signature revision is exhausted")
+        signatureRevision += 1L
+        markDirty()
+
+    /** Flatten mutable type wrappers now, never retain them as equality evidence. */
+    private def captureRegionSignature(region: DigitalValueRegionRecord)
+        : Vector[RegionSignatureAtom] =
+      val result = Vector.newBuilder[RegionSignatureAtom]
+      def text(value: String): Unit =
+        charge(1L + value.length.toLong / 64L)
+        result += RegionText(value)
+      def number(value: Long): Unit =
+        charge(1L)
+        result += RegionNumber(value)
+      def identity(value: AnyRef): Unit =
+        charge(1L)
+        result += RegionIdentity(value)
+      def sequence[A](tag: String, values: Iterator[A], depth: Int)(visit: (A, Int) => Unit): Unit =
+        text(tag)
+        values.foreach: value =>
+          charge(1L) // actual sequence/edge traversal, including empty-valued entries
+          visit(value, depth + 1)
+        text("end:" + tag)
+      def option[A](tag: String, value: Option[A], depth: Int)(visit: (A, Int) => Unit): Unit =
+        text(tag)
+        number(if value.isDefined then 1L else 0L)
+        value.foreach(visit(_, depth + 1))
+      def reference(value: DeclarationRef | ExpressionRef): Unit = value match
+        case value: DeclarationRef =>
+          text("declaration"); number(value.module); number(value.index.toLong)
+        case value: ExpressionRef =>
+          text("expression"); number(value.module); number(value.index.toLong)
+      def regionLink(value: DigitalValueRegionRecord): Unit =
+        text("digital-region"); identity(value); reference(value.reference)
+      def familyLink(value: GeneratedRegionRecord): Unit =
+        // This is the link to a separate canonical mutable owner, not a copy of its
+        // declarations/yieldedArea/familyHandle registry. Authored facts have their own guard.
+        text("generated-family"); identity(value)
+        number(value.owner); number(value.ordinal.toLong); reference(value.induction)
+        option("digital-body", value.digitalRegion, 0)((body, _) => regionLink(body))
+      def familyArgument(value: GeneratedFamilyArgument): Unit =
+        text("family-argument"); identity(value); regionLink(value.region)
+        number(value.position.toLong); familyLink(value.family)
+      def typed(value: Expr[?], depth: Int): Unit =
+        if depth > 128 then reject("region type signature exceeds its depth budget")
+        text("typed-value"); identity(value); reference(valueReference(value))
+        value match
+          case expression: KernelExpr[?] =>
+            number(if expression.constructionFinalized then 1L else 0L)
+            number(if expression.typeFinalized then 1L else 0L)
+          case _ => ()
+        // expressionDataType follows Param.default recursively. Debit/bound that chain
+        // before invoking its normal non-parameter leaf implementation.
+        var typeSource = value
+        var typeDepth = depth
+        while typeSource.isInstanceOf[Param[?]] do
+          charge(1L)
+          typeDepth += 1
+          if typeDepth > 128 then reject("region parameter type chain exceeds its depth budget")
+          typeSource = typeSource.asInstanceOf[Param[?]].default
+        val descriptor =
+          CandidateRuntime.expressionDataType(typeSource).map(CandidateRuntime.typeDescriptor)
+            .getOrElse(reject("region signature value lost its actual type"))
+        fact(descriptor, depth + 1)
+      def fact(value: Any, depth: Int): Unit =
+        charge(1L)
+        if depth > 128 then reject("region type signature exceeds its depth budget")
+        value match
+          case value: Expr[?] => typed(value, depth)
+          case value: StaticPredicate =>
+            text("static-predicate"); identity(value)
+            reference(Option(expressionIds.get(value)).getOrElse(
+              reject("structural predicate lost its expression identity")
+            ))
+            text(value.operation)
+            sequence("predicate-operands", value.operands.iterator, depth)(fact)
+          case value: KernelTypeDescriptor =>
+            text("descriptor"); text(value.kind)
+            sequence("type-arguments", value.arguments.iterator, depth)(fact)
+          case value: DataType[?] =>
+            text("data-type"); fact(CandidateRuntime.typeDescriptor(value), depth + 1)
+          case value: StructField[?] =>
+            text("struct-field"); text(value.name); fact(value.dataType, depth + 1)
+          case value: GeneratedFamilyArgument => familyArgument(value)
+          case value: GeneratedRegionRecord => familyLink(value)
+          case value: DigitalValueRegionRecord => regionLink(value)
+          case value: DeclarationRef => reference(value)
+          case value: ExpressionRef => reference(value)
+          case value: ResolvedEnumAbi =>
+            // ABI is immutable, but compare actual content instead of only a hash or rendered type.
+            text("enum-abi"); text(value.identity); text(value.policy); number(value.width.toLong)
+            sequence("enum-cases", value.cases.iterator, depth): (entry, nextDepth) =>
+              text(entry.id); text(entry.name); fact(entry.code, nextDepth)
+            text(value.hash)
+          case value: Option[?] => option("option", value, depth)(fact)
+          case value: Seq[?] => sequence("sequence", value.iterator, depth)(fact)
+          case value: String => text("string"); text(value)
+          case value: Int => text("int"); number(value.toLong)
+          case value: Long => text("long"); number(value)
+          case value: Boolean => text("boolean"); number(if value then 1L else 0L)
+          case value: BigInt =>
+            charge(1L + value.bitLength.toLong / 64L)
+            result += RegionBigInteger(value)
+          case _ => reject("unsupported value in exact digital region type signature")
+      def capture(value: DigitalCaptureValue, depth: Int): Unit = value match
+        case value: Expr[?] => typed(value, depth)
+        case value: GeneratedFamilyArgument => familyArgument(value)
+        case value: GeneratedRegionRecord => familyLink(value)
+      def argument(value: DigitalRegionArgument, depth: Int): Unit = value match
+        case value: KernelExpr[?] => typed(value, depth)
+        case value: GeneratedFamilyArgument => familyArgument(value)
+
+      regionLink(region)
+      option("parent", region.parent, 0)((value, _) => regionLink(value))
+      text(region.kind); text(region.regionKind.toString)
+      number(if region.structuralGenerate then 1L else 0L)
+      // O(1) owner lookups detect removal/replacement of a frozen canonical region,
+      // including after the final epoch when no registry dirty hook has fired.
+      Vector(
+        collectionRegions,
+        loopRegions,
+        structuralArms,
+        behavioralArms,
+        fsmActionRegions,
+        enumSwitchArms
+      ).foreach: owner =>
+        charge(1L)
+        number(if owner.get(region.reference).exists(_ eq region) then 1L else 0L)
+      sequence("inputs", region.inputs.iterator, 0)(typed)
+      option("seed", region.seed, 0)(typed)
+      option("loop", region.loop, 0): (header, depth) =>
+        identity(header)
+        fact(header.lower, depth); fact(header.upperExclusive, depth); fact(header.step, depth)
+        fact(header.maximum, depth); number(header.sourceOrdinal.toLong)
+        // Structural and Bounds are immutable, but copy all scalar proof inputs.
+        number(header.domain.lower.lower); number(header.domain.lower.upper)
+        number(header.domain.upperExclusive.lower); number(header.domain.upperExclusive.upper)
+        number(header.domain.step.lower); number(header.domain.step.upper)
+        fact(header.domain.maximum, depth); number(header.domain.maximumTripCount.toLong)
+        option("generated-owner", header.generated, depth)((value, _) => familyLink(value))
+      option("structural-arm", region.structuralArm, 0): (header, _) =>
+        identity(header); reference(header.conditional); number(if header.whenTrue then 1L else 0L)
+        val conditional = structuralIfs.getOrElse(
+          header.conditional,
+          reject("structural arm lost its canonical conditional")
+        )
+        identity(conditional)
+        regionLink(conditional.trueArm); regionLink(conditional.falseArm)
+        fact(conditional.predicate, 0)
+        option("conditional-parent", conditional.parent, 0)((value, _) => regionLink(value))
+        // StructuralIfRecord.result is not DigitalValueRegionRecord.result.
+        option("conditional-result", conditional.result, 0)(typed)
+      option("behavioral-arm", region.behavioralArm, 0): (header, _) =>
+        identity(header); reference(header.conditional); number(if header.whenTrue then 1L else 0L)
+      option("fsm-action", region.fsmAction, 0): (header, depth) =>
+        identity(header); reference(header.machine); text(header.phase)
+        fact(header.ownerCase, depth); fact(header.transitionOrdinal, depth)
+        number(header.ordinal.toLong)
+      option("switch-arm", region.switchArm, 0): (header, _) =>
+        identity(header); reference(header.switch); number(header.index.toLong)
+      text("arguments")
+      region.arguments.iterator.zipWithIndex.foreach: (entry, position) =>
+        charge(1L)
+        val (value, role) = entry
+        number(position.toLong); text(role); argument(value, 0)
+        value match
+          case expression: KernelExpr[?] =>
+            val ref = Option(expressionIds.get(expression)).getOrElse(
+              reject("region argument lost its expression identity")
+            )
+            charge(2L)
+            if !collectionArguments.get(ref).exists((owner, ordinal) =>
+                (owner eq region) && ordinal == position
+              ) ||
+              !expressionRegions.get(ref).exists(_ eq region)
+            then reject("region argument lost its exact owning position")
+            fact(expression.operation, 0)
+            sequence("argument-operands", expression.operands.iterator, 0)(fact)
+          case family: GeneratedFamilyArgument =>
+            if (family.region ne region) || family.position != position then
+              reject("family argument lost its exact owning position")
+      text("end:arguments")
+      sequence("captures", region.captures.iterator, 0): (entry, depth) =>
+        val (key, (source, target)) = entry
+        fact(key, depth); capture(source, depth); argument(target, depth)
+      option("yielded", region.yielded, 0)(typed)
+      option("result", region.result, 0)(typed)
+      result.result()
+
+    private def sameRegionSignature(
+        expected: Vector[RegionSignatureAtom],
+        actual: Vector[RegionSignatureAtom]
+    ): Boolean =
+      charge(1L)
+      if expected.size != actual.size then false
+      else
+        expected.iterator.zip(actual.iterator).forall: (left, right) =>
+          charge(1L)
+          (left, right) match
+            case (RegionIdentity(left), RegionIdentity(right)) => left eq right
+            case (RegionText(left), RegionText(right)) =>
+              charge(1L + math.max(left.length, right.length).toLong / 64L)
+              left == right
+            case (RegionNumber(left), RegionNumber(right)) => left == right
+            case (RegionBigInteger(left), RegionBigInteger(right)) =>
+              charge(1L + math.max(left.bitLength, right.bitLength).toLong / 64L)
+              left == right
+            case _ => false
+
+    def verifyRegionSignatures(): Unit =
+      if incremental then
+        charge(1L) // even an empty/no-op drain is not an unmetered repeat
+        val iterator = frozenRegionSignatures.entrySet().iterator()
+        while iterator.hasNext do
+          charge(1L)
+          val entry = iterator.next()
+          if !sameRegionSignature(entry.getValue, captureRegionSignature(entry.getKey)) then
+            reject("verified digital region signature changed outside its canonical mutation hook")
+
+    def freezeRegionSignatures(): Unit =
+      if incremental then
+        // Owner has just completed ALL actual region validators + descendants, and checked
+        // unchanged regionSignatureRevision since that proof pass. Never call on eager
+        // type finalization alone, and never overwrite an existing frozen signature.
+        verifyRegionSignatures()
+        if constructionMode then
+          charge(expressionValues.size.toLong)
+          if queue.nonEmpty || expressionValues.valuesIterator.exists(!_.typeFinalized) then
+            reject("construction descendants and proofs must close before region freeze")
+        allValueRegions.foreach: region =>
+          charge(1L)
+          if !frozenRegionSignatures.containsKey(region) then
+            val frozen = captureRegionSignature(region)
+            frozenRegionSignatures.put(region, frozen)
+
+    // Explicitly opted in by an internal construction lifecycle, never by allocations.
+    var incremental = false
+    private var remaining = 65536L
+    private var revision = 0L
+    private var builtRevision = -1L
+    private var epoch = 0L
+    private var poisoned = false
+    private var running = false
+    private var frozenNames: Option[SemanticOriginResult] = None
+    private var preparedNames: Option[(Long, SemanticOriginResult)] = None
+    private val exportedGraphs = new java.util.IdentityHashMap[
+      StructuralParameterBinding.ResolvedDimensions,
+      java.lang.Long
+    ]()
+    private var currentSnapshot: Option[ConstructionSnapshot] = None
+    private var currentQueries: Option[StructuralParameterBinding.InstanceQueries] = None
+    private var currentMeter: StructuralParameterBinding.WorkMeter =
+      StructuralParameterBinding.WorkMeter.Unmetered
+    private var selectedJob: Option[(String, Any)] = None
+    private val verified = mutable.LinkedHashMap.empty[(String, Any), AnyRef]
+    private val queue = mutable.ArrayDeque.empty[(String, Any, AnyRef)]
+    private val queued = mutable.HashSet.empty[(String, Any)]
+    val typeState = new java.util.IdentityHashMap[KernelExpr[?], java.lang.Integer]()
+    var typeWork = 0
+
+    private var frozenStatic: Option[Vector[Any]] = None
+    private val frozenDeclarations = mutable.LinkedHashMap.empty[DeclarationRef, DeclarationRecord]
+    private val frozenExpressions = mutable.LinkedHashMap.empty[
+      ExpressionRef,
+      (KernelExpr[?], Vector[Any], Option[String], Option[KernelLiteral])
+    ]
+    private val descendantsByRegion = mutable.HashMap.empty[
+      DigitalValueRegionRecord,
+      mutable.LinkedHashMap[ExpressionRef, KernelExpr[?]]
+    ]
+
+    private def staticIdentity(): Vector[Any] =
+      charge(1L + records.size.toLong + rootParameterBindings.size.toLong)
+      Vector(rootParameterBindings.toVector) ++ records.valuesIterator.map: module =>
+        charge(
+          module.domains.size.toLong + module.instances.size.toLong + module.generatedRegions.size.toLong
+        )
+        val instances = module.instances.map: instance =>
+          charge(instance.namedBindings.size.toLong + instance.parameterOverrides.size.toLong)
+          (
+            instance,
+            instance.defaultBinding,
+            instance.namedBindings.toVector,
+            instance.parameterOverrides.toVector
+          )
+        (
+          module,
+          module.domains.toVector,
+          instances.toVector,
+          module.generatedRegions.toVector,
+          module.externalName
+        )
+      .toVector
+
+    private def verifyStatic(): Unit =
+      frozenStatic.foreach: expected =>
+        if staticIdentity() != expected then reject("frozen authored binding identity changed")
+      charge(frozenDeclarations.size.toLong + frozenExpressions.size.toLong)
+      frozenDeclarations.foreach: (reference, expected) =>
+        if !records.get(
+            reference.module
+          ).flatMap(_.declarations.lift(reference.index)).contains(expected)
+        then reject("frozen declaration changed")
+      frozenExpressions.foreach: (reference, expected) =>
+        charge(expected._2.size.toLong)
+        if !expressionValues.get(reference).exists(value =>
+            constructionPayloadAvailable(value) && (value eq expected._1) &&
+              value.operands == expected._2 && value.operation == expected._3 &&
+              value.literal == expected._4
+          )
+        then reject("frozen pure expression changed")
+
+    private def freezeStatic(): Unit =
+      verifyStatic()
+      frozenStatic = Some(staticIdentity())
+      records.valuesIterator.foreach(_.declarations.foreach(value =>
+        charge(1L)
+        frozenDeclarations.getOrElseUpdate(value.reference, value)
+      ))
+      expressionValues.foreach: (reference, value) =>
+        charge(1L)
+        if !constructionPayloadAvailable(value) then reject("cannot freeze pending construction")
+        else
+          charge(value.operands.size.toLong)
+          frozenExpressions.getOrElseUpdate(
+            reference,
+            (value, value.operands, value.operation, value.literal)
+          )
+
+    private var constructionMode = false
+    def hasConstructionWork: Boolean = constructionMode
+
+    def captured(reference: ExpressionRef, expression: KernelExpr[?]): Unit = if incremental then
+      if expression.constructionKind.nonEmpty then constructionMode = true
+      var current = expressionRegions.get(reference)
+      var depth = 0
+      while current.nonEmpty do
+        charge(1L)
+        depth += 1
+        if depth > 128 then reject("closure expression ancestry is cyclic or excessive")
+        descendantsByRegion.getOrElseUpdate(current.get, mutable.LinkedHashMap.empty)
+          .update(reference, expression)
+        current = current.get.parent
+
+    def descendants(region: DigitalValueRegionRecord): Vector[KernelExpr[?]] =
+      val values =
+        descendantsByRegion.get(region).map(_.valuesIterator.toVector).getOrElse(Vector.empty)
+      charge(values.size.toLong)
+      values
+
+    def reject(message: String): Nothing =
+      poisoned = true
+      epoch += 1L
+      val failure = new ConstructionException(KernelDiagnostic(
+        "NODAL-HIERARCHY-058-CLOSURE",
+        message,
+        Some(diagnosticRootPath)
+      ))
+      poisonConstructor(failure, diagnosticRootPath)
+      throw failure
+
+    def charge(units: Long): Unit = if incremental then
+      if poisoned then reject("boundary closure is poisoned")
+      if units < 0L || units > remaining then reject("boundary closure work budget exhausted")
+      remaining -= units
+
+    def markDirty(): Unit = if incremental then
+      charge(1L)
+      if revision == Long.MaxValue then reject("boundary closure revision overflow")
+      revision += 1L
+
+    def meter: StructuralParameterBinding.WorkMeter = currentMeter
+    def queries: StructuralParameterBinding.InstanceQueries =
+      currentMeter.checkLive()
+      currentQueries.get
+    def accepts(kind: String, key: Any): Boolean =
+      !incremental || selectedJob.contains(kind -> key)
+
+    private[ConstructionSession] def guard[A](body: => A): A =
+      if poisoned then reject("boundary closure is poisoned")
+      try body
+      catch
+        case failure: Throwable =>
+          poisoned = true
+          epoch += 1L
+          poisonConstructor(failure, diagnosticRootPath)
+          throw failure
+
+    // Conservative per-pass accounting is deliberately a bounded incremental profile,
+    // not the existing 65536-record capacity promise. Every inventory is charged first.
+    private def prechargeCanonicalPass(quadratic: Boolean = true): Unit =
+      charge(1L + records.size.toLong + expressionValues.size.toLong + operations.size.toLong)
+      var count = 1L + records.size.toLong + expressionValues.size.toLong + operations.size.toLong
+      records.valuesIterator.foreach: module =>
+        val size = module.declarations.size.toLong + module.instances.size.toLong +
+          module.domains.size.toLong + module.generatedRegions.size.toLong
+        charge(size)
+        count += size
+        module.declarations.foreach(value =>
+          charge(value.attributes.size.toLong + value.conservativeDimensions.size.toLong)
+        )
+        module.instances.foreach(value =>
+          charge(value.parameterOverrides.size.toLong +
+            value.namedBindings.size.toLong)
+        )
+      expressionValues.valuesIterator.foreach: value =>
+        val dependencies = if constructionPayloadAvailable(value) then value.operands
+        else value.constructionDependencies
+        charge(dependencies.size.toLong)
+      operations.foreach(value => charge(value.values.size.toLong))
+      allValueRegions.foreach: region =>
+        charge(1L + region.arguments.size.toLong + region.captures.size.toLong + region.inputs.size)
+      if quadratic then
+        var row = 0L
+        while row < count do
+          charge(64L * count)
+          row += 1L
+
+    private def checkNames(next: SemanticOriginResult): Unit = frozenNames.foreach: old =>
+      def same[K, V](before: Map[K, V], after: Map[K, V]): Unit =
+        charge(before.size.toLong)
+        before.foreach: (key, value) =>
+          if !after.get(key).contains(value) then reject("frozen semantic identity changed")
+      same(old.modulePaths, next.modulePaths)
+      same(old.domainPaths, next.domainPaths)
+      same(old.domainNames, next.domainNames)
+      same(old.declarationPaths, next.declarationPaths)
+      same(old.declarationNames, next.declarationNames)
+      same(old.expressionPaths, next.expressionPaths)
+      same(old.expressionNames, next.expressionNames)
+      same(old.instancePaths, next.instancePaths)
+
+    def finalNames(next: SemanticOriginResult): Unit = finalNames(next, false)
+
+    private def finalNames(next: SemanticOriginResult, exactPublication: Boolean): Unit =
+      if incremental then
+        guard:
+          checkNames(next)
+          verifyRegionSignatures()
+          verifyStatic()
+          discover()
+          if queue.nonEmpty || builtRevision != revision then
+            reject("unclosed boundary records appeared before publication")
+          prechargeCanonicalPass(quadratic = !exactPublication)
+
+    def verifyPublication(): Unit = if incremental then
+      guard:
+        verifyRegionSignatures()
+        verifyStatic()
+        discover()
+        charge(expressionValues.size.toLong)
+        if queue.nonEmpty || builtRevision != revision ||
+          expressionValues.valuesIterator.exists(!_.typeFinalized)
+        then reject("unclosed canonical records remain at publication")
+
+    private def snapshot(): ConstructionSnapshot =
+      if exportAccountingActive then reject("snapshot accounting is not reentrant")
+      val bound = if boundDomainAccountingCandidate then exactBoundDomainRaw() else None
+      val exact = bound.nonEmpty || (constructionMode && exactSnapshotEligible())
+      prechargeCanonicalPass(quadratic = !exact)
+      val previous = snapshotAccountingActive
+      snapshotAccountingActive = exact
+      try withBoundDomainAccounting(bound.nonEmpty):
+          bound.foreach(requireBoundDomainExport(_, publication = false))
+          ConstructionSnapshot(
+            root = snapshotProbe(modulePath(rootHandle)),
+            modules = snapshots(resolved),
+            parameterExpressions = parameterExpressionSnapshots(interfaceFormalTypes),
+            generatedRegions = generatedSnapshots(staticDependenciesOnly = true),
+            staticPredicates = snapshotProbe(staticPredicateSnapshots()),
+            structuralIfs = snapshotProbe(structuralIfSnapshots(staticDependenciesOnly = true)),
+            interfaceAbi = Vector.empty,
+            resolvedNets = Vector.empty,
+            topology = Vector.empty
+          )
+      finally snapshotAccountingActive = previous
+
+    def resolveSemanticNames(): SemanticOriginResult =
+      if constructionMode then
+        semanticOrigin.resolveConstructionWithWork(units => charge(units.toLong))
+      else semanticOrigin.resolveWithWork(units => charge(units.toLong))
+
+    private def refresh(): Unit = if builtRevision != revision then
+      // Retire every capability and actual-value lookup together before replacement.
+      epoch += 1L
+      structuralValues = None
+      exportedGraphs.clear()
+      val buildingRevision = revision
+      val next = preparedNames.filter(_._1 == revision).map(_._2).getOrElse(
+        resolveSemanticNames()
+      )
+      preparedNames = None
+      checkNames(next)
+      semanticResult = Some(next)
+      frozenNames = Some(next)
+      val base = snapshot()
+      if revision != buildingRevision then
+        reject("snapshot construction changed its canonical registry revision")
+      val ticket = epoch
+      currentMeter = new StructuralParameterBinding.WorkMeter:
+        def checkLive(): Unit =
+          if poisoned || ticket != epoch then reject("stale boundary snapshot epoch")
+        def charge(units: Int): Unit =
+          checkLive()
+          BoundaryClosureOwner.this.charge(units.toLong)
+        override def exported(graph: StructuralParameterBinding.ResolvedDimensions): Unit =
+          checkLive()
+          BoundaryClosureOwner.this.charge(1L)
+          exportedGraphs.put(graph, java.lang.Long.valueOf(ticket))
+        override def consumeGraph(graph: StructuralParameterBinding.ResolvedDimensions): Unit =
+          checkLive()
+          BoundaryClosureOwner.this.charge(1L)
+          if !Option(exportedGraphs.get(graph)).exists(_.longValue() == ticket) then
+            reject("structural graph belongs to a stale or foreign epoch")
+      currentSnapshot = Some(base)
+      currentQueries =
+        Some(new StructuralParameterBinding.InstanceQueries(base, None, currentMeter))
+      builtRevision = revision
+
+    def requireVerifiedDigital(
+        reference: DeclarationRef,
+        record: InstancePortBoundaryRecord
+    ): Unit =
+      guard:
+        charge(1L)
+        if !verified.get("digital" -> reference).exists(_ eq record) then
+          reject("selected singleton boundary has not completed canonical verification")
+
+    private def enqueue(kind: String, key: Any, record: AnyRef): Unit =
+      charge(1L)
+      verified.get(kind -> key) match
+        case Some(original) =>
+          if original ne record then reject("verified boundary record identity changed")
+        case None => if queued.add(kind -> key) then queue.append((kind, key, record))
+
+    private def discover(): Unit =
+      charge(1L + operations.size.toLong + instanceDigitalPorts.size.toLong +
+        instanceDigitalInouts.size.toLong + instanceInterfacePorts.size.toLong +
+        expressionValues.size.toLong + records.size.toLong)
+      operations.foreach(value =>
+        charge(value.values.size.toLong)
+        if value.values.exists(item =>
+            item.isInstanceOf[InstanceArrayRootRecord] ||
+              item.isInstanceOf[DeferredNodeArrayRecord]
+          )
+        then enqueue("conservative", value, value)
+      )
+      instanceDigitalPorts.foreach((key, value) => enqueue("digital", key, value))
+      instanceDigitalInouts.foreach((key, value) => enqueue("inout", key, value))
+      instanceInterfacePorts.foreach((key, value) => enqueue("interface", key, value))
+      expressionValues.foreach: (key, value) =>
+        if !constructionPayloadAvailable(value) then
+          charge(value.constructionDependencies.size.toLong)
+          if !value.constructionDependencies.exists(DeferredResultType.pending) then
+            enqueue("construction", key, value)
+        else if generatedMemberRecord(value).nonEmpty then enqueue("member", key, value)
+      records.valuesIterator.foreach: module =>
+        charge(module.declarations.size.toLong)
+        module.declarations.foreach: declaration =>
+          declaration.value match
+            case view: InterfaceResolvedMember[?, ?] => enqueue("resolved", view, view)
+            case _ => ()
+
+    def prepareIncrementalInputs(): Unit = guard:
+      val bound = if boundDomainAccountingCandidate then exactBoundDomainRaw() else None
+      bound match
+        case Some(proof) =>
+          prechargeCanonicalPass(quadratic = false)
+          prepareAreaNames()
+          val named = resolveSemanticNames()
+          semanticResult = Some(named)
+          preparedNames = Some(revision -> named)
+          prepareBoundDomainInputs(proof)
+          ()
+        case None =>
+          prechargeCanonicalPass()
+          prepareAreaNames()
+          val named = resolveSemanticNames()
+          semanticResult = Some(named)
+          preparedNames = Some(revision -> named)
+          resolved = resolveDomains()
+          materializeInstanceControlCaptures(resolved)
+          markConservativeBindingDependencies()
+          interfaceFormalTypes = prepareInterfaceFormalTypes()
+
+    private def prepareBoundDomainInputs(proof: BoundDomainAccountingProof)
+        : (Map[DomainRef, String], Vector[DataType[?]]) =
+      withBoundDomainAccounting(enabled = true):
+        resolved = resolveDomains()
+        requireBoundDomainResolved(proof)
+        materializeInstanceControlCaptures(resolved)
+        markConservativeBindingDependencies()
+        interfaceFormalTypes = prepareInterfaceFormalTypes()
+        resolved -> interfaceFormalTypes
+
+    def tryFinalBoundDomainInputs(): Option[(Map[DomainRef, String], Vector[DataType[?]])] =
+      if !boundDomainAccountingCandidate then None
+      else
+        guard:
+          exactBoundDomainRaw() match
+            case None => None
+            case Some(proof) =>
+              prechargeCanonicalPass(quadratic = false)
+              Some(prepareBoundDomainInputs(proof))
+
+    // A disqualified profile retains the old fee; debit failures are never caught/refunded.
+    private def bdChecked(test: => Boolean): Boolean =
+      charge(1L)
+      test
+
+    private def bdEvery[A](values: IterableOnce[A])(test: A => Boolean): Boolean =
+      charge(1L)
+      val iterator = values.iterator
+      while iterator.hasNext do
+        charge(1L)
+        if !test(iterator.next()) then return false
+      true
+
+    private def bdTextEqual(left: String, right: String): Boolean =
+      charge(1L + left.length.toLong + right.length.toLong)
+      left == right
+
+    // Mechanical extraction of the existing publication hidden-owner block. In legacy
+    // mode the two arguments evaluate exactly the original expressions at their original
+    // positions. In new raw mode, derived bindings and digital ports are checked separately.
+    private def exactConstructionHiddenOwnersEmpty(
+        root: Module,
+        requirementBindingsAbsent: => Boolean,
+        digitalPortsAbsent: => Boolean,
+        boundChild: Option[Module] = None,
+        rootAssignmentOrdinal: Boolean = false
+    ): Boolean =
+      def checked(test: => Boolean): Boolean = bdChecked(test)
+      val absent =
+        checked(expressionRegions.isEmpty) && checked(collectionRegions.isEmpty) &&
+          checked(collectionArguments.isEmpty) && checked(loopRegions.isEmpty) &&
+          checked(structuralArms.isEmpty) && checked(behavioralArms.isEmpty) &&
+          checked(fsmActionRegions.isEmpty) && checked(enumSwitchArms.isEmpty) &&
+          checked(iterationIndices.isEmpty) && checked(staticPredicates.isEmpty) &&
+          checked(structuralIfs.isEmpty) && checked(behavioralIfs.isEmpty) &&
+          checked(flatFsms.isEmpty) && checked(fsmResults.isEmpty) && checked(
+            enumSwitches.isEmpty
+          ) &&
+          checked(privateFsmStorage.isEmpty) && checked(fsmObservations.isEmpty) &&
+          checked(openFsms.isEmpty) && checked(behavioralChains.isEmpty) &&
+          checked(collectionStack.isEmpty) && checked(generationStack.isEmpty) &&
+          checked(compositionObservationRoot.isEmpty) && checked(areas.isEmpty) &&
+          checked(generatedOwnershipRecords.isEmpty) && checked(analogRegions.isEmpty) &&
+          checked(continuousOperators.isEmpty) && checked(waveformOperators.isEmpty) &&
+          checked(transferOperators.isEmpty) && checked(noiseOperators.isEmpty) &&
+          checked(eventProcesses.isEmpty) && checked(eventStorage.isEmpty) &&
+          checked(activeEventProcess.isEmpty) && checked(clockRecords.isEmpty) &&
+          checked(requirementBindingsAbsent) && checked(instanceInterfacePorts.isEmpty) &&
+          checked(instanceDigitalInouts.isEmpty) && checked(instanceInterfaceDimensions.isEmpty) &&
+          checked(instanceInterfaceTypes.isEmpty) && checked(resolvedInterfaceViews.isEmpty) &&
+          checked(conservativeInterfaceViews.isEmpty) && checked(
+            globalInterfaceInitializers.isEmpty
+          ) &&
+          checked(interfaceFormalTypes.isEmpty) && checked(shapeViews.isEmpty)
+      if !absent ||
+        !checked(
+          eventStateBits.isEmpty && executableCrossings.isEmpty && crossingStateBits == 0 && pulseValues.isEmpty
+        ) ||
+        !checked(
+          executableWaivers.isEmpty && waiverIds.isEmpty && provedClockIdentities.isEmpty && rawClockResets.isEmpty
+        ) ||
+        !checked(clockState == 0L && resetState == 0L && auxiliaryFsmStateBits == 0) ||
+        !checked(
+          nodeSelectionLookup.isEmpty && instanceSelectionStack.isEmpty && areaStack.isEmpty && areaRecords.isEmpty
+        ) ||
+        !checked(
+          domainStack.isEmpty && generationStack.isEmpty && analogStack.isEmpty && analogSemanticContext.isEmpty
+        ) ||
+        !checked((nextDigitalEffectOrdinal.isEmpty || (rootAssignmentOrdinal && {
+          charge(2L)
+          nextDigitalEffectOrdinal.size == 1 && nextDigitalEffectOrdinal.get(rootHandle).contains(1)
+        })) && digitalPortsAbsent) ||
+        !checked(
+          reductionExact.isEmpty && reductionDomains.isEmpty && !reductionChecking && !reductionProofBuilding
+        )
+      then return false
+      // These pure owner observers inspect 1 + 7 + 32 fixed fields, no lazy owner creation.
+      charge(if boundChild.isEmpty then 40L else 8L)
+      if !userFunctions.publicationEmpty || !analogSemanticRecorder.publicationEmpty ||
+        !(boundChild match
+          case None => AnalogProceduralConstruction.publicationEmpty(root)
+          case Some(child) =>
+            AnalogProceduralConstruction.boundPairPublicationEmpty(root, child, charge)
+        )
+      then return false
+      true
+
+    // Phase-local evidence consists only of canonical owner identities, never replacement
+    // domain facts, snapshots, names, binding caches or type descriptors. Do not retain it
+    // across a preparation/export phase or use it to skip the normal owner traversals.
+    private final case class BoundDomainAccountingProof(
+        rootObject: Module,
+        childObject: Module,
+        root: ModuleRecord,
+        child: ModuleRecord,
+        occurrence: InstanceRecord,
+        actual: DomainRecord,
+        requirement: DomainRecord,
+        clock: DeclarationRef,
+        reset: DeclarationRef,
+        boundary: KernelExpr[?],
+        singletonReference: ExpressionRef,
+        singleton: KernelExpr[?],
+        assignment: Option[(Operation, Int)]
+    )
+
+    // Zero-debit routing only, keeping eager/C1/no-intent/domain-free/root-local fees intact.
+    // Every condition is re-established by charged raw eligibility before removing any fee.
+    def boundDomainAccountingCandidate: Boolean =
+      incremental && constructionMode && registeredConstructionAdmission &&
+        records.size == 2 && records.get(rootHandle).exists(module =>
+          module.domains.size == 1 && module.instances.size == 1 &&
+            module.domains.head.kind == KernelDomainKind.External &&
+            records.get(module.instances.head.child).exists(child =>
+              child.domains.size == 1 && child.domains.head.kind == KernelDomainKind.Required
+            )
+        )
+
+    // Same bounded literal grammar as exactPublicationEligible. Extraction/reuse by the
+    // legacy method is optional only after old debit-order parity is demonstrated; this
+    // new helper is not an alternative type resolver, and admits no parameter or alias.
+    private def bdScalar(value: KernelTypeDescriptor, controls: Boolean = false): Boolean =
+      charge(1L + value.kind.length.toLong + value.arguments.size.toLong)
+      value.kind match
+        case "Bool" => value.arguments.isEmpty
+        case "Clock" | "Reset" => controls && value.arguments.isEmpty
+        case "Bits" | "UInt" | "SInt" => value.arguments match
+            case Vector(width: Int) => width > 0
+            case _ => false
+        case _ => false
+
+    private def bdLiteralDescriptor(value: KernelTypeDescriptor): Boolean =
+      charge(1L + value.kind.length.toLong + value.arguments.size.toLong)
+      value.kind match
+        case "Vec" => value.arguments match
+            case Vector(element: DataType[?], dimensions: Seq[?]) =>
+              !element.isInstanceOf[KernelInstanceDataType[?]] &&
+              bdScalar(CandidateRuntime.typeDescriptor(element)) &&
+              bdChecked(dimensions.nonEmpty) && bdEvery(dimensions) {
+                case extent: Int => extent > 0
+                case _ => false
+              }
+            case _ => false
+        case _ => bdScalar(value)
+
+    private def bdLiteralData(value: DataType[?]): Boolean = value match
+      case _: KernelInstanceDataType[?] => false
+      case _ => bdLiteralDescriptor(CandidateRuntime.typeDescriptor(value))
+
+    /** This method must run in guard. None selects the old coarse route BEFORE exact work.
+      * Exhaustion/poison throws through guard, never becomes None or a refunded fallback. No
+      * semanticResult/name/domainPath/resolved/occurrenceDomains/binding-map reads occur. Pending
+      * KernelExpr payloads and pending KernelInstanceDataType descriptors are opaque.
+      */
+    private def exactBoundDomainRaw(): Option[BoundDomainAccountingProof] =
+      if !bdChecked(incremental && constructionMode && registeredConstructionAdmission) ||
+        !bdChecked(records.size == 2 && moduleIds.size == 2 && records.contains(rootHandle))
+      then return None
+      val root = records(rootHandle)
+      if !bdChecked(root.handle == rootHandle && root.attached &&
+          root.parentAtConstruction.isEmpty && root.externalName.isEmpty) ||
+        !bdChecked(root.domains.size == 1 && root.instances.size == 1 &&
+          root.generatedRegions.isEmpty && root.scaffoldExpressionCount == 0) ||
+        !bdChecked(rootParameterBindings.isEmpty && instanceIds.size == 1 &&
+          instanceObjects.size == 1 && domainIds.size == 2) ||
+        !bdChecked(expressionIds.size == expressionValues.size)
+      then return None
+      val occurrence = root.instances.head
+      val childOption = records.get(occurrence.child)
+      if !bdChecked(occurrence.ordinal == 0 && occurrence.child != rootHandle &&
+          childOption.nonEmpty && occurrence.generatedScope.isEmpty &&
+          occurrence.lexicalDomain.isEmpty && occurrence.namedBindings.isEmpty &&
+          occurrence.namedBindingSources.isEmpty && occurrence.parameterOverrides.isEmpty)
+      then return None
+      val child = childOption.get
+      if !bdChecked(child.handle == occurrence.child && child.attached &&
+          child.parentAtConstruction.contains(rootHandle) && child.externalName.isEmpty) ||
+        !bdChecked(child.instances.isEmpty && child.generatedRegions.isEmpty &&
+          child.domains.size == 1 && child.scaffoldExpressionCount == 0) ||
+        !bdChecked(declarationIds.size == root.declarations.size + child.declarations.size)
+      then return None
+
+      var rootObject = Option.empty[Module]
+      var childObject = Option.empty[Module]
+      charge(1L)
+      val modules = moduleIds.entrySet().iterator()
+      while modules.hasNext do
+        charge(1L)
+        val entry = modules.next()
+        entry.getKey match
+          case module: Module if entry.getValue.longValue == rootHandle && rootObject.isEmpty =>
+            rootObject = Some(module)
+          case module: Module if entry.getValue.longValue == child.handle && childObject.isEmpty =>
+            childObject = Some(module)
+          case _ => return None
+      if !bdChecked(rootObject.nonEmpty && childObject.nonEmpty &&
+          (rootObject.get ne childObject.get))
+      then return None
+      val instance = Option(instanceObjects.get(childObject.get))
+      if !bdChecked(instance.nonEmpty && (instance.get.module eq childObject.get) &&
+          Option(instanceIds.get(instance.get)).exists(_ eq occurrence))
+      then return None
+      // Cardinality + exact forward identities excludes rogue reverse-map entries.
+      if !exactConstructionHiddenOwnersEmpty(
+          rootObject.get,
+          requirementBindingsAbsent = true,
+          digitalPortsAbsent = true,
+          boundChild = Some(childObject.get),
+          rootAssignmentOrdinal = true
+        )
+      then return None
+      if !bdChecked(directPortRequest.isEmpty && directPortPermit.isEmpty &&
+          constructorFailure.isEmpty && waveformForbiddenDepth == 0) ||
+        !bdChecked(moduleStack.isEmpty ||
+          (moduleStack.size == 1 && (moduleStack.head eq root)))
+      then return None
+
+      val allocationSerials = mutable.HashSet.empty[Long]
+      def allocated(value: AllocationIdentity, owner: ModuleRecord): Boolean =
+        bdChecked(value.constructionAllocation.exists(stamp =>
+          (stamp.session eq ConstructionSession.this) && (stamp.module eq owner) &&
+            stamp.serial > 0L && stamp.serial <= constructionAllocationSerial &&
+            stamp.region.isEmpty && stamp.generation.isEmpty && stamp.area.isEmpty &&
+            allocationSerials.add(stamp.serial)
+        ))
+      if !allocated(occurrence, root) then return None
+      val actual = root.domains.head
+      val requirement = child.domains.head
+      val domain = actual.domain
+      val required = requirement.domain
+      def domainIdentity(record: DomainRecord, owner: ModuleRecord): Boolean =
+        bdChecked(record.reference.module == owner.handle && record.reference.index == 0 &&
+          owner.domains.headOption.exists(_ eq record) &&
+          Option(domainIds.get(record.domain)).exists(_ eq record.reference)) &&
+          bdTextEqual(record.name, record.domain.name)
+      if !domainIdentity(actual, root) || !domainIdentity(requirement, child) ||
+        !bdChecked(actual.kind == KernelDomainKind.External &&
+          requirement.kind == KernelDomainKind.Required && (domain ne required)) ||
+        !bdChecked(occurrence.defaultBinding.exists(_ eq domain)) ||
+        !bdChecked(domain.parent.isEmpty && domain.relation.isEmpty &&
+          !domain.executableRelationship && domain.clock.nonEmpty &&
+          domain.edge.exists(edge => edge == ClockEdge.Rising || edge == ClockEdge.Falling)) ||
+        !bdChecked(domain.resetPolicy.contains(ResetPolicy.Sync) &&
+          domain.resetPolarity.exists(value =>
+            value == ResetPolarity.ActiveHigh ||
+              value == ResetPolarity.ActiveLow
+          ) && domain.frequency.nonEmpty) ||
+        !bdEvery(domain.frequency)(value =>
+          java.lang.Double.isFinite(value.hertz) && value.hertz > 0.0
+        ) ||
+        !bdChecked(required.parent.isEmpty && required.relation.isEmpty &&
+          !required.executableRelationship && required.edge.isEmpty &&
+          required.resetPolicy.isEmpty && required.resetPolarity.isEmpty &&
+          required.frequency.isEmpty && required.clock.nonEmpty)
+      then return None
+
+      var externalMetadata = 0
+      var frequencyMetadata = 0
+      var assignment = Option.empty[Operation]
+      if !bdEvery(operations) { operation =>
+          charge(1L + operation.values.size.toLong + operation.kind.length.toLong)
+          if operation.kind == "assignment" then
+            bdChecked(assignment.isEmpty && operation.owner == rootHandle &&
+              operation.values.size == 2 && operation.generatedScope.isEmpty &&
+              operation.digitalRegion.isEmpty && operation.eventProcess.isEmpty &&
+              operation.source.nonEmpty && operation.sourceOrdinal == 0) && {
+              charge(1L) // retain the canonical candidate, not a copied operation graph
+              assignment = Some(operation)
+              true
+            }
+          else
+            operation.owner == rootHandle && operation.kind == "metadata" &&
+            operation.generatedScope.isEmpty && operation.digitalRegion.isEmpty &&
+            operation.eventProcess.isEmpty && operation.source.isEmpty &&
+            operation.sourceOrdinal == 0 && (operation.values match
+              case Vector(
+                    edge: ClockEdge,
+                    policy: ResetPolicy,
+                    polarity: ResetPolarity,
+                    frequency: Frequency
+                  ) =>
+                val valid = domain.edge.contains(edge) && domain.resetPolicy.contains(policy) &&
+                  domain.resetPolarity.contains(polarity) &&
+                  domain.frequency.exists(_ eq frequency)
+                if valid then externalMetadata += 1
+                valid
+              case Vector(hertz: Double, unit: String) =>
+                val valid = bdTextEqual(unit, "Hz") && java.lang.Double.isFinite(hertz) &&
+                  hertz > 0.0 && domain.frequency.exists(_.hertz == hertz)
+                if valid then frequencyMetadata += 1
+                valid
+              case _ => false)
+        } || !bdChecked(externalMetadata == 1 && frequencyMetadata <= 1 &&
+          (if assignment.isEmpty then nextDigitalEffectOrdinal.isEmpty
+           else
+             nextDigitalEffectOrdinal.size == 1 &&
+             nextDigitalEffectOrdinal.get(rootHandle).contains(1)))
+      then return None
+      // ClockDomain.required emits expressions, NOT a metadata operation. Any extra
+      // child or unknown operation is rejected above instead of ignored by a whitelist.
+
+      def directControl(value: Expr[?], kind: String): Option[DeclarationRef] =
+        charge(1L)
+        Option(declarationIds.get(value)).filter { reference =>
+          bdChecked(reference.module == rootHandle) &&
+          root.declarations.lift(reference.index).exists { declaration =>
+            bdChecked((declaration.reference eq reference) && (declaration.value eq value) &&
+              declaration.kind == KernelSignalKind.Input &&
+              declaration.domainCandidate.exists(_ eq domain)) &&
+            declaration.dataType.exists { dataType =>
+              val descriptor = CandidateRuntime.typeDescriptor(dataType)
+              charge(1L + descriptor.kind.length.toLong + descriptor.arguments.size.toLong)
+              descriptor.kind == kind && descriptor.arguments.isEmpty &&
+              !dataType.isInstanceOf[KernelInstanceDataType[?]]
+            }
+          }
+        }
+      val clock = directControl(domain.clock.get, "Clock")
+      val reset = directControl(domain.reset, "Reset")
+      if !bdChecked(clock.nonEmpty && reset.nonEmpty && (clock.get ne reset.get)) then return None
+      val boundary = Option(effectiveResets.get(domain))
+      if !bdChecked(effectiveResets.size == 1 && resetRecords.size == 1 &&
+          resetBoundaries.size == 1 && physicalResetBoundaries.size == 1 && boundary.nonEmpty) ||
+        !bdChecked(Option(resetBoundaries.get(domain.reset)).exists(_ eq boundary.get) &&
+          physicalResetBoundaries.get(reset.get -> 0L).exists(_ eq boundary.get))
+      then return None
+      val resetFact = Option(resetRecords.get(boundary.get))
+      if !bdChecked(resetFact.nonEmpty) then return None
+      val fact = resetFact.get
+      charge(1L + fact.inputs.size.toLong + fact.kind.length.toLong + fact.release.length.toLong)
+      if fact.kind != "boundary" || fact.inputs.size != 1 ||
+        !(fact.inputs.head eq domain.reset) || fact.stages != 0 ||
+        fact.polarity != domain.resetPolarity.get || fact.release != "sync" ||
+        !fact.destination.exists(_ eq domain)
+      then return None
+
+      val allowed = mutable.HashSet.empty[ExpressionRef]
+      def expressionIdentity(value: KernelExpr[?], owner: ModuleRecord): Option[ExpressionRef] =
+        charge(1L)
+        val reference = Option(expressionIds.get(value))
+        reference.filter { ref =>
+          bdChecked(ref.module == owner.handle && ref.index >= 0 &&
+            ref.index < owner.expressionCount && expressionValues.get(ref).exists(_ eq value)) &&
+          allocated(ref, owner) && bdChecked(allowed.add(ref))
+        }
+      def ordinaryControl(
+          value: Expr[?],
+          owner: ModuleRecord,
+          operation: String,
+          descriptor: KernelTypeDescriptor,
+          operand: Any
+      ): Option[KernelExpr[?]] = value match
+        case expression: KernelExpr[?] =>
+          if expressionIdentity(expression, owner).isEmpty ||
+            !bdChecked(expression.constructionFinalized && expression.typeFinalized &&
+              expression.constructionKind.isEmpty && expression.constructionCallback.isEmpty &&
+              expression.constructionDependencies.isEmpty && expression.constructionRequest.isEmpty)
+          then None
+          else
+            charge(1L + expression.operands.size.toLong)
+            if !bdChecked(expression.interfaceMember.isEmpty &&
+                expression.materializationIntent.isEmpty && expression.typeIntent.isEmpty &&
+                expression.literal.isEmpty && expression.operation.contains(operation) &&
+                expression.resultDescriptor.contains(descriptor)) ||
+              !bdChecked(expression.operands.size == 1)
+            then None
+            else
+              val same = (expression.operands.head, operand) match
+                case (left: String, right: String) => bdTextEqual(left, right)
+                case (left: AnyRef, right: AnyRef) => bdChecked(left eq right)
+                case _ => false
+              Option.when(same)(expression)
+        case _ => None
+      val resetExpression = ordinaryControl(
+        boundary.get,
+        root,
+        "reset_boundary",
+        KernelTypeDescriptor("Reset"),
+        domain.reset
+      )
+      if resetExpression.isEmpty ||
+        ordinaryControl(
+          required.clock.get,
+          child,
+          "required_clock",
+          KernelTypeDescriptor("Clock"),
+          required.name
+        ).isEmpty ||
+        ordinaryControl(
+          required.reset,
+          child,
+          "required_reset",
+          KernelTypeDescriptor("Reset"),
+          required.name
+        ).isEmpty
+      then return None
+
+      var proxyCount = 0
+      def declarationIdentity(declaration: DeclarationRecord, owner: ModuleRecord): Boolean =
+        bdChecked(declaration.reference.module == owner.handle &&
+          owner.declarations.lift(declaration.reference.index).exists(_ eq declaration) &&
+          Option(declarationIds.get(declaration.value)).exists(_ eq declaration.reference)) &&
+          allocated(declaration.reference, owner) &&
+          bdChecked(declaration.attributes.isEmpty && declaration.conservativeDimensions.isEmpty) &&
+          bdChecked(declaration.value match
+            case signal: Signal[?] => declaration.dataType.exists(_ eq signal.dataType)
+            case _ => false)
+      def declaredData(declaration: DeclarationRecord, owner: ModuleRecord): Boolean =
+        if !declarationIdentity(declaration, owner) then false
+        else if declaration.reference eq clock.get then true
+        else if declaration.reference eq reset.get then true
+        else if assignment.nonEmpty &&
+          Set(KernelSignalKind.Output, KernelSignalKind.InstanceOutput).contains(declaration.kind)
+        then false
+        else
+          declaration.kind match
+            case KernelSignalKind.InstanceInput | KernelSignalKind.InstanceOutput =>
+              proxyCount += 1
+              bdChecked(owner eq root) && bdChecked(declaration.domainCandidate.isEmpty) &&
+              instanceDigitalPorts.get(declaration.reference).exists { binding =>
+                bdChecked((binding.instance eq occurrence) && binding.port.module == child.handle &&
+                  binding.generated.isEmpty && binding.scope.isEmpty) &&
+                child.declarations.lift(binding.port.index).exists { port =>
+                  bdChecked((port.reference eq binding.port) &&
+                    Option(declarationIds.get(port.value)).exists(_ eq binding.port) &&
+                    ((port.kind == KernelSignalKind.Input &&
+                      declaration.kind == KernelSignalKind.InstanceInput) ||
+                      (port.kind == KernelSignalKind.Output &&
+                        declaration.kind == KernelSignalKind.InstanceOutput))) &&
+                  port.dataType.exists(bdLiteralData)
+                } &&
+                // Do not read formal, kernelDescriptor or resultDescriptor here.
+                declaration.dataType.exists(_.isInstanceOf[KernelInstanceDataType[?]])
+              }
+            case KernelSignalKind.Input | KernelSignalKind.Output =>
+              bdChecked(!instanceDigitalPorts.contains(declaration.reference)) &&
+              bdChecked(declaration.domainCandidate.forall(candidate =>
+                if owner eq root then candidate eq domain else candidate eq required
+              )) &&
+              declaration.dataType.exists(bdLiteralData)
+            case _ => false
+      if !bdEvery(root.declarations)(declaredData(_, root)) ||
+        !bdEvery(child.declarations)(declaredData(_, child)) ||
+        !bdChecked(proxyCount == instanceDigitalPorts.size)
+      then return None
+      // No separate entry scan is needed: each proxy's canonical key/record was checked;
+      // equality of counts excludes extra keys and the declarations have unique references.
+
+      var singleton = Option.empty[(ExpressionRef, KernelExpr[?])]
+      if !bdEvery(expressionValues) { (reference, value) =>
+          if allowed.contains(reference) then
+            bdChecked(Option(expressionIds.get(value)).exists(_ eq reference))
+          else if singleton.nonEmpty || expressionIdentity(value, root).isEmpty then false
+          else
+            singleton = Some(reference -> value)
+            bdChecked(Option(expressionIds.get(value)).exists(_ eq reference)) &&
+            bdChecked(value.registeredConstructionOwnedBy(ConstructionSession.this) &&
+              value.constructionKind.exists(DigitalReductionContract.Kinds) &&
+              value.constructionCallback.nonEmpty && value.constructionDependencies.size == 1) && {
+              val input = value.constructionDependencies.head
+              val inputRef = input match
+                case expression: Expr[?] => Option(declarationIds.get(expression))
+                case _ => None
+              bdChecked(inputRef.nonEmpty && inputRef.get.module == rootHandle &&
+                !instanceDigitalPorts.contains(inputRef.get)) && {
+                val declaration = root.declarations.lift(inputRef.get.index)
+                bdChecked(declaration.nonEmpty &&
+                  (declaration.get.reference eq inputRef.get) &&
+                  (declaration.get.value eq input.asInstanceOf[AnyRef]) &&
+                  declaration.get.kind == KernelSignalKind.Input) &&
+                declaration.get.dataType.exists { dataType =>
+                  val descriptor = CandidateRuntime.typeDescriptor(dataType)
+                  charge(1L + descriptor.arguments.size.toLong + descriptor.kind.length.toLong)
+                  descriptor.kind == "Vec" && (descriptor.arguments match
+                    case Vector(element: DataType[?], dimensions: Seq[?]) =>
+                      bdScalar(CandidateRuntime.typeDescriptor(element)) && {
+                        charge(1L)
+                        val iterator = dimensions.iterator
+                        val one = iterator.hasNext && { charge(1L); iterator.next() == 1 }
+                        one && !iterator.hasNext
+                      } && value.constructionRequest.exists { request =>
+                        bdChecked((request.session eq ConstructionSession.this) &&
+                          (request.module eq root) &&
+                          (request.input eq input.asInstanceOf[Expr[?]]) &&
+                          (request.inputReference eq inputRef.get) &&
+                          (request.resultReference eq reference) &&
+                          request.sourceSlot == value.constructionSourceSlot &&
+                          request.frontier >= inputRef.get.constructionAllocation.get.serial &&
+                          request.frontier < reference.constructionAllocation.get.serial) &&
+                        bdChecked(request.roots.size == 1 &&
+                          (request.roots.head.value eq declaration.get.value) &&
+                          (request.roots.head.reference eq inputRef.get)) && {
+                          if !value.constructionFinalized then
+                            bdChecked(value.pendingConstructionOwnedBy(ConstructionSession.this) &&
+                              !shapeIndices.contains(reference)) &&
+                            bdChecked(semanticOrigin.retainedExpressionSlot(
+                              value.constructionSourceSlot,
+                              rootHandle,
+                              reference.index,
+                              value,
+                              value.constructionDependencies
+                            ))
+                          else
+                            charge(1L + value.operands.size.toLong)
+                            bdChecked(value.typeFinalized && value.interfaceMember.isEmpty &&
+                              value.materializationIntent.isEmpty && value.typeIntent.isEmpty &&
+                              value.literal.isEmpty && value.operation.contains("shape_index") &&
+                              value.operands.size == 2 &&
+                              (value.operands.head.asInstanceOf[AnyRef] eq declaration.get.value) &&
+                              value.operands(1) == 0) &&
+                            bdChecked(value.resultDescriptor.contains(
+                              CandidateRuntime.typeDescriptor(element)
+                            )) &&
+                            shapeIndices.get(reference).exists { index =>
+                              charge(1L + index.indices.size.toLong +
+                                index.resultDimensions.size.toLong + index.sourceUses.size.toLong)
+                              (index.reference eq reference) && (index.input eq inputRef.get) &&
+                              index.indices == Vector(0) && index.resultDimensions.isEmpty &&
+                              index.sourceUses.isEmpty && index.conservative.isEmpty &&
+                              index.generatedScope.isEmpty
+                            } && bdChecked(semanticOrigin.retainedExpressionSlot(
+                              value.constructionSourceSlot,
+                              rootHandle,
+                              reference.index,
+                              value,
+                              value.operands
+                            ))
+                        }
+                      }
+                    case _ => false)
+                }
+              }
+            }
+        } || !bdChecked(singleton.nonEmpty && allowed.size == expressionValues.size &&
+          root.expressionCount == 2 && child.expressionCount == 2 &&
+          shapeIndices.size == (if singleton.get._2.constructionFinalized then 1 else 0))
+      then return None
+      if assignment.nonEmpty then charge(2L) // optional identity/count evidence
+      val proof = BoundDomainAccountingProof(
+        rootObject.get,
+        childObject.get,
+        root,
+        child,
+        occurrence,
+        actual,
+        requirement,
+        clock.get,
+        reset.get,
+        resetExpression.get,
+        singleton.get._1,
+        singleton.get._2,
+        assignment.map(_ -> operations.size)
+      )
+      if assignment.nonEmpty && !boundAssignmentValid(proof, checkInventory = false) then None
+      else Some(proof)
+
+    // Only canonical identities and bounded scalar facts. No derived-map/name access is
+    // needed for raw admission; the normal resolver rechecks its own binding later.
+    private def boundAssignmentValid(
+        proof: BoundDomainAccountingProof,
+        checkInventory: Boolean
+    ): Boolean = proof.assignment.forall { (operation, count) =>
+      val present = !checkInventory || {
+        charge(1L)
+        val iterator = operations.iterator
+        var found = false
+        while iterator.hasNext do
+          charge(1L)
+          if iterator.next() eq operation then found = true
+        bdChecked(found && operations.size == count)
+      }
+      if !present || !bdChecked(operation.owner == rootHandle &&
+          operation.kind == "assignment" && operation.values.size == 2 &&
+          operation.generatedScope.isEmpty && operation.digitalRegion.isEmpty &&
+          operation.eventProcess.isEmpty && operation.source.nonEmpty &&
+          operation.sourceOrdinal == 0 && nextDigitalEffectOrdinal.size == 1 &&
+          nextDigitalEffectOrdinal.get(rootHandle).contains(1))
+      then false
+      else
+        charge(2L)
+        val targetValue = operation.values.head.asInstanceOf[AnyRef]
+        val target = Option(declarationIds.get(targetValue))
+        if !bdChecked(target.nonEmpty && target.get.module == rootHandle &&
+            (operation.values(1).asInstanceOf[AnyRef] eq proof.singleton) &&
+            proof.singleton.constructionFinalized && proof.singleton.typeFinalized)
+        then false
+        else
+          val reference = target.get
+          val declaration = proof.root.declarations.lift(reference.index)
+          val binding = instanceDigitalPorts.get(reference)
+          if !bdChecked(declaration.nonEmpty && binding.nonEmpty &&
+              (declaration.get.reference eq reference) &&
+              (declaration.get.value eq targetValue) &&
+              declaration.get.kind == KernelSignalKind.InstanceInput &&
+              (binding.get.instance eq proof.occurrence) &&
+              binding.get.port.module == proof.child.handle && binding.get.generated.isEmpty &&
+              binding.get.scope.isEmpty)
+          then false
+          else
+            val childPort = proof.child.declarations.lift(binding.get.port.index)
+            val input = proof.singleton.constructionRequest.get.inputReference
+            val rootInput = input match
+              case reference: DeclarationRef => proof.root.declarations.lift(reference.index)
+              case _: ExpressionRef => None
+            if !bdChecked(childPort.nonEmpty && rootInput.nonEmpty &&
+                (childPort.get.reference eq binding.get.port) &&
+                childPort.get.kind == KernelSignalKind.Input &&
+                rootInput.get.reference.eq(input) &&
+                rootInput.get.domainCandidate.exists(_ eq proof.actual.domain))
+            then false
+            else
+              declaration.get.dataType match
+                case Some(dataType: KernelInstanceDataType[?]) if dataType.finalized =>
+                  val targetType = dataType.kernelDescriptor
+                  val sourceType = proof.singleton.resultDescriptor
+                  val authored = childPort.get.dataType.map(CandidateRuntime.typeDescriptor)
+                  bdChecked(sourceType.nonEmpty && authored.nonEmpty) &&
+                  bdScalar(targetType) && bdScalar(sourceType.get) && bdScalar(authored.get) &&
+                  bdSameLiteralDescriptor(targetType, sourceType.get) &&
+                  bdSameLiteralDescriptor(targetType, authored.get)
+                case _ => false
+    }
+
+    /** Once raw exact work started, mismatches poison instead of selecting coarse fallback. Call
+      * immediately after resolveDomains and again before snapshot/export. Derivation is still owned
+      * by the unchanged resolver, which clears/rebuilds both maps every time.
+      */
+    private def requireBoundDomainResolved(proof: BoundDomainAccountingProof): Unit =
+      def requireFact(test: => Boolean, message: String): Unit =
+        if !bdChecked(test) then reject("bound-domain accounting: " + message)
+      requireFact(
+        records.get(rootHandle).exists(_ eq proof.root) &&
+          records.get(proof.child.handle).exists(_ eq proof.child) &&
+          Option(moduleIds.get(proof.rootObject)).exists(_.longValue == rootHandle) &&
+          Option(moduleIds.get(proof.childObject)).exists(_.longValue == proof.child.handle),
+        "module identity changed during preparation"
+      )
+      requireFact(
+        proof.root.instances.size == 1 &&
+          (proof.root.instances.head eq proof.occurrence) &&
+          proof.occurrence.defaultBinding.exists(_ eq proof.actual.domain) &&
+          proof.occurrence.namedBindings.isEmpty && proof.occurrence.lexicalDomain.isEmpty &&
+          proof.occurrence.generatedScope.isEmpty,
+        "actual occurrence binding changed during preparation"
+      )
+      requireFact(
+        proof.root.domains.size == 1 && proof.child.domains.size == 1 &&
+          (proof.root.domains.head eq proof.actual) &&
+          (proof.child.domains.head eq proof.requirement) &&
+          Option(domainIds.get(proof.actual.domain)).exists(_ eq proof.actual.reference) &&
+          Option(domainIds.get(proof.requirement.domain)).exists(_ eq proof.requirement.reference),
+        "domain identity changed during preparation"
+      )
+      requireFact(
+        selectedRequirementBindings.size == 1 &&
+          selectedRequirementBindings.headOption.exists(entry =>
+            entry._1 eq proof.requirement.reference
+          ),
+        "derived binding inventory differs from the sole authored requirement"
+      )
+      requireFact(
+        selectedRequirementBindings.get(proof.requirement.reference).exists {
+          (actual, origin, owner, ordinal) =>
+            (actual eq proof.actual.reference) && bdTextEqual(origin, "default") &&
+            owner == rootHandle && ordinal == proof.occurrence.ordinal
+        },
+        "derived binding does not name the exact actual/occurrence/default edge"
+      )
+      requireFact(
+        resolved.size == 2 && occurrenceDomains.size == 2,
+        "derived domain inventory differs from the authored pair"
+      )
+      bdEvery(resolved.keysIterator) { reference =>
+        requireFact(
+          (reference eq proof.actual.reference) ||
+            (reference eq proof.requirement.reference),
+          "resolved map lost canonical key identity"
+        )
+        true
+      }
+      bdEvery(occurrenceDomains.keysIterator) { reference =>
+        requireFact(
+          (reference eq proof.actual.reference) ||
+            (reference eq proof.requirement.reference),
+          "occurrence map lost canonical key identity"
+        )
+        true
+      }
+      // Semantic naming is legal only now; charge its actual shared helper separately through
+      // the new preparation/export meter, not merely this string-comparison debit.
+      val physical = domainPath(proof.actual.reference)
+      bdEvery(Vector(proof.actual.reference, proof.requirement.reference)) { reference =>
+        requireFact(
+          resolved.get(reference).exists(bdTextEqual(_, physical)) &&
+            occurrenceDomains.get(reference).exists(bdTextEqual(_, physical)),
+          "derived domain resolves to a stale or foreign physical path"
+        )
+        true
+      }
+      requireFact(
+        Option(effectiveResets.get(proof.actual.domain)).exists(_ eq proof.boundary) &&
+          Option(resetBoundaries.get(proof.actual.domain.reset)).exists(_ eq proof.boundary) &&
+          physicalResetBoundaries.get(proof.reset -> 0L).exists(_ eq proof.boundary) &&
+          !effectiveResets.containsKey(proof.requirement.domain),
+        "derived physical reset identity changed"
+      )
+      requireFact(
+        clockRecords.isEmpty && provedClockIdentities.isEmpty && rawClockResets.isEmpty,
+        "resolution introduced an unsupported clock proof/alias"
+      )
+      if proof.assignment.nonEmpty && !boundAssignmentValid(proof, checkInventory = true) then
+        reject("bound-domain accounting: assignment identity changed during preparation")
+      // Raw proof is rerun once at the NEXT phase boundary; do not rerun here and then fall
+      // back on None. The resolver has no user callbacks in this audited profile. Its ordinary
+      // safety validation must still run and remains charged by the preparation owner.
+
+    /** Export-only bounded formal check. Not called by initial raw eligibility/preparation. A
+      * pending wrapper remains pending: never call kernelDescriptor/typeDescriptor on it. Reading
+      * its immutable formal is required because current snapshots render that formal; do not
+      * replace this proof with merely trusting the child's unrelated literal type.
+      */
+    private def requireBoundDomainExport(
+        proof: BoundDomainAccountingProof,
+        publication: Boolean
+    ): Unit =
+      requireBoundDomainResolved(proof)
+      def requireFact(test: => Boolean, message: String): Unit =
+        if !bdChecked(test) then reject("bound-domain accounting: " + message)
+      val semantic = semanticResult.getOrElse(reject("bound-domain export has no semantic names"))
+      bdEvery(Vector(proof.root, proof.child)) { module =>
+        requireFact(semantic.modulePaths.contains(module.handle), "module name is unresolved")
+        bdEvery(module.domains) { domain =>
+          requireFact(
+            semantic.domainPaths.contains(module.handle -> domain.reference.index) &&
+              semantic.domainNames.contains(module.handle -> domain.reference.index),
+            "domain name is unresolved"
+          )
+          true
+        } && bdEvery(module.declarations) { declaration =>
+          requireFact(
+            semantic.declarationNames.contains(module.handle -> declaration.reference.index) &&
+              semantic.declarationPaths.contains(module.handle -> declaration.reference.index),
+            "declaration name is unresolved"
+          )
+          true
+        }
+      }
+      requireFact(
+        semantic.instancePaths.contains(rootHandle -> proof.occurrence.ordinal),
+        "instance name is unresolved"
+      )
+      bdEvery(expressionValues) { (reference, _) =>
+        requireFact(
+          semantic.expressionPaths.contains(reference.module -> reference.index),
+          "expression name is unresolved"
+        )
+        true
+      }
+      bdEvery(instanceDigitalPorts) { (reference, binding) =>
+        val declaration = proof.root.declarations(reference.index)
+        val original = proof.child.declarations(binding.port.index)
+        val dataType = declaration.dataType.get.asInstanceOf[KernelInstanceDataType[?]]
+        val authored = CandidateRuntime.typeDescriptor(original.dataType.get)
+        // Charge/validate BOTH operand trees before structural descriptor comparison. The
+        // grammar is one Vec layer of scalar + literal dimensions, never arbitrary metadata.
+        requireFact(
+          bdLiteralDescriptor(dataType.formal) && bdLiteralDescriptor(authored),
+          "proxy formal is not bounded literal ordinary digital metadata"
+        )
+        requireFact(
+          bdSameLiteralDescriptor(dataType.formal, authored),
+          "proxy formal does not preserve its exact original child type"
+        )
+        if dataType.finalized then
+          requireFact(
+            bdLiteralDescriptor(dataType.kernelDescriptor) &&
+              bdSameLiteralDescriptor(dataType.kernelDescriptor, authored),
+            "final proxy type differs from its parameter-free child type"
+          )
+          requireFact(
+            verified.get("digital" -> reference).exists(_ eq binding),
+            "final proxy lacks its canonical boundary verification"
+          )
+        else if publication then reject("bound-domain publication contains a pending proxy")
+        true
+      }
+      if publication then
+        requireFact(
+          proof.singleton.constructionFinalized && proof.singleton.typeFinalized,
+          "publication contains pending registered construction"
+        )
+      ()
+
+    // Both descriptors must have passed bdLiteralDescriptor. Avoid uncharged generic
+    // recursive equals on DataType objects; compare this finite literal grammar directly.
+    private def bdSameLiteralDescriptor(
+        left: KernelTypeDescriptor,
+        right: KernelTypeDescriptor
+    ): Boolean =
+      if !bdTextEqual(left.kind, right.kind) then false
+      else if left.kind == "Vec" then
+        (left.arguments, right.arguments) match
+          case (Vector(le: DataType[?], ld: Seq[?]), Vector(re: DataType[?], rd: Seq[?])) =>
+            bdSameLiteralDescriptor(
+              CandidateRuntime.typeDescriptor(le),
+              CandidateRuntime.typeDescriptor(re)
+            ) && {
+              charge(1L)
+              val li = ld.iterator
+              val ri = rd.iterator
+              var same = true
+              while same && li.hasNext && ri.hasNext do
+                charge(1L)
+                same = li.next() == ri.next()
+              same && !li.hasNext && !ri.hasNext
+            }
+          case _ => false
+      else
+        charge(1L + left.arguments.size.toLong + right.arguments.size.toLong)
+        left.arguments == right.arguments
+
+    private def exactSnapshotEligible(): Boolean =
+      def checked(test: => Boolean): Boolean =
+        charge(1L)
+        test
+      def every[A](values: IterableOnce[A])(test: A => Boolean): Boolean =
+        charge(1L)
+        val iterator = values.iterator
+        var valid = true
+        while valid && iterator.hasNext do
+          charge(1L)
+          valid = test(iterator.next())
+        valid
+      def text(value: String): Boolean =
+        charge(1L + value.length.toLong)
+        true
+      def dimension(value: Any): Boolean =
+        charge(1L)
+        value match
+          case _: Int => true
+          case expression: Expr[?] =>
+            expressionIds.containsKey(expression) || declarationIds.containsKey(expression)
+          case _ => false
+      def descriptor(value: KernelTypeDescriptor, depth: Int): Boolean =
+        charge(1L)
+        // Same canonical descriptor depth bound; deeper inputs select the old route.
+        if depth >= 128 then false
+        else
+          text(value.kind)
+          charge(value.arguments.size.toLong)
+          value.kind match
+            case "Bool" | "Integer" => value.arguments.isEmpty
+            case "Bits" | "UInt" | "SInt" =>
+              value.arguments.size == 1 && dimension(value.arguments.head)
+            case "Vec" => value.arguments match
+                case Vector(element: DataType[?], dimensions: Seq[?]) =>
+                  descriptor(CandidateRuntime.typeDescriptor(element), depth + 1) &&
+                  every(dimensions)(dimension)
+                case _ => false
+            case _ => false
+      def metadata(value: Any, depth: Int = 0): Boolean =
+        charge(1L)
+        if depth >= 128 then false
+        else
+          value match
+            case null => true
+            case value: String => text(value)
+            case _: Int | _: Long | _: Double | _: Boolean => true
+            case value: DataType[?] => descriptor(CandidateRuntime.typeDescriptor(value), depth + 1)
+            case value: Expr[?] =>
+              expressionIds.containsKey(value) || declarationIds.containsKey(value)
+            case value: Option[?] => every(value)(metadata(_, depth + 1))
+            case value: Seq[?] => every(value)(metadata(_, depth + 1))
+            case _ => false
+      val absent =
+        checked(expressionRegions.isEmpty) && checked(collectionRegions.isEmpty) &&
+          checked(collectionArguments.isEmpty) && checked(loopRegions.isEmpty) &&
+          checked(structuralArms.isEmpty) && checked(behavioralArms.isEmpty) &&
+          checked(fsmActionRegions.isEmpty) && checked(enumSwitchArms.isEmpty) &&
+          checked(iterationIndices.isEmpty) && checked(staticPredicates.isEmpty) &&
+          checked(structuralIfs.isEmpty) && checked(behavioralIfs.isEmpty) &&
+          checked(flatFsms.isEmpty) && checked(fsmResults.isEmpty) && checked(
+            enumSwitches.isEmpty
+          ) &&
+          checked(privateFsmStorage.isEmpty) && checked(fsmObservations.isEmpty) &&
+          checked(openFsms.isEmpty) && checked(behavioralChains.isEmpty) &&
+          checked(collectionStack.isEmpty) && checked(generationStack.isEmpty) &&
+          checked(compositionObservationRoot.isEmpty) && checked(areas.isEmpty) &&
+          checked(generatedOwnershipRecords.isEmpty) && checked(analogRegions.isEmpty) &&
+          checked(continuousOperators.isEmpty) && checked(waveformOperators.isEmpty) &&
+          checked(transferOperators.isEmpty) && checked(noiseOperators.isEmpty) &&
+          checked(eventProcesses.isEmpty) && checked(eventStorage.isEmpty) &&
+          checked(activeEventProcess.isEmpty) && checked(clockRecords.isEmpty) &&
+          checked(resetRecords.isEmpty) && checked(resetBoundaries.isEmpty) &&
+          checked(selectedRequirementBindings.isEmpty) && checked(instanceInterfacePorts.isEmpty) &&
+          checked(instanceDigitalInouts.isEmpty) && checked(instanceInterfaceDimensions.isEmpty) &&
+          checked(instanceInterfaceTypes.isEmpty) && checked(resolvedInterfaceViews.isEmpty) &&
+          checked(conservativeInterfaceViews.isEmpty) && checked(
+            globalInterfaceInitializers.isEmpty
+          ) &&
+          checked(interfaceFormalTypes.isEmpty) && checked(shapeViews.isEmpty)
+      def moduleEligible(module: ModuleRecord): Boolean =
+        checked(semanticResult.exists(_.modulePaths.contains(module.handle))) &&
+          checked(module.domains.isEmpty) && checked(module.generatedRegions.isEmpty) &&
+          every(module.declarations) { declaration =>
+            val ordinary = declaration.kind match
+              case KernelSignalKind.Parameter | KernelSignalKind.Input | KernelSignalKind.Output |
+                  KernelSignalKind.InstanceInput | KernelSignalKind.InstanceOutput |
+                  KernelSignalKind.Wire => true
+              case _ => false
+            ordinary &&
+            checked(semanticResult.exists(_.declarationNames.contains(
+              declaration.reference.module -> declaration.reference.index
+            ))) && checked(semanticResult.exists(_.declarationPaths.contains(
+              declaration.reference.module -> declaration.reference.index
+            ))) && checked(declaration.domainCandidate.isEmpty) &&
+            checked(declaration.conservativeDimensions.isEmpty) &&
+            !declaration.value.isInstanceOf[InterfaceResolvedMember[?, ?]] &&
+            !declaration.value.isInstanceOf[InterfaceTerminalView[?, ?]] &&
+            every(declaration.dataType)(value =>
+              descriptor(CandidateRuntime.typeDescriptor(value), 0)
+            ) && every(declaration.attributes)((name, value) => text(name) && metadata(value))
+          } && every(module.instances) { instance =>
+            checked(
+              semanticResult.exists(_.instancePaths.contains(module.handle -> instance.ordinal))
+            ) &&
+            checked(instance.lexicalDomain.isEmpty) && checked(instance.generatedScope.isEmpty) &&
+            checked(instance.defaultBinding.isEmpty) && checked(instance.namedBindings.isEmpty) &&
+            every(instance.parameterOverrides)((parameter, value) =>
+              metadata(parameter) && metadata(value)
+            )
+          }
+      absent && every(records.valuesIterator)(moduleEligible) &&
+      every(instanceDigitalPorts.valuesIterator) { boundary =>
+        checked(boundary.generated.isEmpty) && checked(boundary.scope.isEmpty) &&
+        checked(boundary.instance.generatedScope.isEmpty)
+      } && every(operations) { operation =>
+        text(operation.kind) && operation.kind == "assignment" &&
+        checked(operation.digitalRegion.isEmpty) && checked(operation.generatedScope.isEmpty) &&
+        checked(operation.eventProcess.isEmpty) && every(operation.values)(metadata(_))
+      } && every(rootParameterBindings)((parameter, value) =>
+        metadata(parameter) && metadata(value)
+      ) && every(expressionValues.valuesIterator) { expression =>
+        if !constructionPayloadAvailable(expression) then true
+        else
+          every(expression.resultDescriptor)(descriptor(_, 0)) &&
+          checked(expression.interfaceMember.isEmpty) &&
+          every(expression.operation)(text) &&
+          every(expression.literal)(value => text(value.kind) && text(value.value)) &&
+          every(expression.operands)(metadata(_))
+      } && every(shapeIndices.valuesIterator) { index =>
+        checked(index.conservative.isEmpty) && checked(index.generatedScope.isEmpty) &&
+        every(index.indices)(dimension) && every(index.resultDimensions)(metadata(_)) &&
+        every(index.sourceUses)((_, dimensions) => every(dimensions)(dimension))
+      }
+
+    /** Charged accounting eligibility only; all canonical validators still execute. */
+    private def exactPublicationEligible(root: Module): Boolean =
+      def checked(test: => Boolean): Boolean =
+        charge(1L)
+        test
+      def every[A](values: IterableOnce[A])(test: A => Boolean): Boolean =
+        charge(1L)
+        val iterator = values.iterator
+        var valid = true
+        while valid && iterator.hasNext do
+          charge(1L)
+          valid = test(iterator.next())
+        valid
+      def scalar(value: KernelTypeDescriptor): Boolean =
+        charge(1L + value.kind.length.toLong + value.arguments.size.toLong)
+        value.kind match
+          case "Bool" | "Clock" | "Reset" => value.arguments.isEmpty
+          case "Bits" | "UInt" | "SInt" => value.arguments match
+              case Vector(width: Int) => width > 0
+              case _ => false
+          case _ => false
+      def data(value: DataType[?]): Boolean =
+        val descriptor = CandidateRuntime.typeDescriptor(value)
+        charge(1L + descriptor.kind.length.toLong + descriptor.arguments.size.toLong)
+        descriptor.kind match
+          case "Vec" => descriptor.arguments match
+              case Vector(element: DataType[?], dimensions: Seq[?]) =>
+                !Set("Clock", "Reset")(CandidateRuntime.typeDescriptor(element).kind) &&
+                scalar(CandidateRuntime.typeDescriptor(element)) &&
+                every(dimensions) {
+                  case extent: Int => extent > 0
+                  case _ => false
+                }
+              case _ => false
+          case _ => !Set("Clock", "Reset")(descriptor.kind) && scalar(descriptor)
+      if !checked(incremental && constructionMode && registeredConstructionAdmission) ||
+        !checked(records.size == 1 && moduleIds.size == 1 && records.contains(rootHandle)) ||
+        !checked(Option(moduleIds.get(root)).exists(_.longValue == rootHandle))
+      then return false
+      val module = records(rootHandle)
+      if !checked(
+          module.attached && module.parentAtConstruction.isEmpty && module.externalName.isEmpty
+        ) ||
+        !checked(
+          module.instances.isEmpty && module.generatedRegions.isEmpty && module.domains.size == 1
+        ) ||
+        !checked(
+          rootParameterBindings.isEmpty && instanceIds.isEmpty && instanceObjects.isEmpty
+        ) ||
+        !checked(
+          domainIds.size == 1 && declarationIds.size == module.declarations.size && expressionIds.size == expressionValues.size
+        )
+      then return false
+      if !exactConstructionHiddenOwnersEmpty(
+          root,
+          selectedRequirementBindings.isEmpty,
+          instanceDigitalPorts.isEmpty
+        )
+      then return false
+      val domainRecord = module.domains.head
+      val domain = domainRecord.domain
+      if !checked(occurrenceDomains.size == 1 && resolved.size == 1 &&
+          occurrenceDomains.get(domainRecord.reference) == resolved.get(domainRecord.reference) &&
+          resolved.get(domainRecord.reference).contains(domainPath(domainRecord.reference)))
+      then return false
+      if !checked(domainRecord.reference == DomainRef(
+          rootHandle,
+          0
+        ) && domainRecord.kind == KernelDomainKind.External) ||
+        !checked(Option(domainIds.get(domain)).contains(domainRecord.reference)) ||
+        !checked(
+          domain.parent.isEmpty && domain.relation.isEmpty && !domain.executableRelationship
+        ) ||
+        !checked(domain.edge.exists(value =>
+          value == ClockEdge.Rising || value == ClockEdge.Falling
+        )) ||
+        !checked(domain.resetPolicy.contains(
+          ResetPolicy.Sync
+        ) && domain.resetPolarity.nonEmpty && domain.clock.nonEmpty) ||
+        !every(domain.frequency)(value =>
+          java.lang.Double.isFinite(value.hertz) && value.hertz > 0.0
+        )
+      then return false
+      var externalMetadata = 0
+      var frequencyMetadata = 0
+      val metadataValid = every(operations): operation =>
+        charge(1L + operation.values.size.toLong)
+        operation.owner == rootHandle && operation.kind == "metadata" &&
+        operation.generatedScope.isEmpty && operation.digitalRegion.isEmpty &&
+        operation.eventProcess.isEmpty && operation.source.isEmpty && operation.sourceOrdinal == 0 &&
+        (operation.values match
+          case Vector(
+                edge: ClockEdge,
+                policy: ResetPolicy,
+                polarity: ResetPolarity,
+                frequency: Frequency
+              ) =>
+            val valid = domain.edge.contains(edge) && domain.resetPolicy.contains(policy) &&
+              domain.resetPolarity.contains(polarity) && domain.frequency.exists(_ eq frequency)
+            if valid then externalMetadata += 1
+            valid
+          case Vector(hertz: Double, "Hz") =>
+            val valid = java.lang.Double.isFinite(hertz) && hertz > 0.0 &&
+              domain.frequency.exists(_.hertz == hertz)
+            if valid then frequencyMetadata += 1
+            valid
+          case _ => false)
+      if !metadataValid || externalMetadata != 1 || frequencyMetadata > 1 then return false
+      def control(value: Expr[?], kind: String): Option[DeclarationRef] =
+        charge(1L)
+        Option(declarationIds.get(value)).filter: reference =>
+          charge(1L)
+          reference.module == rootHandle && module.declarations.lift(reference.index).exists:
+            declaration =>
+              charge(1L)
+              (declaration.value eq value) && declaration.kind == KernelSignalKind.Input &&
+              declaration.domainCandidate.exists(_ eq domain) && declaration.dataType.exists:
+                dataType =>
+                  val descriptor = CandidateRuntime.typeDescriptor(dataType)
+                  charge(1L + descriptor.kind.length.toLong + descriptor.arguments.size.toLong)
+                  descriptor.kind == kind && descriptor.arguments.isEmpty
+      val clockReference = control(domain.clock.get, "Clock")
+      val resetReference = control(domain.reset, "Reset")
+      if clockReference.isEmpty || resetReference.isEmpty || clockReference == resetReference then
+        return false
+      val boundary = Option(effectiveResets.get(domain))
+      if !checked(
+          effectiveResets.size == 1 && resetRecords.size == 1 && resetBoundaries.size == 1 && physicalResetBoundaries.size == 1
+        ) ||
+        !checked(
+          boundary.nonEmpty && Option(resetBoundaries.get(domain.reset)).exists(_ eq boundary.get)
+        ) ||
+        !checked(physicalResetBoundaries.get(resetReference.get -> 0L).exists(_ eq boundary.get))
+      then return false
+      val reset = boundary.get
+      val resetRecord = Option(resetRecords.get(reset))
+      if !checked(resetRecord.nonEmpty) then return false
+      val resetFact = resetRecord.get
+      charge(1L + resetFact.inputs.size.toLong)
+      if resetFact.kind != "boundary" || resetFact.inputs.size != 1 ||
+        !(resetFact.inputs.head eq domain.reset) || resetFact.stages != 0 ||
+        resetFact.polarity != domain.resetPolarity.get || resetFact.release != "sync" ||
+        !resetFact.destination.exists(_ eq domain)
+      then return false
+      val allowed = mutable.HashSet.empty[ExpressionRef]
+      def expressionIdentity(value: KernelExpr[?], reference: ExpressionRef): Boolean =
+        checked(
+          reference.module == rootHandle && Option(expressionIds.get(value)).contains(reference) &&
+            expressionValues.get(reference).exists(_ eq value)
+        ) &&
+          checked(
+            value.constructionFinalized && value.typeFinalized && value.interfaceMember.isEmpty && value.materializationIntent.isEmpty
+          ) &&
+          checked(
+            semanticResult.exists(_.expressionPaths.contains(reference.module -> reference.index))
+          )
+      reset match
+        case value: KernelExpr[?] =>
+          val reference = Option(expressionIds.get(value))
+          if reference.isEmpty || !expressionIdentity(value, reference.get) then return false
+          charge(1L + value.operands.size.toLong)
+          if value.operation != Some("reset_boundary") || value.literal.nonEmpty ||
+            value.operands != Vector(domain.reset) || value.resultDescriptor != Some(
+              KernelTypeDescriptor("Reset")
+            )
+          then return false
+          allowed += reference.get
+        case _ => return false
+      val declarationsValid = every(module.declarations): declaration =>
+        checked(declaration.reference.module == rootHandle && Option(
+          declarationIds.get(declaration.value)
+        ).contains(declaration.reference)) &&
+          checked(module.declarations.lift(declaration.reference.index).exists(_ eq declaration)) &&
+          checked(
+            declaration.kind == KernelSignalKind.Input && declaration.attributes.isEmpty && declaration.conservativeDimensions.isEmpty
+          ) &&
+          checked(declaration.domainCandidate.forall(_ eq domain)) &&
+          checked(semanticResult.exists(result =>
+            result.declarationNames.contains(
+              rootHandle -> declaration.reference.index
+            ) && result.declarationPaths.contains(rootHandle -> declaration.reference.index)
+          )) &&
+          declaration.dataType.exists(dataType =>
+            if declaration.reference == clockReference.get || declaration.reference == resetReference.get
+            then
+              scalar(CandidateRuntime.typeDescriptor(dataType))
+            else data(dataType)
+          )
+      if !declarationsValid || !checked(shapeIndices.nonEmpty) then return false
+      val indicesValid = every(shapeIndices): (reference, index) =>
+        charge(
+          1L + index.indices.size.toLong + index.resultDimensions.size.toLong + index.sourceUses.size.toLong
+        )
+        index.reference == reference && index.conservative.isEmpty && index.generatedScope.isEmpty &&
+        index.sourceUses.isEmpty && index.indices == Vector(0) && index.resultDimensions.isEmpty &&
+        (index.input match
+          case input: DeclarationRef if input.module == rootHandle =>
+            val declaration = module.declarations.lift(input.index)
+            val expression = expressionValues.get(reference)
+            declaration.nonEmpty && expression.nonEmpty && {
+              val value = expression.get
+              val inputValue = declaration.get.value
+              charge(1L + value.operands.size.toLong + value.constructionDependencies.size.toLong)
+              expressionIdentity(
+                value,
+                reference
+              ) && value.registeredConstructionOwnedBy(ConstructionSession.this) &&
+              value.constructionKind.exists(
+                DigitalReductionContract.Kinds
+              ) && value.constructionCallback.nonEmpty &&
+              value.constructionDependencies == Vector(inputValue) && value.operation.contains(
+                "shape_index"
+              ) &&
+              value.literal.isEmpty && value.operands == Vector(inputValue, 0) &&
+              scalar(value.resultDescriptor.getOrElse(KernelTypeDescriptor("invalid"))) &&
+              semanticOrigin.retainedExpressionSlot(
+                value.constructionSourceSlot,
+                rootHandle,
+                reference.index,
+                value,
+                value.operands
+              ) &&
+              declaration.get.dataType.exists: dataType =>
+                val descriptor = CandidateRuntime.typeDescriptor(dataType)
+                charge(1L + descriptor.arguments.size.toLong)
+                val valid = descriptor.kind == "Vec" && (descriptor.arguments match
+                  case Vector(element: DataType[?], dimensions: Seq[?]) =>
+                    val iterator = dimensions.iterator
+                    charge(1L)
+                    val one = iterator.hasNext && { charge(1L); iterator.next() == 1 }
+                    !iterator.hasNext && one && value.resultDescriptor.contains(
+                      CandidateRuntime.typeDescriptor(element)
+                    )
+                  case _ => false)
+                if valid then allowed += reference
+                valid
+            }
+          case _ => false)
+      indicesValid && every(expressionValues)((reference, value) =>
+        checked(allowed.contains(reference)) && expressionIdentity(value, reference)
+      ) && checked(allowed.size == expressionValues.size)
+
+    def publication[A](root: Module, semantic: SemanticOriginResult)(body: => A): A =
+      if !incremental || !constructionMode then
+        finalNames(semantic)
+        body
+      else
+        val bound = if boundDomainAccountingCandidate then guard(exactBoundDomainRaw()) else None
+        val exact = bound.nonEmpty || guard(exactPublicationEligible(root))
+        if !exact then
+          finalNames(semantic)
+          body
+        else
+          guard:
+            withBoundDomainAccounting(bound.nonEmpty):
+              bound.foreach(requireBoundDomainExport(_, publication = true))
+              finalNames(semantic, exactPublication = true)
+              val previous = publicationAccountingActive
+              publicationAccountingActive = true
+              try body
+              finally publicationAccountingActive = previous
+
+    def preparedAutomaticInputs(expectedRoot: Long)
+        : (Map[DomainRef, String], Vector[DataType[?]]) = guard:
+      charge(1L)
+      if !incremental || !constructionMode || expectedRoot != rootHandle ||
+        !boundaryClosureOwner.exists(_ eq this)
+      then reject("automatic preparation belongs to another closure")
+      verifyRegionSignatures()
+      verifyStatic()
+      discover()
+      if !drained || running || selectedJob.nonEmpty || queue.nonEmpty || queued.nonEmpty ||
+        builtRevision != revision
+      then reject("automatic preparation changed after its closed construction drain")
+      resolved -> interfaceFormalTypes
+
+    def chargeFinalPreparation(): Unit = if incremental then
+      guard:
+        prechargeCanonicalPass()
+
+    def enable(budget: Int): Unit =
+      if drained || incremental || budget < 1 || budget > 65536 then
+        reject("invalid incremental closure activation")
+      incremental = true
+      remaining = budget.toLong
+      chargeConstructionActivation(this, expressionValues.size.toLong)
+      expressionValues.foreach((reference, value) => captured(reference, value))
+
+    private[ConstructionSession] def enableDiagnostic(root: Module, carrier: KernelExpr[?]): Unit =
+      guard:
+        if drained || incremental || !boundaryClosureOwner.exists(_ eq this) then
+          reject("invalid diagnostic closure activation")
+        val policy = requireDiagnosticRequest(root, carrier)
+        incremental = true
+        remaining = policy.limit.toLong
+        chargeConstructionActivation(this, expressionValues.size.toLong)
+        expressionValues.foreach((reference, value) => captured(reference, value))
+
+    def queryForCurrentEpoch(): StructuralParameterBinding.Query = guard:
+      if !incremental || currentSnapshot.isEmpty then reject("no incremental boundary snapshot")
+      new StructuralParameterBinding.Query(currentSnapshot.get, meter = currentMeter)
+
+    def drainIncremental(): Unit = guard:
+      if !incremental || running then reject("boundary closure drain is not reentrant")
+      running = true
+      try
+        verifyRegionSignatures()
+        verifyStatic()
+        discover()
+        if !drained || queue.nonEmpty || builtRevision != revision then
+          var closed = false
+          while !closed do
+            charge(1L)
+            val previousRevision = revision
+            val previousVerified = verified.size
+            val previousReady = queue.size
+            refresh()
+            while queue.nonEmpty do
+              val (kind, key, record) = queue.removeHead()
+              queued.remove(kind -> key)
+              refresh()
+              selectedJob = Some(kind -> key)
+              val base = currentSnapshot.get
+              val queries = currentQueries.get
+              kind match
+                case "conservative" => materializeConservativeIntents(base)
+                case "digital" => materializeInstanceDigitalTypes(queries, base)
+                case "inout" => materializeInstanceDigitalInouts(queries)
+                case "interface" => materializeInstanceInterfaceDimensions(queries, base)
+                case "member" => materializeGeneratedMemberTypes(queries, base)
+                case "resolved" => materializeResolvedInterfaceViews()
+                case "construction" =>
+                  val expression = record.asInstanceOf[KernelExpr[Data]]
+                  if constructionPayloadAvailable(expression) then
+                    reject("construction queue lost its pending cell")
+                  val reference = expressionIds.get(expression)
+                  if !ordinaryRootConstructionContext || currentModule.handle != rootHandle ||
+                    reference.module != rootHandle || expressionRegions.contains(reference)
+                  then reject("C2a construction lost its original root context")
+                  val input = expression.constructionDependencies match
+                    case Vector(value: Expr[?]) => value.asInstanceOf[Expr[Vec[Data]]]
+                    case _ => reject("construction lost its actual input")
+                  val (_, dimensions) = DigitalCollectionContract.vector(input)
+                  completeReductionSingleton(expression, input, dimensions.map(_ => 0))
+                  markDirty()
+                case _ => reject("unknown boundary closure work")
+              selectedJob = None
+              verified.update(kind -> key, record)
+              discover()
+            // The incremental visitor charges every visit/edge, including cached entries.
+            // Inventory scans remain prepaid; it does not run a whole snapshot/proof pass.
+            prechargeCanonicalPass(quadratic = false)
+            materializeDeferredResultTypes()
+            discover()
+            charge(expressionValues.size.toLong)
+            val pendingTypes = expressionValues.valuesIterator.exists(!_.typeFinalized)
+            if queue.isEmpty && !pendingTypes then
+              val before = regionSignatureRevision
+              // Empty proof registries cannot perform nested region/type proof traversals.
+              // loopSnapshots still scans use inventories, charged at its shared helper.
+              charge(records.size.toLong)
+              val hasRegions = allValueRegions.hasNext ||
+                records.valuesIterator.exists(_.generatedRegions.nonEmpty) ||
+                flatFsms.nonEmpty || enumSwitches.nonEmpty || structuralIfs.nonEmpty ||
+                behavioralIfs.nonEmpty
+              prechargeCanonicalPass(quadratic = hasRegions)
+              val _ = collectionSnapshots()
+              val _ = loopSnapshots()
+              val _ = structuralIfSnapshots()
+              val _ = generatedSnapshots()
+              val _ = behavioralIfSnapshots()
+              val _ = flatFsmSnapshots()
+              val _ = enumSwitchSnapshots()
+              discover()
+              closed = before == regionSignatureRevision && queue.isEmpty
+              if closed then
+                refresh()
+                discover()
+                charge(expressionValues.size.toLong)
+                closed = queue.isEmpty && !expressionValues.valuesIterator.exists(!_.typeFinalized)
+                if closed then
+                  freezeRegionSignatures()
+                  freezeStatic()
+                  drained = true
+            if !closed && revision == previousRevision && verified.size == previousVerified &&
+              queue.size == previousReady
+            then
+              reject("boundary closure made no progress")
+      finally
+        selectedJob = None
+        running = false
+
+    def drainInitial(): Unit =
+      if drained then
+        fail("NODAL-HIERARCHY-058-CLOSURE", "initial boundary closure may drain only once")
+      drained = true
+      if operations.exists(_.kind == "instance-node-array") || instanceDigitalPorts.nonEmpty ||
+        instanceInterfacePorts.nonEmpty || instanceDigitalInouts.nonEmpty ||
+        expressionValues.valuesIterator.exists(generatedMemberRecord(_).nonEmpty)
+      then
+        val base = ConstructionSnapshot(
+          root = modulePath(rootHandle),
+          modules = snapshots(resolved),
+          parameterExpressions = parameterExpressionSnapshots(interfaceFormalTypes),
+          generatedRegions = generatedSnapshots(staticDependenciesOnly = true),
+          staticPredicates = staticPredicateSnapshots(),
+          structuralIfs = structuralIfSnapshots(staticDependenciesOnly = true),
+          interfaceAbi = Vector.empty,
+          resolvedNets = Vector.empty,
+          topology = Vector.empty
+        )
+        materializeConservativeIntents(base)
+        val boundaryQueries = new StructuralParameterBinding.InstanceQueries(base)
+        materializeInstanceDigitalTypes(boundaryQueries, base)
+        materializeInstanceDigitalInouts(boundaryQueries)
+        materializeInstanceInterfaceDimensions(boundaryQueries, base)
+        materializeGeneratedMemberTypes(boundaryQueries, base)
+      materializeResolvedInterfaceViews()
+      materializeDeferredResultTypes()
+
+  private var boundaryClosureOwner: Option[BoundaryClosureOwner] = None
+
+  private def closureAccepts(kind: String, key: Any): Boolean =
+    boundaryClosureOwner.forall(_.accepts(kind, key))
+
+  def boundaryWorkActive: Boolean = boundaryClosureOwner.exists(_.incremental)
+
+  def chargeBoundaryWork(units: Long): Unit = closureCharge(units)
+
+  def rejectNestedBoundaryElaboration(): Nothing = boundaryClosureOwner.filter(_.incremental) match
+    case Some(owner) => owner.reject("nested elaboration is outside incremental boundary closure")
+    case None => throw new IllegalStateException("nested boundary guard requires its active owner")
+
+  // Scoped to an audited construction-mode snapshot, never an eager/C1-wide meter.
+  private var snapshotAccountingActive = false
+  private var publicationAccountingActive = false
+  private def exportAccountingActive: Boolean =
+    snapshotAccountingActive || publicationWorkActive
+
+  def publicationAccountingEnabled: Boolean = publicationWorkActive
+  def chargePublicationWork(units: Long): Unit = publicationCharge(units)
+  private def publicationCharge(units: Long): Unit =
+    if publicationWorkActive then closureCharge(units)
+  private def publicationElements[A](values: IterableOnce[A]): Iterator[A] =
+    val underlying = values.iterator
+    if !publicationWorkActive then underlying
+    else
+      new Iterator[A]:
+        def hasNext: Boolean = underlying.hasNext
+        def next(): A =
+          publicationCharge(1L)
+          underlying.next()
+  private def publicationOperationVector: Vector[Operation] =
+    publicationCharge(operations.size.toLong * 2L)
+    operations.toVector
+
+  private def publicationVector[A](values: Vector[A]): Vector[A] =
+    publicationCharge(values.size.toLong)
+    values
+  private def publicationProbe[A](body: => A): A =
+    publicationCharge(1L)
+    body
+  private def publicationStringOrdering: Ordering[String] =
+    if !publicationWorkActive then Ordering.String
+    else
+      new Ordering[String]:
+        def compare(left: String, right: String): Int =
+          publicationCharge(1L + left.length.toLong + right.length.toLong)
+          left.compareTo(right)
+
+  def chargeSnapshotWork(units: Long): Unit = snapshotCharge(units)
+
+  private def snapshotCharge(units: Long): Unit =
+    if exportAccountingActive then closureCharge(units)
+
+  private def snapshotElements[A](values: IterableOnce[A]): Iterator[A] =
+    val underlying = values.iterator
+    if !exportAccountingActive then underlying
+    else
+      new Iterator[A]:
+        def hasNext: Boolean = underlying.hasNext
+        def next(): A =
+          snapshotCharge(1L)
+          underlying.next()
+
+  private def snapshotSeqVector[A](values: Seq[A]): Vector[A] =
+    if exportAccountingActive then snapshotElements(values).toVector else values.toVector
+
+  private def snapshotTraversal[A](body: => A): A =
+    if exportAccountingActive then closureDescriptorVisit(body) else body
+
+  private def snapshotProbe[A](body: => A): A =
+    snapshotCharge(1L)
+    body
+
+  private def snapshotStringOrdering: Ordering[String] =
+    if !exportAccountingActive then Ordering.String
+    else
+      new Ordering[String]:
+        def compare(left: String, right: String): Int =
+          snapshotCharge(1L + left.length.toLong + right.length.toLong)
+          left.compareTo(right)
+
+  private def closureCharge(units: Long): Unit = boundaryClosureOwner.foreach(_.charge(units))
+
+  private def closurePathAppend(prefix: String, suffix: String): String =
+    closureCharge(1L + prefix.length.toLong + suffix.length.toLong)
+    prefix + suffix
+
+  private def closureElements[A](values: IterableOnce[A]): Iterator[A] =
+    values.iterator.map: value =>
+      closureCharge(1L)
+      value
+
+  private var closureDescriptorDepth = 0
+  private def closureDescriptorVisit[A](body: => A): A = boundaryClosureOwner match
+    case Some(owner) if owner.incremental =>
+      owner.charge(1L)
+      if closureDescriptorDepth >= 128 then
+        owner.reject("recursive descriptor traversal exceeds the closure depth budget")
+      closureDescriptorDepth += 1
+      try body
+      finally closureDescriptorDepth -= 1
+    case _ => body
+
+  private def closureMeter: StructuralParameterBinding.WorkMeter =
+    boundaryClosureOwner.map(_.meter).getOrElse(StructuralParameterBinding.WorkMeter.Unmetered)
+
+  private def enableIncrementalBoundaryClosure(root: Module, budget: Int): BoundaryClosureOwner =
+    rejectLegacyDiagnosticActivation()
+    if boundaryClosureOwner.nonEmpty then
+      fail("NODAL-HIERARCHY-058-CLOSURE", "closure already exists")
+    val closure = new BoundaryClosureOwner(moduleHandle(root), Map.empty, Vector.empty)
+    boundaryClosureOwner = Some(closure)
+    closure.enable(budget)
+    closure
+
+  // Private Session-only admission for the focused C1 harness. No collection calls this.
+  def beginIncrementalBoundaryClosure(root: Module, budget: Int): Unit =
+    val closure = enableIncrementalBoundaryClosure(root, budget)
+    closure.prepareIncrementalInputs()
+    closure.drainIncremental()
+
+  def drainIncrementalBoundaryClosure(): Unit = boundaryClosureOwner.get.drainIncremental()
+
+  def currentBoundaryEpochQuery(): StructuralParameterBinding.Query =
+    boundaryClosureOwner.get.queryForCurrentEpoch()
+
   def finish(root: Module): (Emission, ConstructionSnapshot) =
     constructorFailure.foreach: (failure, site) =>
       fail(
@@ -9650,254 +18061,1290 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         s"captured constructor failure invalidated this transaction: ${failure.getClass.getName}",
         Some(site)
       )
+    val activateConstructionClosure =
+      (registeredConstructionAdmission || diagnosticConstructionPolicy.nonEmpty) &&
+        boundaryClosureOwner.isEmpty
+    val automaticConstructionClosure =
+      if activateConstructionClosure then
+        Some(if diagnosticConstructionPolicy.nonEmpty then
+          enableDiagnosticConstructionClosure(root, None)
+        else enableIncrementalBoundaryClosure(root, 65536))
+      else None
+    closureCharge(expressionValues.size.toLong)
+    val pendingConstruction = expressionValues.valuesIterator.exists(!_.constructionFinalized)
+    if pendingConstruction then
+      closureCharge(expressionValues.size.toLong)
+      expressionValues.valuesIterator.foreach: expression =>
+        if !expression.constructionFinalized then
+          if !expression.pendingConstructionOwnedBy(this) then
+            fail(
+              "NODAL-HIERARCHY-058-CONSTRUCTION",
+              "unsealed construction cannot leave this session"
+            )
+          val _ = constructionPayloadAvailable(expression)
     finalizeStreamReady()
+    if areaStack.nonEmpty then
+      fail("NODAL-AREA-058-LIFECYCLE", "construction closed with an active Area")
+    prepareAreaNames()
     val rootHandle = moduleHandle(root)
     if moduleStack.size != 1 || moduleStack.last.handle != rootHandle then
       fail("NODAL-LIFECYCLE-017", "construction closed with an unattached child Module")
+    if pendingConstruction || activateConstructionClosure then
+      if domainStack.nonEmpty then
+        fail("NODAL-LIFECYCLE-018", "construction closed with a lexical domain still active")
+      val closure = boundaryClosureOwner.get
+      closure.charge(records.size.toLong)
+      records.valuesIterator.filterNot(_.attached).foreach: module =>
+        fail("NODAL-HIERARCHY-021", s"Module '${module.className}' was not attached")
+      closure.prepareIncrementalInputs()
+      closure.drainIncremental()
+      closure.charge(expressionValues.size.toLong)
+      if expressionValues.valuesIterator.exists(!_.constructionFinalized) then
+        fail("NODAL-HIERARCHY-058-CONSTRUCTION", "unsealed construction cannot leave this session")
     moduleStack.remove(moduleStack.size - 1)
     if domainStack.nonEmpty then
       fail("NODAL-LIFECYCLE-018", "construction closed with a lexical domain still active")
+    closureCharge(records.size.toLong)
     records.values.filterNot(_.attached).foreach: module =>
       fail("NODAL-HIERARCHY-021", s"Module '${module.className}' was not attached")
 
-    semanticResult = Some(semanticOrigin.resolve())
-    val resolved = resolveDomains()
-    markConservativeBindingDependencies()
-    if operations.exists(_.kind == "instance-node-array") then
-      val base = ConstructionSnapshot(
-        root = modulePath(rootHandle),
-        modules = snapshots(resolved),
-        parameterExpressions = parameterExpressionSnapshots(),
-        interfaceAbi = Vector.empty,
-        resolvedNets = Vector.empty,
-        topology = Vector.empty
-      )
-      materializeConservativeIntents(base)
-    val semantic = semanticOrigin.resolve()
-    semanticResult = Some(semantic)
-    val sourceByPath = semantic.sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
-    val collectionArgumentSources = collectionArguments.keysIterator.flatMap: reference =>
-      semantic.expressionPaths.get(reference.module -> reference.index).flatMap(sourceByPath.get)
-        .map(source => SourceMapEntry(expressionPath(reference), source))
-    .toVector
-    val sequentialRegionSources = (
-      fsmResults.keysIterator.map(reference => reference -> expressionPath(reference)) ++
-        fsmActionRegions.valuesIterator.map(region =>
-          region.fsmAction.get.machine -> expressionPath(region.reference)
+    closureCharge(records.size.toLong)
+    records.valuesIterator.filter(_.externalName.nonEmpty).foreach: module =>
+      closureCharge(module.declarations.size.toLong)
+      module.declarations.foreach: declaration =>
+        closureCharge(declaration.attributes.size.toLong)
+        val descriptor = declaration.dataType.map(CandidateRuntime.typeDescriptor)
+        val scalar = descriptor.exists(value =>
+          value.kind == "Bool" ||
+            Set("Bits", "UInt", "SInt").contains(value.kind) && {
+              val bounds = DigitalScalarContract.widthBounds(value)
+              bounds._1 == bounds._2
+            }
+        )
+        declaration.value match
+          case array: InterfaceArray[?, ?]
+              if externalInterfaceOrigin(declaration.reference).contains(declaration.reference) =>
+            val count = array.formalCount match
+              case value: Int => value
+              case _ => fail(
+                  "NODAL-EXTERNAL-058-001",
+                  "external InterfaceArray requires fixed positive literal count"
+                )
+            ExternalModuleContract.validateArray(
+              array.definition,
+              array.role,
+              count,
+              array.externalAttributes.collectFirst { case ("placement", value: InoutPlacement) =>
+                value
+              }
+                .getOrElse(fail(
+                  "NODAL-EXTERNAL-058-001",
+                  "external InterfaceArray lost placement"
+                )),
+              array.externalAttributes.collectFirst { case ("profile", value: ResolutionProfile) =>
+                value
+              }
+                .getOrElse(fail("NODAL-EXTERNAL-058-001", "external InterfaceArray lost profile"))
+            )
+          case _ =>
+            if declaration.kind != KernelSignalKind.DigitalInout || !scalar then
+              fail(
+                "NODAL-EXTERNAL-058-001",
+                "external signature requires fixed scalar digital inout pins or exact resolved InterfaceArray",
+                Some(declarationPath(declaration.reference))
+              )
+    val boundDomainInputs = if automaticConstructionClosure.isEmpty then
+      boundaryClosureOwner.flatMap(_.tryFinalBoundDomainInputs())
+    else None
+    val (resolved, interfaceFormalTypes) = automaticConstructionClosure match
+      case Some(prepared) => prepared.preparedAutomaticInputs(rootHandle)
+      case None if boundDomainInputs.nonEmpty => boundDomainInputs.get
+      case None =>
+        boundaryClosureOwner.filter(_.incremental) match
+          case Some(closure) => closure.chargeFinalPreparation()
+          case None => semanticResult = Some(semanticOrigin.resolve())
+        val resolved = resolveDomains()
+        materializeInstanceControlCaptures(resolved)
+        markConservativeBindingDependencies()
+        resolved -> prepareInterfaceFormalTypes()
+    val closure = boundaryClosureOwner.getOrElse:
+      val created = new BoundaryClosureOwner(rootHandle, resolved, interfaceFormalTypes)
+      boundaryClosureOwner = Some(created)
+      created
+    if closure.incremental then closure.drainIncremental() else closure.drainInitial()
+    val semantic = if closure.incremental then
+      closure.resolveSemanticNames()
+    else semanticOrigin.resolve()
+    closure.publication(root, semantic):
+      semanticResult = Some(semantic)
+      def exportMap[A, B](values: Vector[A])(f: A => B): Vector[B] =
+        publicationVector(values).map(value => publicationProbe(f(value)))
+      def exportFlatMap[A, B](values: Vector[A])(f: A => IterableOnce[B]): Vector[B] =
+        if !publicationWorkActive then values.flatMap(f)
+        else publicationElements(publicationElements(values).flatMap(f)).toVector
+      def exportBufferFlatMap[A, B](values: mutable.ArrayBuffer[A])(
+          f: A => IterableOnce[B]
+      ): mutable.ArrayBuffer[B] =
+        if !publicationWorkActive then values.flatMap(f)
+        else publicationElements(publicationElements(values).flatMap(f)).to(mutable.ArrayBuffer)
+      extension [A](left: Vector[A])
+        def exportConcat(right: IterableOnce[A]): Vector[A] =
+          if !publicationWorkActive then left ++ right
+          else publicationVector(left) ++ publicationElements(right)
+
+      val sourceByPath = publicationSourceIndex(semantic.sourceMap)
+      val collectionArgumentSources =
+        publicationElements(publicationElements(collectionArguments.keysIterator).flatMap:
+          reference =>
+            publicationCharge(1L)
+            semantic.expressionPaths.get(
+              reference.module -> reference.index
+            ).flatMap(sourceByPath.get)
+              .map(source => SourceMapEntry(expressionPath(reference), source))).toVector
+      val sequentialRegionSources = publicationElements((
+        publicationElements(fsmResults.keysIterator).map(reference =>
+          publicationProbe(reference -> expressionPath(reference))
         ) ++
-        enumSwitchArms.valuesIterator.map(region =>
-          region.switchArm.get.switch -> expressionPath(region.reference)
+          publicationElements(fsmActionRegions.valuesIterator).map(region =>
+            region.fsmAction.get.machine -> expressionPath(region.reference)
+          ) ++
+          publicationElements(enumSwitchArms.valuesIterator).map(region =>
+            region.switchArm.get.switch -> expressionPath(region.reference)
+          )
+      ).flatMap: (reference, path) =>
+        semantic.expressionPaths.get(reference.module -> reference.index).flatMap(sourceByPath.get)
+          .map(source => SourceMapEntry(path, source))).toVector
+      val rootSources =
+        publicationElements(publicationElements(operations.iterator).flatMap(operation =>
+          publicationCharge(operation.values.size.toLong)
+          operation.values.collect {
+            case root: InstanceArrayRootRecord => publicationProbe(root)
+          }
         )
-    ).flatMap: (reference, path) =>
-      semantic.expressionPaths.get(reference.module -> reference.index).flatMap(sourceByPath.get)
-        .map(source => SourceMapEntry(path, source))
-    .toVector
-    val rootSources = operations.iterator.flatMap(_.values.collect {
-      case root: InstanceArrayRootRecord => root
-    })
-      .flatMap(root =>
-        sourceByPath.get(expressionPath(root.reference)).map(source =>
-          SourceMapEntry(pathOfReference(root.reference), source)
-        )
-      ).toVector
-    val endpointSources = shapeIndices.valuesIterator.filter(_.conservative.nonEmpty).flatMap:
-      index =>
+          .flatMap(root =>
+            sourceByPath.get(expressionPath(root.reference)).map(source =>
+              SourceMapEntry(pathOfReference(root.reference), source)
+            )
+          )).toVector
+      val endpointSources = publicationElements(shapeIndices.valuesIterator).filter(index =>
+        publicationProbe(index.conservative.nonEmpty)
+      ).flatMap: index =>
         sourceByPath.get(expressionPath(index.sourceUses.head._1)).map(source =>
           SourceMapEntry(conservativeEndpointPath(index), source)
         )
-    val interfaceCapture = DigitalInterfaceContract.capture(
-      records.valuesIterator.flatMap(module =>
-        module.declarations.iterator.map(declaration =>
-          val validatedTypes = new java.util.IdentityHashMap[DataType[?], java.lang.Boolean]()
-          DigitalInterfaceContract.Declaration(
-            declaration.value,
-            declarationPath(declaration.reference),
-            modulePath(module.handle),
-            declarationDomain(declaration, resolved),
-            declaration.value match
-              case array: InterfaceArray[?, ?] =>
-                Vector(renderShapeDimension(array.count, module.handle))
-              case _ => Vector.empty,
-            dataType =>
-              if !validatedTypes.containsKey(dataType) then
-                validateShapeType(dataType, module.handle, cardinality = true)
-                validatedTypes.put(dataType, java.lang.Boolean.TRUE)
-              renderType(dataType, module.handle)
-            ,
-            dataType =>
-              validateShapeType(dataType, module.handle, cardinality = true, storageContext = true),
-            value =>
-              if CandidateRuntime.expressionDataType(value).exists(isBoundaryCapability) then
-                validateBoundarySource(value, declaration, resolved),
-            (left, right) =>
-              val analysis = new StructuralBoundAnalysis(
-                module.handle,
-                "NODAL-DIGITAL-054-001",
-                "digital interface payload"
+      val interfaceCapture = DigitalInterfaceContract.capture(
+        publicationElements(publicationElements(records.valuesIterator).flatMap(module =>
+          publicationElements(module.declarations.iterator).map(declaration =>
+            val validatedTypes = new java.util.IdentityHashMap[DataType[?], java.lang.Boolean]()
+            DigitalInterfaceContract.Declaration(
+              declaration.value,
+              declarationPath(declaration.reference),
+              modulePath(module.handle),
+              publicationProbe(localDeclarationDomain(declaration, resolved)),
+              exportMap(publicationProbe(interfaceDimensions(declaration)))(dimension =>
+                renderShapeDimension(dimension, module.handle)
+              ),
+              dataType =>
+                inValueScope(module.handle, valueRegion(declaration.reference)):
+                  if !validatedTypes.containsKey(dataType) then
+                    validateShapeType(dataType, module.handle, cardinality = true)
+                    validatedTypes.put(dataType, java.lang.Boolean.TRUE)
+                  renderType(dataType, module.handle)
+              ,
+              dataType =>
+                inValueScope(module.handle, valueRegion(declaration.reference)):
+                  validateShapeType(
+                    dataType,
+                    module.handle,
+                    cardinality = true,
+                    storageContext = true
+                  )
+              ,
+              value =>
+                if CandidateRuntime.expressionDataType(value).exists(isBoundaryCapability) then
+                  validateBoundarySource(value, declaration, resolved),
+              (left, right) =>
+                inValueScope(module.handle, valueRegion(declaration.reference)):
+                  val analysis = new StructuralBoundAnalysis(
+                    module.handle,
+                    "NODAL-DIGITAL-054-001",
+                    "digital interface payload"
+                  )
+                  DigitalEnumContract.sameType(
+                    CandidateRuntime.typeDescriptor(left),
+                    CandidateRuntime.typeDescriptor(right),
+                    Some(analysis.sameIdentity)
+                  )
+              ,
+              instanceInterfacePorts.get(declaration.reference).map: binding =>
+                interfaceBoundarySnapshot(module.handle, binding),
+              dataType =>
+                val dimensions = publicationProbe(interfaceDimensions(declaration))
+                val actual = interfaceActualType(declaration.reference, dataType)
+                if dimensions.isEmpty then actual
+                else Vec(actual, dimensions*)
+              ,
+              dataType => interfaceActualType(declaration.reference, dataType),
+              instanceInterfacePorts.get(declaration.reference).map: binding =>
+                dataType => renderType(dataType, binding.port.module), {
+                val dimensions = publicationProbe(interfaceDimensions(declaration))
+                if dimensions.isEmpty then Bool else Vec(Bool, dimensions*)
+              },
+              definition =>
+                val definitionOwner = instanceInterfacePorts.get(declaration.reference)
+                  .map(_.port.module).getOrElse(module.handle)
+                requireInterfaceDefinitionContext(definition, definitionOwner).map: context =>
+                  KernelInterfaceDefinitionContextSnapshot(
+                    "",
+                    definition.name,
+                    modulePath(definitionOwner),
+                    expressionPath(context.region.reference),
+                    context.sourceOrdinal
+                  )
+              ,
+              Some((definition, dataType) =>
+                val definitionOwner = instanceInterfacePorts.get(declaration.reference)
+                  .map(_.port.module).getOrElse(module.handle)
+                withInterfaceDefinitionScope(definition, definitionOwner):
+                  validateShapeType(dataType, definitionOwner, cardinality = true)
+                  renderType(dataType, definitionOwner)
+              ),
+              publicationProbe(externalInterfaceOrigin(declaration.reference)).map(reference =>
+                publicationProbe(declarationPath(reference))
               )
-              DigitalEnumContract.sameType(
-                CandidateRuntime.typeDescriptor(left),
-                CandidateRuntime.typeDescriptor(right),
-                Some(analysis.sameIdentity)
-              )
+            )
           )
-        )
-      ).toVector,
-      operations.toVector.map(operation =>
-        DigitalInterfaceContract.Operation(
-          operation.kind,
-          operation.values,
-          modulePath(operation.owner)
-        )
-      ),
-      pathOf,
-      value =>
-        value match
-          case reference: AnyRef =>
-            Option(declarationIds.get(reference)).map(_.module)
-              .orElse(Option(expressionIds.get(reference)).map(_.module)).map(modulePath)
-          case _ => None
-    )
-    val abi = interfaceCapture.abi
-    val arrayBindings = conservativeArrayBindingRecords
-    val topologyEdges = topologyRecords()
-    val recordedAnalogSemantics = analogSemanticSnapshot()
-    val analogSemantics =
-      if recordedAnalogSemantics.components.isEmpty && recordedAnalogSemantics.states.isEmpty then
-        recordedAnalogSemantics
-      else
-        recordedAnalogSemantics.copy(
-          parameters = records.valuesIterator.flatMap: module =>
-            module.declarations.iterator.collect:
-              case declaration if declaration.value.isInstanceOf[Param[?]] =>
-                val parameter = declaration.value.asInstanceOf[Param[?]]
-                AnalogEquationRuntime.ParameterReference(
-                  parameter,
-                  modulePath(module.handle),
-                  declarationPath(declaration.reference),
-                  inferAnalogDimension(parameter).signature
-                )
-          .toVector.sortBy(_.path)
-        )
-    verifySequentialAssignments(resolved, interfaceCapture)
-    val digitalCapture = digitalValueSnapshots(interfaceCapture)
-    val modules = snapshots(resolved)
-    val assignmentRecords = digitalAssignmentRecords(resolved)
-    val assignmentSources = assignmentRecords.flatMap: (assignment, record) =>
-      val syntheticDefault =
-        Option(declarationIds.get(record.values.head.asInstanceOf[AnyRef])).exists: reference =>
-          records(reference.module).declarations(reference.index).attributes.exists:
-            case ("stream_ready_default", value: Expr[?]) =>
-              value eq record.values(1).asInstanceOf[AnyRef]
-            case _ => false
-      val source = record.source.orElse(
-        Option.when(syntheticDefault)(
-          sourceByPath.get(assignment.target).orElse(sourceByPath.get(assignment.value))
-        ).flatten
+        )).toVector,
+        exportMap({
+          publicationCharge(operations.size.toLong)
+          operations.toVector
+        })(operation =>
+          DigitalInterfaceContract.Operation(
+            operation.kind,
+            if Set("interface-connect", "interface-drive", "interface-observe")(operation.kind) then
+              operation.values.map:
+                case value: Expr[?] => bindCollectionValue(
+                    value,
+                    operation.digitalRegion,
+                    operation.owner,
+                    create = false
+                  )
+                case value => value
+            else operation.values,
+            modulePath(operation.owner),
+            operation.digitalRegion.map(region => expressionPath(region.reference)),
+            Option.when(Set(
+              "interface-connect",
+              "interface-drive",
+              "interface-observe"
+            )(operation.kind) &&
+              (operation.digitalRegion.nonEmpty || operation.values.exists:
+                case endpoint: InterfaceEndpoint =>
+                  val root = endpoint match
+                    case value: InterfacePort[?, ?] => DigitalInterfaceContract.root(value)
+                    case value: InterfaceArray[?, ?] => DigitalInterfaceContract.root(value)
+                  Option(declarationIds.get(root)).exists(reference =>
+                    instanceInterfacePorts.get(reference).exists(_.generated.nonEmpty)
+                  )
+                case _ => false))(operation.sourceOrdinal)
+          )
+        ),
+        pathOf,
+        value =>
+          value match
+            case reference: AnyRef =>
+              Option(declarationIds.get(reference)).map(_.module)
+                .orElse(Option(expressionIds.get(reference)).map(_.module)).map(modulePath)
+            case _ => None
+        ,
+        publicationElements(publicationElements(expressionValues.iterator).collect {
+          case (reference, expression: KernelExpr[?]) if expression.interfaceMember.nonEmpty =>
+            expression -> modulePath(reference.module)
+        }).toVector
       )
-      source.map(SourceMapEntry(assignment.path, _))
-    // A member projection is generated from its actual endpoint declaration. Preserve any
-    // more precise captured leaf span; otherwise retain that declaration, never invent a line.
-    val interfaceMemberSources = interfaceCapture.interfaces.flatMap: endpoint =>
-      sourceByPath.get(endpoint.path).toVector.flatMap: source =>
-        endpoint.members.filterNot(member => sourceByPath.contains(member.path)).map(member =>
-          SourceMapEntry(member.path, source)
+      val abi = interfaceCapture.abi
+      val arrayBindings = publicationProbe(conservativeArrayBindingRecords)
+      val topologyEdges = publicationProbe(topologyRecords())
+      val recordedAnalogSemantics = publicationProbe(analogSemanticSnapshot())
+      val analogSemantics =
+        if recordedAnalogSemantics.components.isEmpty && recordedAnalogSemantics.states.isEmpty then
+          recordedAnalogSemantics
+        else
+          recordedAnalogSemantics.copy(
+            parameters = records.valuesIterator.flatMap: module =>
+              module.declarations.iterator.collect:
+                case declaration if declaration.value.isInstanceOf[Param[?]] =>
+                  val parameter = declaration.value.asInstanceOf[Param[?]]
+                  AnalogEquationRuntime.ParameterReference(
+                    parameter,
+                    modulePath(module.handle),
+                    declarationPath(declaration.reference),
+                    inferAnalogDimension(parameter).signature
+                  )
+            .toVector.sortBy(_.path)
+          )
+      publicationProbe(verifySequentialAssignments(resolved, interfaceCapture, rootHandle))
+      val netSnapshots = publicationProbe(resolvedNets())
+      val digitalCapture = publicationProbe(digitalValueSnapshots(interfaceCapture, netSnapshots))
+      val modules = publicationProbe(snapshots(resolved))
+      val assignmentRecords = publicationProbe(digitalAssignmentRecords(resolved))
+      val assignmentSources = exportFlatMap(assignmentRecords): (assignment, record) =>
+        boundDomainCharge(3L) // declaration identity/slot lookup and empty attributes dispatch
+        val syntheticDefault =
+          Option(declarationIds.get(record.values.head.asInstanceOf[AnyRef])).exists: reference =>
+            records(reference.module).declarations(reference.index).attributes.exists:
+              case ("stream_ready_default", value: Expr[?]) =>
+                value eq record.values(1).asInstanceOf[AnyRef]
+              case _ => false
+        boundDomainCharge() // exact retained source; synthetic fallback is not evaluated
+        val source = record.source.orElse(
+          Option.when(syntheticDefault)(
+            sourceByPath.get(assignment.target).orElse(sourceByPath.get(assignment.value))
+          ).flatten
         )
-    val hierarchyBindingSources = selectedRequirementBindings.iterator.flatMap:
-      case (requirement, (_, origin, owner, ordinal)) =>
-        val instance = records(owner).instances(ordinal)
-        val requirementRecord = records(requirement.module).domains(requirement.index)
-        val source = if origin == "named" then
-          instance.namedBindingSources.get(requirementRecord.domain)
-        else if origin == "default" then instance.defaultBindingSource
-        else sourceByPath.get(instancePath(owner, ordinal))
-        source.map(span =>
-          SourceMapEntry(instancePath(owner, ordinal) + "." + requirementRecord.name, span)
-        )
-    .toVector
-    val snapshot = ConstructionSnapshot(
-      emitQuality = options.quality,
-      digitalAssignments = assignmentRecords.map(_._1),
-      eventProcesses = eventProcessSnapshots,
-      memoryWrites = memoryWriteRecords.map(_._1),
-      interfaceContracts = interfaceCapture.interfaces,
-      digitalConnectivity = interfaceCapture.connectivity,
-      enumDefinitions = digitalCapture._1,
-      digitalExpressions = digitalCapture._2,
-      digitalCollections = collectionSnapshots(),
-      digitalLoops = loopSnapshots(),
-      iterationIndices = iterationIndexSnapshots(),
-      staticPredicates = staticPredicateSnapshots(),
-      structuralIfs = structuralIfSnapshots(),
-      behavioralIfs = behavioralIfSnapshots(),
-      flatFsms = flatFsmSnapshots(),
-      enumSwitches = enumSwitchSnapshots(),
-      root = modulePath(rootHandle),
-      rootParameterBindings = rootParameterBindings.toVector.map:
-        case (parameter, value) =>
-          val reference = parameter match
-            case candidate: AnyRef => Option(declarationIds.get(candidate)).getOrElse(
+        boundDomainCharge() // source entry construction; exportFlatMap owns visits/copies
+        source.map(SourceMapEntry(assignment.path, _))
+      // A member projection is generated from its actual endpoint declaration. Preserve any
+      // more precise captured leaf span; otherwise retain that declaration, never invent a line.
+      val interfaceMemberSources = exportFlatMap(interfaceCapture.interfaces): endpoint =>
+        exportFlatMap(sourceByPath.get(endpoint.path).toVector): source =>
+          endpoint.members.filterNot(member => sourceByPath.contains(member.path)).map(member =>
+            SourceMapEntry(member.path, source)
+          )
+      val hierarchyBindingSources =
+        publicationElements(publicationElements(selectedRequirementBindings.iterator).flatMap:
+          case (requirement, (_, origin, owner, ordinal)) =>
+            val instance = records(owner).instances(ordinal)
+            val requirementRecord = records(requirement.module).domains(requirement.index)
+            val source = if origin == "named" then
+              instance.namedBindingSources.get(requirementRecord.domain)
+            else if origin == "default" then instance.defaultBindingSource
+            else sourceByPath.get(instancePath(owner, ordinal))
+            source.map(span =>
+              SourceMapEntry(
+                boundDomainBindingPath(instancePath(owner, ordinal), requirementRecord.name),
+                span
+              )
+            )).toVector
+      publicationCharge(1L)
+      val snapshot = ConstructionSnapshot(
+        emitQuality = options.quality,
+        digitalAssignments = exportMap(assignmentRecords)(_._1),
+        eventProcesses = publicationProbe(eventProcessSnapshots),
+        memoryWrites = exportMap(publicationProbe(memoryWriteRecords))(_._1),
+        interfaceContracts = interfaceCapture.interfaces,
+        digitalConnectivity = interfaceCapture.connectivity,
+        enumDefinitions = digitalCapture._1,
+        digitalExpressions = digitalCapture._2,
+        digitalCollections = publicationProbe(collectionSnapshots()),
+        digitalLoops = publicationProbe(loopSnapshots()),
+        iterationIndices = publicationProbe(iterationIndexSnapshots()),
+        staticPredicates = publicationProbe(staticPredicateSnapshots()),
+        structuralIfs = publicationProbe(structuralIfSnapshots()),
+        behavioralIfs = publicationProbe(behavioralIfSnapshots()),
+        flatFsms = publicationProbe(flatFsmSnapshots()),
+        enumSwitches = publicationProbe(enumSwitchSnapshots()),
+        root = modulePath(rootHandle),
+        rootParameterBindings = exportMap({
+          publicationCharge(rootParameterBindings.size.toLong)
+          rootParameterBindings.toVector
+        }):
+          case (parameter, value) =>
+            val reference = parameter match
+              case candidate: AnyRef => Option(declarationIds.get(candidate)).getOrElse(
+                  fail(
+                    "NODAL-PARAMETER-BINDING-016",
+                    "root constructor binding targets an unknown parameter"
+                  )
+                )
+              case _ =>
                 fail(
                   "NODAL-PARAMETER-BINDING-016",
-                  "root constructor binding targets an unknown parameter"
+                  "root constructor binding is not a declaration"
                 )
+            declarationName(reference) -> renderAny(value, rootHandle),
+        parameterExpressions =
+          publicationProbe(parameterExpressionSnapshots(interfaceCapture.dataTypes)),
+        modules = modules,
+        interfaceAbi = abi,
+        resolvedNets = netSnapshots,
+        topology = exportMap(topologyEdges)(_._1),
+        names = semantic.names,
+        origins = semantic.origins,
+        generatedNames = semantic.generatedNames,
+        sourceMap =
+          publicationVector(
+            (semantic.sourceMap.exportConcat(exportBufferFlatMap(eventProcesses)(process =>
+              process.source.map(source =>
+                publicationProbe(SourceMapEntry(eventProcessPath(process), source))
               )
-            case _ =>
-              fail(
-                "NODAL-PARAMETER-BINDING-016",
-                "root constructor binding is not a declaration"
-              )
-          declarationName(reference) -> renderAny(value, rootHandle),
-      parameterExpressions = parameterExpressionSnapshots(interfaceCapture.dataTypes),
-      modules = modules,
-      interfaceAbi = abi,
-      resolvedNets = resolvedNets(),
-      topology = topologyEdges.map(_._1),
-      names = semantic.names,
-      origins = semantic.origins,
-      generatedNames = semantic.generatedNames,
-      sourceMap =
-        (semantic.sourceMap ++ eventProcesses.flatMap(process =>
-          process.source.map(SourceMapEntry(eventProcessPath(process), _))
-        ) ++ hierarchyBindingSources ++ assignmentSources ++ interfaceMemberSources ++ memoryWriteRecords.flatMap(
-          (write, record) =>
-            record.source.map(SourceMapEntry(write.path, _))
-        ) ++ collectionArgumentSources ++ sequentialRegionSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(
-          (edge, record) =>
-            edge.path.flatMap(path => record.source.map(SourceMapEntry(path, _)))
-        ) ++ arrayBindings.flatMap((binding, record) =>
-          record.source.map(SourceMapEntry(binding.path, _))
-        ) ++ AnalogUserFunctionRuntime.sourceMap(
-          userFunctions.snapshots(modulePath)
-        ) ++ AnalogEquationRuntime.sourceMap(analogSemantics)).sortBy(_.semanticPath),
-      analogRegions = analogSnapshots(),
-      continuousOperators = continuousOperatorSnapshots(semantic.sourceMap),
-      waveformOperators = waveformOperatorSnapshots(semantic.sourceMap),
-      noiseOperators = noiseOperatorSnapshots(semantic.sourceMap),
-      transferOperators = transferOperatorSnapshots(semantic.sourceMap),
-      analogFunctions = userFunctions.snapshots(modulePath),
-      analogSemantics = analogSemantics,
-      analogProcedural = AnalogProceduralConstruction.snapshots(
-        module => modulePath(moduleHandle(module)),
-        canonicalGeneratedOwnership
-      ),
-      waivers = waiverSnapshots(semantic.sourceMap),
-      generatedRegions = generatedSnapshots(),
-      shapeIndices = shapeIndexSnapshots(),
-      shapeViews = shapeViewSnapshots(),
-      conservativeArrayBindings = arrayBindings.map(_._1),
-      instanceArrayRoots = instanceArrayRootSnapshots()
+            )).exportConcat(hierarchyBindingSources).exportConcat(assignmentSources)
+              .exportConcat(interfaceMemberSources).exportConcat(exportFlatMap(
+                publicationProbe(memoryWriteRecords)
+              )((write, record) =>
+                record.source.map(source => publicationProbe(SourceMapEntry(write.path, source)))
+              )).exportConcat(collectionArgumentSources).exportConcat(sequentialRegionSources)
+              .exportConcat(rootSources).exportConcat(endpointSources).exportConcat(exportFlatMap(
+                topologyEdges
+              )((edge, record) =>
+                edge.path.flatMap(path =>
+                  record.source.map(source =>
+                    publicationProbe(SourceMapEntry(path, source))
+                  )
+                )
+              )).exportConcat(exportFlatMap(arrayBindings)((binding, record) =>
+                record.source.map(source => publicationProbe(SourceMapEntry(binding.path, source)))
+              )).exportConcat(publicationProbe(AnalogUserFunctionRuntime.sourceMap(
+                publicationProbe(userFunctions.snapshots(modulePath))
+              ))).exportConcat(publicationProbe(AnalogEquationRuntime.sourceMap(analogSemantics))))
+          ).sortBy(entry => publicationProbe(entry.semanticPath))(using publicationStringOrdering),
+        analogRegions = publicationProbe(analogSnapshots()),
+        continuousOperators = publicationProbe(continuousOperatorSnapshots(semantic.sourceMap)),
+        waveformOperators = publicationProbe(waveformOperatorSnapshots(semantic.sourceMap)),
+        noiseOperators = publicationProbe(noiseOperatorSnapshots(semantic.sourceMap)),
+        transferOperators = publicationProbe(transferOperatorSnapshots(semantic.sourceMap)),
+        analogFunctions = publicationProbe(userFunctions.snapshots(modulePath)),
+        analogSemantics = analogSemantics,
+        analogProcedural = publicationProbe(AnalogProceduralConstruction.snapshots(
+          module => modulePath(moduleHandle(module)),
+          canonicalGeneratedOwnership
+        )),
+        waivers = publicationProbe(waiverSnapshots(semantic.sourceMap)),
+        generatedRegions = publicationProbe(generatedSnapshots()),
+        areas = publicationProbe(areaSnapshots(resolved)),
+        shapeIndices = publicationProbe(shapeIndexSnapshots()),
+        shapeViews = publicationProbe(shapeViewSnapshots()),
+        conservativeArrayBindings = exportMap(arrayBindings)(_._1),
+        instanceArrayRoots = publicationProbe(instanceArrayRootSnapshots())
+      )
+      publicationProbe(finalizeConservativeArrayBindings(snapshot))
+      publicationProbe(ExternalModuleContract.validate(snapshot))
+      val kind = publicationProbe(classify(snapshot))
+      publicationCharge(1L)
+      val report = DesignReport(
+        designKind = kind,
+        selectedBackend = options.backend,
+        digitalProfile =
+          if kind == DesignKind.AnalogOnly || kind == DesignKind.Unsupported then None
+          else Some(options.digitalProfile),
+        interfaceAbi = abi,
+        sourceMap = snapshot.sourceMap,
+        schedules = Vector.empty
+      )
+      publicationProbe(closure.verifyPublication())
+      publicationProbe(Emission(Vector.empty, report) -> snapshot)
+
+  // Metadata lives on canonical reference identities, never in a second provenance graph.
+  private var constructionAllocationSerial = 0L
+  private var constructionRequestWork = 0L
+
+  private def requestCharge(units: Long = 1L): Unit = boundaryClosureOwner match
+    case Some(owner) if owner.incremental => owner.charge(units)
+    case _ =>
+      if units < 0L || units > 65536L - constructionRequestWork then
+        try collectionFailure("construction request work exceeds the session budget")
+        catch
+          case failure: Throwable =>
+            poisonConstructor(failure, "construction request")
+            throw failure
+      constructionRequestWork += units
+
+  private def stampAllocation[A <: AllocationIdentity](module: ModuleRecord, ref: A): A =
+    if constructionAllocationSerial == Long.MaxValue then
+      collectionFailure("canonical construction allocation serial is exhausted")
+    constructionAllocationSerial += 1L
+    ref.stampConstructionAllocation(ConstructionAllocation(
+      this,
+      module,
+      constructionAllocationSerial,
+      activeValueRegion,
+      activeGeneratedRegion,
+      activeArea
+    ))
+    ref
+
+  private def requestReference(value: AnyRef): DeclarationRef | ExpressionRef =
+    Option(declarationIds.get(value)).getOrElse(
+      Option(expressionIds.get(value)).getOrElse(
+        collectionFailure("construction request requires an existing canonical input")
+      )
     )
-    finalizeConservativeArrayBindings(snapshot)
-    val kind = classify(snapshot)
-    val report = DesignReport(
-      designKind = kind,
-      selectedBackend = options.backend,
-      digitalProfile =
-        if kind == DesignKind.AnalogOnly || kind == DesignKind.Unsupported then None
-        else Some(options.digitalProfile),
-      interfaceAbi = abi,
-      sourceMap = snapshot.sourceMap,
-      schedules = Vector.empty
+
+  private def requireRequestIdentity(root: ConstructionRootIdentity, frontier: Long): Unit =
+    requestCharge()
+    val ref = root.reference
+    val module = currentModule
+    val stamp = ref.constructionAllocation.getOrElse(
+      collectionFailure("construction input has no canonical allocation stamp")
     )
-    Emission(Vector.empty, report) -> snapshot
+    if (stamp.session ne this) || stamp.serial > frontier || (stamp.module ne module) ||
+      !records.get(stamp.module.handle).exists(_ eq stamp.module)
+    then collectionFailure("construction input is later or belongs to another session")
+    val canonical = ref match
+      case declaration: DeclarationRef =>
+        Option(declarationIds.get(root.value)).exists(_ eq declaration) &&
+        declaration.module == stamp.module.handle &&
+        stamp.module.declarations.lift(declaration.index).exists(record =>
+          (record.reference eq declaration) && (record.value eq root.value)
+        )
+      case expression: ExpressionRef =>
+        Option(expressionIds.get(root.value)).exists(_ eq expression) &&
+        expression.module == stamp.module.handle &&
+        expressionValues.get(expression).exists(_ eq root.value)
+    if !canonical then collectionFailure("construction input lost its canonical identity")
+    // Physical allocation context may differ from the canonical value scope for lifted static
+    // expressions. Validate both, without treating a child declaration as a parent proxy.
+    stamp.region.foreach: region =>
+      if region.reference.module != module.handle || !allValueRegions.exists(candidate =>
+          requestCharge()
+          candidate eq region
+        )
+      then collectionFailure("construction input lost its allocation region")
+    stamp.generation.foreach: generation =>
+      if generation.owner != module.handle || !module.generatedRegions.exists(candidate =>
+          requestCharge()
+          candidate eq generation
+        )
+      then collectionFailure("construction input lost its allocation generation")
+    stamp.area.foreach: area =>
+      if area.owner != module.handle || !areas.exists(candidate =>
+          requestCharge()
+          candidate eq area
+        )
+      then collectionFailure("construction input lost its allocation Area")
+      area.value.foreach: value =>
+        requestCharge()
+        if !Option(areaRecords.get(value)).exists(_ eq area) then
+          collectionFailure("construction input lost its canonical Area value")
+    // Prepay the existing valueRegion generated membership scans; do not build another index.
+    requestCharge(1L + module.generatedRegions.size.toLong)
+    module.generatedRegions.foreach: generation =>
+      requestCharge(1L + generation.declarations.size.toLong)
+    if valueRegion(ref).nonEmpty then
+      collectionFailure("construction input is not available in its original root scope")
+
+  /** Snapshot original value dependencies only. Finalized boundary types remain owned by C2a's
+    * current-epoch materializer; they are not new authored input roots or frontier exemptions.
+    */
+  private def requestRoots(input: Expr[?], frontier: Long): Vector[ConstructionRootIdentity] =
+    val result = Vector.newBuilder[ConstructionRootIdentity]
+    var rootCount = 0L
+    val active = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+    val done = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+    val pending = mutable.ArrayBuffer.empty[(Any, Boolean)]
+    pending += input -> false
+    def enter(identity: AnyRef, leaving: Boolean)(children: => Iterator[?]): Unit =
+      if leaving then
+        active.remove(identity)
+        done.put(identity, java.lang.Boolean.TRUE)
+      else
+        if active.containsKey(identity) then
+          collectionFailure("construction input dependency cycle")
+        if !done.containsKey(identity) then
+          active.put(identity, java.lang.Boolean.TRUE)
+          pending += identity -> true
+          pending += ConstructionRequestChildren(children) -> false
+    while pending.nonEmpty do
+      requestCharge()
+      val (value, leaving) = pending.remove(pending.size - 1)
+      value match
+        case children: ConstructionRequestChildren =>
+          if children.values.hasNext then
+            requestCharge()
+            val next = children.values.next()
+            pending += children -> false
+            pending += next -> false
+        case expression: Expr[?] =>
+          val identity = expression.asInstanceOf[AnyRef]
+          if !leaving && !done.containsKey(identity) && !active.containsKey(identity) then
+            val root = ConstructionRootIdentity(identity, requestReference(identity))
+            requireRequestIdentity(root, frontier)
+            requestCharge()
+            result += root
+            rootCount += 1L
+          enter(identity, leaving):
+            expression match
+              case kernel: KernelExpr[?] =>
+                if kernel.constructionFinalized then kernel.operands.iterator
+                else
+                  if !kernel.registeredConstructionOwnedBy(this) then
+                    collectionFailure("construction input contains an orphan pending cell")
+                  kernel.constructionDependencies.iterator
+              case _ => Iterator.empty
+        case sequence: Seq[?] => enter(sequence, leaving)(sequence.iterator)
+        case optional: Option[?] => enter(optional, leaving)(optional.iterator)
+        case _: Int | _: Long | _: Boolean | _: String | _: Double => ()
+        // Type metadata is NOT frontier-certified: the unchanged canonical type/boundary proof
+        // owns its dependencies, including later materialized widths for the same boundary.
+        case _: DataType[?] => ()
+        case _ => collectionFailure("construction input has unsupported root metadata")
+    requestCharge(rootCount)
+    result.result()
+
+  private def reserveRegisteredConstruction(
+      input: Expr[?],
+      body: DigitalCollectionCallback.ReductionBody
+  ): KernelExpr[Data] =
+    DigitalCollectionCallback.requireChecked(body.checked)
+    val module = currentModule
+    val bound = bindCollectionValue(input, activeValueRegion, module.handle)
+    requireRegisteredCollectionOperand(bound, module.handle)
+    val frontier = constructionAllocationSerial
+    val roots = requestRoots(bound, frontier)
+    val result = reserveReductionConstruction(bound, body)
+    require(
+      result.constructionDependencies.head.asInstanceOf[AnyRef] eq bound,
+      "registered reservation must retain its actual bound input"
+    )
+    result.attachConstructionRequest(ConstructionRequestContext(
+      this,
+      module,
+      bound,
+      requestReference(bound),
+      expressionIds.get(result),
+      frontier,
+      roots,
+      result.constructionSourceSlot
+    ))
+    result
+
+  /** Both manual precompletion and queued completion use this exact identity check. */
+  private def validateConstructionRequest(result: KernelExpr[?], input: Expr[?]): Boolean =
+    if result.constructionKind.nonEmpty then
+      val request = result.constructionRequest.getOrElse(
+        collectionFailure("registered construction lost its request context")
+      )
+      if (request.session ne this) || !ordinaryRootConstructionContext ||
+        (currentModule ne request.module) || !records.get(
+          request.module.handle
+        ).exists(_ eq request.module) ||
+        (request.input ne input) || (requestReference(input) ne request.inputReference) ||
+        request.sourceSlot != result.constructionSourceSlot
+      then collectionFailure("registered construction lost its original request context")
+      val resultRef = Option(expressionIds.get(result)).getOrElse(
+        collectionFailure("registered construction lost its reserved identity")
+      )
+      val allocation = resultRef.constructionAllocation.getOrElse(
+        collectionFailure("registered construction lost its result allocation")
+      )
+      if (resultRef ne request.resultReference) ||
+        (allocation.session ne this) || (allocation.module ne request.module) ||
+        allocation.serial <= request.frontier ||
+        !expressionValues.get(resultRef).exists(_ eq result)
+      then collectionFailure("registered construction changed its reserved identity")
+      request.roots.foreach(root => requireRequestIdentity(root, request.frontier))
+      val roots = requestRoots(input, request.frontier)
+      if roots.size != request.roots.size then
+        collectionFailure("registered construction changed its original input roots")
+      var index = 0
+      while index < roots.size do
+        requestCharge()
+        val actual = roots(index)
+        val original = request.roots(index)
+        if (actual.value ne original.value) || (actual.reference ne original.reference) then
+          collectionFailure("registered construction changed its original input roots")
+        index += 1
+    true
+
+  /** Installation itself is inside try. Only the three installed stacks are restored; allocation,
+    * work, sealed payloads and canonical registries are deliberately never rolled back.
+    */
+  private def inConstructionRequest[A](result: KernelExpr[?])(body: => A): A =
+    if result.constructionKind.isEmpty then body
+    else
+      val request = result.constructionRequest.getOrElse(
+        collectionFailure("registered construction lost its request context")
+      )
+      val modules = moduleStack.toVector
+      val collections = collectionStack.toVector
+      val generations = generationStack.toVector
+      try
+        installValueScopeChain(request.module.handle, Vector.empty)
+        // A real charged installation step also makes partial-install failure independently testable.
+        requestCharge()
+        body
+      finally
+        moduleStack.clear(); moduleStack ++= modules
+        collectionStack.clear(); collectionStack ++= collections
+        generationStack.clear(); generationStack ++= generations
+
+  private def allocateExpressionReference(module: ModuleRecord): ExpressionRef =
+    stampAllocation(module, ExpressionRef(module.handle, module.expressionCount))
+
+  private def allocateScaffoldReference(module: ModuleRecord): ExpressionRef =
+    stampAllocation(module, ExpressionRef(module.handle, -module.scaffoldExpressionCount - 1))
+
+  private def allocateDeclarationReference(module: ModuleRecord): DeclarationRef =
+    stampAllocation(module, DeclarationRef(module.handle, module.declarations.size))
+
+  // Preserve the original JVM entrypoint and the authored body/source anchors above.
+  def completeReductionSingleton(
+      result: KernelExpr[Data],
+      input: Expr[Vec[Data]],
+      indices: Vector[Dimension]
+  ): Expr[Data] =
+    if result.constructionKind.isEmpty then completeReductionSingletonBody(result, input, indices)
+    else
+      def complete(): Expr[Data] =
+        validateConstructionRequest(result, input)
+        inConstructionRequest(result)(completeReductionSingletonBody(result, input, indices))
+      try
+        boundaryClosureOwner match
+          case Some(owner) => owner.guard(complete())
+          case None => complete()
+      catch
+        case failure: Throwable =>
+          result.failConstruction(this)
+          poisonConstructor(failure, "construction request")
+          throw failure
+
+  private def chargeConstructionActivation(owner: BoundaryClosureOwner, inventory: Long): Unit =
+    owner.charge(constructionRequestWork)
+    owner.charge(inventory)
+
+  // Authority is scoped to this canonical selection, never returned to user code.
+  private final class DirectPortTarget(
+      val request: Option[ConstructionRequestContext],
+      val selected: InstanceSelectionRecord,
+      val instance: InstanceRecord,
+      val parent: ModuleRecord,
+      val port: DeclarationRef,
+      val value: Signal[?],
+      val dataType: DataType[?],
+      val roots: Vector[ConstructionRootIdentity]
+  ):
+    val session: ConstructionSession = ConstructionSession.this
+  private final class DirectPortPermit(
+      val target: DirectPortTarget,
+      val dataType: KernelInstanceDataType[?],
+      val kind: KernelSignalKind,
+      val name: String
+  ):
+    var consumed = false
+    var value: Option[AnyRef] = None
+    var reference: Option[DeclarationRef] = None
+
+  private var directPortRequest: Option[DirectPortTarget] = None
+  private var directPortPermit: Option[DirectPortPermit] = None
+
+  private def directPortRootContext(selected: InstanceSelectionRecord): Boolean =
+    moduleStack.size == 1 && activeValueRegion.isEmpty && domainStack.isEmpty &&
+      areaStack.isEmpty && generationStack.isEmpty && analogStack.isEmpty &&
+      analogSemanticContext.isEmpty && activeEventProcess.isEmpty &&
+      instanceSelectionStack.size == 1 && (instanceSelectionStack.head eq selected) &&
+      selected.generated.isEmpty && !reductionChecking && !reductionProofBuilding &&
+      reductionExact.isEmpty && reductionDomains.isEmpty
+
+  private def directPortFailure(message: String): Nothing =
+    boundaryClosureOwner.filter(_.incremental) match
+      case Some(owner) =>
+        owner.guard(collectionFailure("direct Instance request authority: " + message))
+      case None => collectionFailure("direct Instance request authority: " + message)
+
+  private def validatePortAllocation(
+      value: AnyRef,
+      reference: DeclarationRef | ExpressionRef,
+      module: ModuleRecord,
+      frontier: Long
+  ): Unit =
+    requestCharge()
+    val stamp = reference.constructionAllocation.getOrElse(
+      directPortFailure("missing original allocation")
+    )
+    if (stamp.session ne this) || (stamp.module ne module) || stamp.serial > frontier ||
+      stamp.region.nonEmpty || stamp.generation.nonEmpty || stamp.area.nonEmpty ||
+      !records.get(module.handle).exists(_ eq module)
+    then directPortFailure("later or non-root original allocation")
+    val valid = reference match
+      case ref: DeclarationRef =>
+        Option(declarationIds.get(value)).exists(_ eq ref) && ref.module == module.handle &&
+        module.declarations.lift(ref.index).exists(record =>
+          (record.reference eq ref) && (record.value eq value)
+        )
+      case ref: ExpressionRef =>
+        Option(expressionIds.get(value)).exists(_ eq ref) && ref.module == module.handle &&
+        expressionValues.get(ref).exists(_ eq value)
+    if !valid then directPortFailure("original canonical identity changed")
+
+  /** Strict authored type roots only; substituted dimensions remain the boundary owner's proof. */
+  private def directPortTypeRoots(
+      dataType: DataType[?],
+      child: ModuleRecord,
+      frontier: Long
+  ): Vector[ConstructionRootIdentity] =
+    val active = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+    val done = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+    val pending = mutable.ArrayBuffer.empty[(Any, Boolean)]
+    val roots = Vector.newBuilder[ConstructionRootIdentity]
+    var count = 0L
+    pending += dataType -> false
+    def enter(value: AnyRef, leaving: Boolean)(children: => Iterator[?]): Unit =
+      if leaving then
+        active.remove(value)
+        done.put(value, java.lang.Boolean.TRUE)
+      else
+        if active.containsKey(value) then directPortFailure("authored type-root cycle")
+        if !done.containsKey(value) then
+          active.put(value, java.lang.Boolean.TRUE)
+          pending += value -> true
+          pending += ConstructionRequestChildren(children) -> false
+    while pending.nonEmpty do
+      requestCharge()
+      val (value, leaving) = pending.remove(pending.size - 1)
+      value match
+        case frame: ConstructionRequestChildren =>
+          if frame.values.hasNext then
+            requestCharge()
+            pending += frame -> false
+            pending += frame.values.next() -> false
+        case _: KernelInstanceDataType[?] =>
+          directPortFailure("nested substituted type is not an authored root")
+        case data: DataType[?] =>
+          enter(data, leaving):
+            val descriptor = CandidateRuntime.typeDescriptor(data)
+            requestCharge()
+            descriptor.kind match
+              case "Bool" if descriptor.arguments.isEmpty => Iterator.empty
+              case "Bits" | "UInt" | "SInt" if descriptor.arguments.size == 1 =>
+                descriptor.arguments.iterator
+              case "Vec" if descriptor.arguments.size == 2 =>
+                descriptor.arguments match
+                  case Vector(_: DataType[?], _: Seq[?]) => descriptor.arguments.iterator
+                  case _ => directPortFailure("malformed authored Vec")
+              case "Struct" if descriptor.arguments.size == 2 =>
+                descriptor.arguments match
+                  case Vector(_: String, fields: Seq[?]) => fields.iterator
+                  case _ => directPortFailure("malformed authored Struct")
+              case _ => directPortFailure("unsupported authored direct-port type")
+        case field: StructField[?] => enter(field, leaving)(Iterator.single(field.dataType))
+        case expression: KernelExpr[?] =>
+          if !leaving && !done.containsKey(expression) && !active.containsKey(expression) then
+            val ref = Option(expressionIds.get(expression)).getOrElse(
+              directPortFailure("authored dimension is not canonical")
+            )
+            validatePortAllocation(expression, ref, child, frontier)
+            if !expression.constructionFinalized || !expression.typeFinalized ||
+              !expression.resultDescriptor.exists(_.kind == "Integer")
+            then directPortFailure("authored dimension is not a complete static Integer")
+            roots += ConstructionRootIdentity(expression, ref)
+            count += 1L
+          enter(expression, leaving)(expression.operands.iterator)
+        case _: Expr[?] => directPortFailure("parameter or alias type roots require a later proof")
+        case sequence: Seq[?] => enter(sequence, leaving)(sequence.iterator)
+        case _: Int | _: Long | _: Boolean | _: String => ()
+        case _ => directPortFailure("unsupported authored type-root metadata")
+    requestCharge(count)
+    roots.result()
+
+  private def validateDirectPortTarget(target: DirectPortTarget): Unit =
+    requestCharge()
+    val selected = instanceSelectionStack.lastOption.getOrElse(
+      directPortFailure("missing actual selector")
+    )
+    if (target.session ne this) || (selected ne target.selected) ||
+      (target.request.nonEmpty && !directPortRootContext(selected)) ||
+      (currentModule ne target.parent) ||
+      !Option(instanceIds.get(selected.instance)).exists(_ eq target.instance) ||
+      target.instance.generatedScope.nonEmpty
+    then directPortFailure("selector or parent occurrence changed")
+    if !target.parent.instances.exists(instance =>
+        requestCharge()
+        instance eq target.instance
+      )
+    then directPortFailure("unattached or synthetic occurrence")
+    val child = records.getOrElse(target.instance.child, directPortFailure("missing child"))
+    val record = child.declarations.lift(target.port.index).getOrElse(
+      directPortFailure("missing original child port")
+    )
+    if target.port.module != child.handle || (record.reference ne target.port) ||
+      (record.value ne target.value) ||
+      !Option(declarationIds.get(target.value)).exists(_ eq target.port) ||
+      !record.dataType.exists(_ eq target.dataType) || (target.value.dataType ne target.dataType) ||
+      !Set(KernelSignalKind.Input, KernelSignalKind.Output)(record.kind)
+    then directPortFailure("original direct port identity changed")
+    target.request.foreach: request =>
+      val stamp = target.instance.constructionAllocation.getOrElse(
+        directPortFailure("occurrence has no authored allocation")
+      )
+      if (request.session ne this) || (request.module ne target.parent) ||
+        (stamp.session ne this) || (stamp.module ne target.parent) ||
+        stamp.serial > request.frontier || stamp.region.nonEmpty ||
+        stamp.generation.nonEmpty || stamp.area.nonEmpty
+      then directPortFailure("occurrence is later or outside original authority")
+      validatePortAllocation(target.value, target.port, child, request.frontier)
+      val actual = directPortTypeRoots(target.dataType, child, request.frontier)
+      if actual.size != target.roots.size then directPortFailure("authored type roots changed")
+      var index = 0
+      while index < actual.size do
+        requestCharge()
+        if (actual(index).value ne target.roots(index).value) ||
+          (actual(index).reference ne target.roots(index).reference)
+        then directPortFailure("authored type root identity changed")
+        index += 1
+
+  private def preparedDirectPortType[A <: Data](dataType: DataType[A]): KernelInstanceDataType[A] =
+    directPortPermit match
+      case Some(permit) =>
+        if permit.consumed || (permit.target.dataType ne dataType) then
+          directPortFailure("stale or mismatched prepared type")
+        permit.dataType.asInstanceOf[KernelInstanceDataType[A]]
+      case None => new KernelInstanceDataType[A](CandidateRuntime.typeDescriptor(dataType))
+
+  private def admitPort(
+      value: AnyRef,
+      kind: KernelSignalKind,
+      dataType: Option[DataType[? <: Data]],
+      name: Option[String],
+      domain: Option[ClockDomain],
+      attributes: Vector[(String, Any)]
+  ): Boolean =
+    val direct = Set(KernelSignalKind.InstanceInput, KernelSignalKind.InstanceOutput)(kind)
+    if directPortRequest.nonEmpty && !direct then
+      directPortFailure("request scope does not authorize another declaration route")
+    if !direct then false
+    else if directPortRequest.isEmpty && (activeGeneratedRegion.nonEmpty ||
+        instanceSelectionStack.lastOption.exists(_.generated.nonEmpty))
+    then true // Existing non-request generated/Area paths are not migrated by this slice.
+    else
+      val permit = directPortPermit.getOrElse(directPortFailure("missing registration permit"))
+      validateDirectPortTarget(permit.target)
+      if permit.consumed || permit.value.nonEmpty || permit.reference.nonEmpty ||
+        kind != permit.kind || !dataType.exists(_ eq permit.dataType) ||
+        name != Some(permit.name) || domain.nonEmpty || attributes.nonEmpty
+      then directPortFailure("consumed or mismatched registration permit")
+      requestCharge()
+      permit.consumed = true
+      permit.value = Some(value)
+      true
+
+  private def completeDirectPortRegistration(value: Signal[?]): DeclarationRef =
+    val reference = declarationIds.get(value)
+    directPortPermit.foreach: permit =>
+      if !permit.consumed || !permit.value.exists(_ eq value) || reference == null ||
+        permit.reference.nonEmpty || reference.module != permit.target.parent.handle
+      then directPortFailure("registration did not consume its exact permit")
+      permit.reference = Some(reference)
+      // Failure here retains the stamped canonical declaration, before boundary publication.
+      requestCharge()
+    reference
+
+  private def guardedDirectPort[A <: Data](value: Signal[A]): Signal[A] =
+    val closure = boundaryClosureOwner.getOrElse(directPortFailure("missing closure owner"))
+    closure.guard:
+      val selected = instanceSelectionStack.lastOption.getOrElse(
+        directPortFailure("missing exact selector")
+      )
+      if directPortPermit.nonEmpty then directPortFailure("reentrant registration")
+      val instance = instanceRecord(selected)
+      val port =
+        Option(declarationIds.get(value)).getOrElse(directPortFailure("unknown child port"))
+      val target = directPortRequest.getOrElse(new DirectPortTarget(
+        None,
+        selected,
+        instance,
+        currentModule,
+        port,
+        value,
+        value.dataType,
+        Vector.empty
+      ))
+      if (target.value ne value) then directPortFailure("request target substituted")
+      validateDirectPortTarget(target)
+      val existing = instanceDigitalPorts.iterator.collectFirst:
+        case (reference, binding) if {
+              requestCharge();
+              (binding.instance eq instance) &&
+              (binding.port eq port) && binding.generated.isEmpty && binding.scope.isEmpty
+            } =>
+          reference -> binding
+      existing.foreach: (reference, binding) =>
+        val declaration = records(reference.module).declarations(reference.index)
+        val proxy = declaration.value.asInstanceOf[Signal[?]]
+        val childKind = records(port.module).declarations(port.index).kind
+        val expectedKind = if childKind == KernelSignalKind.Input then
+          KernelSignalKind.InstanceInput
+        else KernelSignalKind.InstanceOutput
+        if declaration.kind != expectedKind || (declaration.reference ne reference) ||
+          !Option(declarationIds.get(proxy)).exists(_ eq reference) ||
+          reference.module != target.parent.handle
+        then directPortFailure("cached proxy lost its canonical mapping")
+        val deferred = declaration.dataType.collect { case data: KernelInstanceDataType[?] => data }
+          .getOrElse(directPortFailure("cached proxy lost its type owner"))
+        if (proxy.dataType ne deferred) || !DigitalEnumContract.sameType(
+            deferred.formal,
+            CandidateRuntime.typeDescriptor(target.dataType)
+          )
+        then directPortFailure("cached proxy changed its original type")
+        if target.request.nonEmpty then
+          closure.verifyPublication()
+          closure.requireVerifiedDigital(reference, binding)
+          if !deferred.finalized then directPortFailure("cached request proxy is not finalized")
+      val previous = directPortPermit
+      try
+        if existing.isEmpty then
+          val child = records(port.module).declarations(port.index)
+          val kind = if child.kind == KernelSignalKind.Input then KernelSignalKind.InstanceInput
+          else KernelSignalKind.InstanceOutput
+          directPortPermit = Some(new DirectPortPermit(
+            target,
+            new KernelInstanceDataType[A](CandidateRuntime.typeDescriptor(value.dataType)),
+            kind,
+            s"instance_${instance.ordinal}_port_${port.index}"
+          ))
+        val result = instanceDigitalPortBody(value)
+        val reference = declarationIds.get(result)
+        val binding = instanceDigitalPorts.getOrElse(
+          reference,
+          directPortFailure("construction did not publish its exact boundary")
+        )
+        if (binding.instance ne instance) || (binding.port ne port) ||
+          binding.generated.nonEmpty || binding.scope.nonEmpty
+        then directPortFailure("constructed boundary target changed")
+        directPortPermit.foreach: permit =>
+          if !permit.consumed || !permit.value.exists(_ eq result) ||
+            !permit.reference.exists(_ eq reference)
+          then directPortFailure("construction returned another registered object")
+        result
+      finally directPortPermit = previous
+
+  // The public/legacy entrypoint stays unchanged; only incremental ordinary direct ports migrate.
+  def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
+    if directPortRequest.nonEmpty then guardedDirectPort(value)
+    else if boundaryClosureOwner.exists(_.incremental) && activeGeneratedRegion.isEmpty &&
+      instanceSelectionStack.lastOption.exists(_.generated.isEmpty)
+    then guardedDirectPort(value)
+    else instanceDigitalPortBody(value)
+
+  /** Fixed private selection operation, not an arbitrary authorized body or callback. */
+  private[nodal] def selectConstructionRequestPort[A <: Data](
+      result: KernelExpr[?],
+      instance: Instance[?],
+      port: Signal[A]
+  ): Signal[A] =
+    val closure = boundaryClosureOwner.filter(_.incremental).getOrElse(
+      directPortFailure("request selection needs an incremental owner")
+    )
+    closure.guard:
+      if directPortRequest.nonEmpty || directPortPermit.nonEmpty then
+        directPortFailure("request selection is not reentrant")
+      if !result.registeredConstructionOwnedBy(this) || !result.constructionFinalized ||
+        !result.constructionKind.exists(DigitalReductionContract.Kinds) ||
+        result.constructionCallback.isEmpty
+      then directPortFailure("selection requires this Session's completed registered request")
+      validateConstructionRequest(
+        result,
+        result.constructionRequest.getOrElse(
+          directPortFailure("missing original request")
+        ).input
+      )
+      closure.verifyPublication()
+      val request = result.constructionRequest.get
+      val occurrence = instanceRecord(instance)
+      val reference = Option(declarationIds.get(port)).getOrElse(
+        directPortFailure("target is not an actual child port")
+      )
+      val child = records.getOrElse(occurrence.child, directPortFailure("missing actual child"))
+      val roots = directPortTypeRoots(port.dataType, child, request.frontier)
+      val selected = InstanceSelectionRecord(instance)
+      val target = new DirectPortTarget(
+        Some(request),
+        selected,
+        occurrence,
+        request.module,
+        reference,
+        port,
+        port.dataType,
+        roots
+      )
+      val previous = directPortRequest
+      try
+        directPortRequest = Some(target)
+        instanceSelectionStack += selected
+        validateDirectPortTarget(target)
+        instanceDigitalPort(port)
+      finally
+        if instanceSelectionStack.lastOption.exists(_ eq selected) then
+          instanceSelectionStack.remove(instanceSelectionStack.size - 1)
+        directPortRequest = previous
+
+  private def registrationOwner(
+      dimensions: Vector[Dimension],
+      boundary: Option[InterfaceBoundaryRecord]
+  ): Option[BoundaryClosureOwner] =
+    boundaryClosureOwner.filter(_.incremental).map: closure =>
+      if directPortPermit.nonEmpty then
+        requestCharge()
+        if dimensions.nonEmpty || boundary.nonEmpty then
+          directPortFailure("registration permit does not authorize boundary metadata")
+      closure
+
+  // Additional accounting only for the independently proved bound-domain profile.
+  private var boundDomainAccountingActive = false
+  private def publicationWorkActive: Boolean =
+    publicationAccountingActive || boundDomainAccountingActive
+
+  private def boundDomainCharge(units: Long = 1L): Unit =
+    if boundDomainAccountingActive then closureCharge(units)
+
+  private def withBoundDomainAccounting[A](enabled: Boolean)(body: => A): A =
+    val previous = boundDomainAccountingActive
+    boundDomainAccountingActive = previous || enabled
+    try body
+    finally boundDomainAccountingActive = previous
+
+  private def boundDomainBindingPath(instance: String, requirement: String): String =
+    if !boundDomainAccountingActive then instance + "." + requirement
+    else
+      boundDomainCharge(2L + instance.length.toLong + requirement.length.toLong)
+      instance + "." + requirement
+
+  // Capture optimization authority is exact builder ownership, never an effectful active lookup.
+  def constructionCapturePrefixAllowed(builder: SemanticOriginBuilder): Boolean =
+    (semanticOrigin eq builder) && registeredConstructionAdmission &&
+      boundaryClosureOwner.exists(owner => owner.incremental && owner.hasConstructionWork)
+
+  // A fixed private diagnostic allowance, not a public capacity or admission policy.
+  private final class DiagnosticConstructionPolicy(val root: Module, val module: ModuleRecord):
+    val name = "registered-construction-diagnostic-131072"
+    val limit = 131072
+    val requests = new java.util.IdentityHashMap[KernelExpr[?], DiagnosticRequestBinding]()
+    var firstRequest: Option[KernelExpr[?]] = None
+
+  private final class DiagnosticRequestBinding(
+      val result: KernelExpr[?],
+      val context: ConstructionRequestContext,
+      val reference: ExpressionRef,
+      val policy: DiagnosticConstructionPolicy
+  )
+
+  private var diagnosticConstructionPolicy: Option[DiagnosticConstructionPolicy] = None
+
+  private def diagnosticPolicyGuard[A](body: => A): A =
+    try
+      boundaryClosureOwner match
+        case Some(owner) => owner.guard(body)
+        case None => body
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "diagnostic construction work policy")
+        throw failure
+
+  /** Bind before the first request/debt/owner. This does not itself authorize activation. */
+  private[nodal] def bindDiagnosticConstructionWork(root: Module): Unit = diagnosticPolicyGuard:
+    val previousDebt = constructionRequestWork
+    requestCharge(16L) // Fixed context/identity checks and the policy/map allocations.
+    if !ConstructionKernel.ownsConstructionSession(this) || constructorFailure.nonEmpty ||
+      diagnosticConstructionPolicy.nonEmpty || boundaryClosureOwner.nonEmpty ||
+      registeredConstructionAdmission || previousDebt != 0L || !ordinaryRootConstructionContext
+    then collectionFailure("diagnostic work policy requires a fresh ordinary root before requests")
+    val module = currentModule
+    if moduleHandle(root) != module.handle || module.parentAtConstruction.nonEmpty ||
+      !records.get(module.handle).exists(_ eq module)
+    then collectionFailure("diagnostic work policy belongs to another root")
+    diagnosticConstructionPolicy = Some(new DiagnosticConstructionPolicy(root, module))
+
+  private def bindDiagnosticRequest(result: KernelExpr[Data]): KernelExpr[Data] =
+    diagnosticConstructionPolicy match
+      case None => result
+      case Some(policy) => diagnosticPolicyGuard:
+          requestCharge(18L) // Fixed checks, binding insertion and first-carrier retention.
+          val context = result.constructionRequest.getOrElse(
+            collectionFailure("diagnostic carrier has no registered context")
+          )
+          val reference = Option(expressionIds.get(result)).getOrElse(
+            collectionFailure("diagnostic carrier is not canonical")
+          )
+          if boundaryClosureOwner.nonEmpty || !result.registeredConstructionOwnedBy(this) ||
+            (context.session ne this) || (context.module ne policy.module) ||
+            (context.resultReference ne reference) || policy.requests.containsKey(result) ||
+            !expressionValues.get(reference).exists(_ eq result)
+          then collectionFailure("diagnostic carrier does not belong to the bound root policy")
+          policy.requests.put(
+            result,
+            new DiagnosticRequestBinding(result, context, reference, policy)
+          )
+          if policy.firstRequest.isEmpty then policy.firstRequest = Some(result)
+          result
+
+  private def requireDiagnosticRequest(
+      root: Module,
+      result: KernelExpr[?]
+  ): DiagnosticConstructionPolicy =
+    requestCharge(40L) // Fixed policy/carrier/stamp/callback proof; no data-dependent traversal.
+    val policy = diagnosticConstructionPolicy.getOrElse(
+      collectionFailure("diagnostic work policy was not bound")
+    )
+    val binding = Option(policy.requests.get(result)).getOrElse(
+      collectionFailure("diagnostic activation requires its actual registered carrier")
+    )
+    val context = result.constructionRequest.getOrElse(
+      collectionFailure("diagnostic carrier lost its context")
+    )
+    val allocation = binding.reference.constructionAllocation.getOrElse(
+      collectionFailure("diagnostic carrier lost its result allocation")
+    )
+    val callback = result.constructionCallback.getOrElse(
+      collectionFailure("diagnostic carrier lost its checked callback")
+    )
+    DigitalCollectionCallback.requireChecked(callback.checked)
+    if !ConstructionKernel.ownsConstructionSession(this) || constructorFailure.nonEmpty ||
+      (policy.root ne root) || moduleHandle(root) != policy.module.handle ||
+      !records.get(policy.module.handle).exists(_ eq policy.module) ||
+      (binding.policy ne policy) || (binding.result ne result) || (binding.context ne context) ||
+      (context.session ne this) || (context.module ne policy.module) ||
+      (context.resultReference ne binding.reference) ||
+      (allocation.session ne this) || (allocation.module ne policy.module) ||
+      allocation.serial <= context.frontier ||
+      !result.constructionKind.exists(DigitalReductionContract.Kinds) ||
+      !Option(expressionIds.get(result)).exists(_ eq binding.reference) ||
+      !expressionValues.get(binding.reference).exists(_ eq result) ||
+      !result.registeredConstructionOwnedBy(this) ||
+      (!result.pendingConstructionOwnedBy(this) && !result.constructionFinalized) ||
+      context.sourceSlot != result.constructionSourceSlot ||
+      (requestReference(context.input) ne context.inputReference) ||
+      !result.constructionDependencies.headOption.exists:
+        case value: AnyRef => value eq context.input
+        case _ => false
+    then collectionFailure("diagnostic activation lost canonical request/root/policy authority")
+    policy
+
+  private def rejectLegacyDiagnosticActivation(): Unit =
+    if diagnosticConstructionPolicy.nonEmpty then
+      diagnosticPolicyGuard:
+        requestCharge()
+        collectionFailure("legacy closure activation cannot promote a diagnostic work policy")
+
+  private def enableDiagnosticConstructionClosure(
+      root: Module,
+      carrier: Option[KernelExpr[?]]
+  ): BoundaryClosureOwner = diagnosticPolicyGuard:
+    requestCharge(4L)
+    if boundaryClosureOwner.nonEmpty then
+      collectionFailure("diagnostic closure already exists")
+    val policy = diagnosticConstructionPolicy.getOrElse(
+      collectionFailure("diagnostic work policy was not bound")
+    )
+    val result = carrier.getOrElse:
+      requestCharge(2L) // Read and check the deterministic first-bound carrier.
+      policy.firstRequest.getOrElse(
+        collectionFailure("diagnostic activation requires a registered request")
+      )
+    val closure = new BoundaryClosureOwner(moduleHandle(root), Map.empty, Vector.empty)
+    boundaryClosureOwner = Some(closure)
+    closure.enableDiagnostic(root, result)
+    closure
+
+  /** Fixed internal entry: no arbitrary budget or authorized callback body. */
+  private[nodal] def beginDiagnosticConstructionClosure(
+      root: Module,
+      carrier: KernelExpr[?]
+  ): Unit = diagnosticPolicyGuard:
+    requestCharge()
+    if !ordinaryRootConstructionContext then
+      collectionFailure("diagnostic activation requires the ordinary root context")
+    val closure = enableDiagnosticConstructionClosure(root, Some(carrier))
+    closure.prepareIncrementalInputs()
+    closure.drainIncremental()
+
+  private[nodal] def diagnosticConstructionWorkPolicyTag: Option[String] =
+    diagnosticConstructionPolicy.map(_.name)

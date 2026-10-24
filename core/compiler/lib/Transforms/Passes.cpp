@@ -13,6 +13,7 @@
 #include "nodal/Dialect/Nodal/AnalogStorageModel.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -213,7 +214,15 @@ LogicalResult verifyType(Type type, Operation *owner, const llvm::StringSet<> &p
           return emitFailure(owner, "NODAL-VERIFY-TYPE-002", "shaped dimensions must be positive");
       } else if (!isIdentifier(dimension) || !parameters.contains(dimension)) {
         auto definition = owner->getParentOfType<nodal::ModuleOp>();
-        if (!definition || failed(resolveStaticShapeDimension(definition, dimension)))
+        Operation *typeUse = owner;
+        if (llvm::isa<InterfaceMemberOp, InterfaceRoleOp>(owner) &&
+            hasDigitalInterfaceContract(owner) && succeeded(verifyDigitalInterfaceOperation(owner)))
+          typeUse = owner->getParentOp();
+        const bool proved =
+            isGeneratedTypeUse(typeUse)
+                ? succeeded(resolveGeneratedTypeDimensionFacts(typeUse, dimension, "shape"))
+                : definition && succeeded(resolveStaticShapeDimension(definition, dimension));
+        if (!proved)
           return emitFailure(owner, "NODAL-VERIFY-TYPE-003",
                              llvm::Twine("unknown or unproved symbolic dimension '") + dimension +
                                  "'");

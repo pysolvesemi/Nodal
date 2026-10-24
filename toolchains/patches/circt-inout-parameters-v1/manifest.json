@@ -1,0 +1,123 @@
+{
+  "base_library_sha256": "80ba56f0b5daca1543760a53f8455219d3e267c86d919b33951720212f07be23",
+  "base_lock_sha256": "14d67d279d0cf66c4d51fcc470da7c6b4392391b64d17db7dbaf4900fecab05b",
+  "circt_commit": "87898a876f730a2ebc607dc9b83da487cba49119",
+  "component": "CIRCTHW",
+  "host": {
+    "arch": "x86_64",
+    "os": "linux"
+  },
+  "id": "circt-inout-parameters-v1",
+  "patch": {
+    "file": "inout-parameter.patch",
+    "sha256": "88fd75d9046244956010929172d0cf999ecd84889f42bee519a58d7aea01418e"
+  },
+  "schema": 1,
+  "sources": [
+    {
+      "after": "02ac92e7eeef976abf8bb7b658680c3b0a01aa286b40d0b4b8a39d648fc9027d",
+      "before": "02ac92e7eeef976abf8bb7b658680c3b0a01aa286b40d0b4b8a39d648fc9027d",
+      "path": "lib/Dialect/HW/ConversionPatterns.cpp"
+    },
+    {
+      "after": "460bb3b4d075a0da2c0a411126c6ccb06a3c358d9b8e271d26b77bc36ea21e24",
+      "before": "460bb3b4d075a0da2c0a411126c6ccb06a3c358d9b8e271d26b77bc36ea21e24",
+      "path": "lib/Dialect/HW/CustomDirectiveImpl.cpp"
+    },
+    {
+      "after": "2ee7db1ad505eaf14edda1073eee33615f988d8beb19e692506cd821fb4239e6",
+      "before": "2ee7db1ad505eaf14edda1073eee33615f988d8beb19e692506cd821fb4239e6",
+      "path": "lib/Dialect/HW/HierPathCache.cpp"
+    },
+    {
+      "after": "c84aa324a7124db10a96fd8049e708fb7053e9afc62658babfa86105574de1bf",
+      "before": "bdba535e744990e65ebe7c8ac5f8a8eedc2bd8cdf7d2ba937669b7250fc442fa",
+      "path": "lib/Dialect/HW/HWAttributes.cpp"
+    },
+    {
+      "after": "0162edfc97e9ed94261b621c3a71d9577581f870fe2337157d3c79b7d6d95e47",
+      "before": "0162edfc97e9ed94261b621c3a71d9577581f870fe2337157d3c79b7d6d95e47",
+      "path": "lib/Dialect/HW/HWEnums.cpp"
+    },
+    {
+      "after": "0d833a564b58b9561f1164d68bc722b0bed2c228638045440d51384c3bde19ba",
+      "before": "0d833a564b58b9561f1164d68bc722b0bed2c228638045440d51384c3bde19ba",
+      "path": "lib/Dialect/HW/HWDialect.cpp"
+    },
+    {
+      "after": "ed727798140e419d56157a3541244659d83aab289bc0cf3f9290afca0b53d69c",
+      "before": "ed727798140e419d56157a3541244659d83aab289bc0cf3f9290afca0b53d69c",
+      "path": "lib/Dialect/HW/HWInstanceGraph.cpp"
+    },
+    {
+      "after": "3b7f5db31e8ba03bb9a25c0726d7a41aa1f0bec20fdfed2971f0328d525efd8a",
+      "before": "3b7f5db31e8ba03bb9a25c0726d7a41aa1f0bec20fdfed2971f0328d525efd8a",
+      "path": "lib/Dialect/HW/HWInstanceImplementation.cpp"
+    },
+    {
+      "after": "3edb58d3c09bf73796df2f6439f5b0d3cfe8b0764a3101832a15a464ad5f1f57",
+      "before": "3edb58d3c09bf73796df2f6439f5b0d3cfe8b0764a3101832a15a464ad5f1f57",
+      "path": "lib/Dialect/HW/HWModuleOpInterface.cpp"
+    },
+    {
+      "after": "5d644071a6277f5ba5d339f00443c498cf599eac17fb9c6967d2fb45e2a42f83",
+      "before": "5d644071a6277f5ba5d339f00443c498cf599eac17fb9c6967d2fb45e2a42f83",
+      "path": "lib/Dialect/HW/HWOpInterfaces.cpp"
+    },
+    {
+      "after": "38e9ad03182d07c8a976a24b8c42868594ab1e5a5a5d85a632c8c0e31993585e",
+      "before": "38e9ad03182d07c8a976a24b8c42868594ab1e5a5a5d85a632c8c0e31993585e",
+      "path": "lib/Dialect/HW/HWOps.cpp"
+    },
+    {
+      "after": "8fa130dcbdf5d980397112372599b6d2dc10a20a87d18822c6054445005bad97",
+      "before": "8fa130dcbdf5d980397112372599b6d2dc10a20a87d18822c6054445005bad97",
+      "path": "lib/Dialect/HW/HWTypeInterfaces.cpp"
+    },
+    {
+      "after": "a993b32ffbccca804af0867bd2fa2aafef0c40878fc6d2968a74cb7c1e07eaa2",
+      "before": "a993b32ffbccca804af0867bd2fa2aafef0c40878fc6d2968a74cb7c1e07eaa2",
+      "path": "lib/Dialect/HW/HWTypes.cpp"
+    },
+    {
+      "after": "504e18a80fab2c46e37a8fb890e3d2a3008140524b10c180f1ec581fa1d630de",
+      "before": "504e18a80fab2c46e37a8fb890e3d2a3008140524b10c180f1ec581fa1d630de",
+      "path": "lib/Dialect/HW/ModuleImplementation.cpp"
+    },
+    {
+      "after": "79c41118b73e3870838f5d0a58233637990b7c2b799471965848d608d528e4f8",
+      "before": "79c41118b73e3870838f5d0a58233637990b7c2b799471965848d608d528e4f8",
+      "path": "lib/Dialect/HW/InnerSymbolTable.cpp"
+    },
+    {
+      "after": "bfb32edfdd11a1dac4c4dea3b6afac68bac76b6a12509f580828cf17ba519ded",
+      "before": "bfb32edfdd11a1dac4c4dea3b6afac68bac76b6a12509f580828cf17ba519ded",
+      "path": "lib/Dialect/HW/PortConverter.cpp"
+    },
+    {
+      "after": "a94d622fc6b2609be67d4b2167aedb0bfc9d3e27a9ced96a023cd18cdeb63bef",
+      "before": "a94d622fc6b2609be67d4b2167aedb0bfc9d3e27a9ced96a023cd18cdeb63bef",
+      "path": "lib/Dialect/HW/InferIntRangeInterfaceImpls.cpp"
+    },
+    {
+      "after": "6f6f1de03484c86bcc97a1ffb305b0523ad22c99241bcade392bc6c12977d104",
+      "before": "8b67ff89dd28fe38cd4637993f0f4ce5bc284989e82be5e89d54287ffc23993e",
+      "path": "test/Dialect/HW/parameters.mlir"
+    },
+    {
+      "after": "8adfba80e1760f79162382ad5bf401f9a1578a2a74fa46f683ffd9363802f797",
+      "before": "d0717ac388821b3a7d8afc3849b3a58f06a076759f0c2cbef3300a53d1681aad",
+      "path": "unittests/Dialect/HW/TypesTest.cpp"
+    },
+    {
+      "after": "295d7dc34a1afe9279fad41215f4a0fc4bf6282634f6bd77e6a3ed20aa827d27",
+      "before": "295d7dc34a1afe9279fad41215f4a0fc4bf6282634f6bd77e6a3ed20aa827d27",
+      "path": "include/circt/Dialect/HW/HWAttributes.h"
+    },
+    {
+      "after": "d7b0683ade4ea170732980e4e909e0a27df3115459f81fe19e4a2b6c63ca360a",
+      "before": "d7b0683ade4ea170732980e4e909e0a27df3115459f81fe19e4a2b6c63ca360a",
+      "path": "lib/Dialect/HW/CMakeLists.txt"
+    }
+  ]
+}

@@ -145,8 +145,11 @@ final class Increment56NestedFsmSource extends Module:
     output := state
 
 final class Increment56RepeatedFsmSource extends Module:
+  val enable = true.B
   val left = instance(new Increment56FlatEncodingSource(FsmEncoding.Compact))
   val right = instance(new Increment56FlatEncodingSource(FsmEncoding.Compact))
+  left(_.enable) := enable
+  right(_.enable) := enable
 
 final class Increment56ScalarSequentialSource extends Module:
   val clock = in(Clock)
@@ -293,5 +296,8 @@ final class Increment56QuotedLeaf(reason: String) extends Module:
   output := input.keep(reason)
 
 final class Increment56QuotedDefinitionsSource extends Module:
+  val input = 0.U(8).extract(0, 8)
   val left = instance(new Increment56QuotedLeaf("retain %digital_value_0, ({ metadata"))
   val right = instance(new Increment56QuotedLeaf("retain %digital_value_1, ({ metadata"))
+  left(_.input) := input
+  right(_.input) := input

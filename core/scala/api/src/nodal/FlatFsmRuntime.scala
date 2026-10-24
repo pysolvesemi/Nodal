@@ -7,8 +7,29 @@ private[nodal] object FlatFsmRuntime:
   val MaximumRecords = 65536
   val NextOperation = "flat_fsm_next"
   val TakenOperation = "flat_fsm_taken"
+  val EnteredOperation = "flat_fsm_entered"
+  val ExitedOperation = "flat_fsm_exited"
+  val EstablishmentOperation = "flat_fsm_establishment"
+  val JoinOperation = "fsm_composition_join"
+  val RestartOperation = "fsm_composition_restart"
+  val CancelOperation = "fsm_composition_cancel"
+  val EnableOperation = "fsm_composition_enable"
   val CompletedOperation = "flat_fsm_completed"
-  val Operations: Set[String] = Set(NextOperation, TakenOperation, CompletedOperation)
+  val Operations: Set[String] =
+    Set(
+      NextOperation,
+      TakenOperation,
+      EnteredOperation,
+      ExitedOperation,
+      CompletedOperation,
+      EstablishmentOperation,
+      JoinOperation,
+      RestartOperation,
+      CancelOperation,
+      EnableOperation,
+      FsmTimingRuntime.ElapsedOperation,
+      FsmTimingRuntime.TransferOperation
+    )
 
   def fail(message: String, code: String = "NODAL-FSM-056-001"): Nothing =
     val failure = new ConstructionException(KernelDiagnostic(code, message))

@@ -17,6 +17,15 @@ private[nodal] object HierarchyMlir:
     private val modules = snapshot.modules.map(m => m.path -> m).toMap
     private val domains =
       snapshot.modules.flatMap(m => m.domains.map(d => d.path -> (m.path, d))).toMap
+    private val families = snapshot.generatedRegions.filter(region =>
+      region.yieldedArea.nonEmpty && region.digitalBody.nonEmpty
+    ).map(region => region.path -> region).toMap
+    private def actualScope(instance: KernelInstanceSnapshot, owner: String): Boolean =
+      instance.generatedScope.forall(scope =>
+        families.get(scope.owner).exists(region =>
+          region.owner == owner && region.induction == scope.induction
+        )
+      )
     private val occupied = snapshot.modules.flatMap(_.declarations.map(_.path)).toSet ++
       snapshot.digitalExpressions.map(_.path) ++ snapshot.parameterExpressions.map(_.path)
     private val projectionEntries = snapshot.modules.flatMap: module =>
@@ -81,9 +90,9 @@ private[nodal] object HierarchyMlir:
         )
         actuals.foreach: binding =>
           check(
-            instance.generatedScope.isEmpty && binding.path.startsWith(instance.path + ".") &&
+            actualScope(instance, module.path) && binding.path.startsWith(instance.path + ".") &&
               Set("default", "inherited", "named")(binding.origin),
-            "instance domain binding requires direct ownership and a valid origin",
+            "instance domain binding requires exact lexical ownership and a valid origin",
             binding.path
           )
           val actual = domains.get(binding.actual).filter(_._1 == module.path).map(_._2).getOrElse(
@@ -110,7 +119,9 @@ private[nodal] object HierarchyMlir:
             "demanded requirement Reset has no actual operand",
             binding.path
           )
-      val proxyKeys = module.declarations.flatMap(_.instancePort.map(p => p.instance -> p.port))
+      val proxyKeys = module.declarations.flatMap(_.instancePort.map(p =>
+        (p.instance, p.port, p.selection, p.region)
+      ))
       check(
         proxyKeys.distinct.size == proxyKeys.size,
         "aliased instance port references must share one declaration",
@@ -134,14 +145,41 @@ private[nodal] object HierarchyMlir:
           check(
             Set("input", "output")(proxy.direction) && port.kind == proxy.direction &&
               declaration.kind == "instance-" + proxy.direction &&
-              declaration.dataType == port.dataType &&
-              declaration.dataType.nonEmpty && declaration.domain.isEmpty &&
+              declaration.dataType.nonEmpty && port.dataType.nonEmpty &&
+              declaration.domain.isEmpty &&
               declaration.attributes.isEmpty &&
-              declaration.generatedScope.isEmpty && instance.generatedScope.isEmpty &&
+              (if proxy.selection.isEmpty then
+                 declaration.generatedScope == instance.generatedScope && proxy.region.isEmpty
+               else
+                 instance.generatedScope.nonEmpty && proxy.selection.exists(selection =>
+                   selection.family == instance.generatedScope.get.owner &&
+                     selection.access == "read_only"
+                 ) && declaration.generatedScope.forall(scope => proxy.region.contains(scope.owner))) &&
+              actualScope(instance, module.path) &&
               port.generatedScope.isEmpty && declaration.conservativeDimensions.isEmpty,
             "instance port requires exact digital type, direction and direct boundary ownership",
             declaration.path
           )
+
+    def validatePortTypes(
+        compare: (
+            KernelDeclarationSnapshot,
+            KernelDeclarationSnapshot,
+            String,
+            KernelInstanceSnapshot
+        ) => Boolean
+    ): Unit =
+      snapshot.modules.foreach: module =>
+        val instances = module.instances.map(value => value.path -> value).toMap
+        module.declarations.foreach: declaration =>
+          declaration.instancePort.foreach: proxy =>
+            val instance = instances(proxy.instance)
+            val port = modules(instance.childModule).declarations.find(_.path == proxy.port).get
+            check(
+              compare(declaration, port, module.path, instance),
+              "instance port type differs from its exact finalized child binding",
+              declaration.path
+            )
 
     private val bindingPaths =
       snapshot.modules.flatMap(_.instances.flatMap(_.actualBindings.map(_.path)))
@@ -151,37 +189,44 @@ private[nodal] object HierarchyMlir:
       snapshot.root
     )
 
+    def physicalRoots(module: KernelModuleSnapshot): Vector[String] =
+      module.instances.flatMap(_.actualBindings.flatMap(a => Vector(a.clock) ++ a.reset))
+
     def roots(module: KernelModuleSnapshot): Vector[String] =
-      module.instances.flatMap(_.actualBindings.flatMap(a => Vector(a.clock) ++ a.reset)) ++
-        module.declarations.filter(_.instancePort.nonEmpty).map(_.path)
+      physicalRoots(module) ++
+        module.declarations.filter(value =>
+          value.instancePort.exists(_.region.isEmpty) && value.generatedScope.isEmpty
+        ).map(_.path)
 
     def renderBindings(
         module: KernelModuleSnapshot,
         values: Map[String, (String, String)],
         symbol: (String, String) => String,
         metadata: String => String,
-        location: String => String
+        location: String => String,
+        generatedScope: Option[String] = None
     ): Vector[String] =
       def quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") +
         "\""
-      module.instances.sortBy(_.path).flatMap: instance =>
-        instance.actualBindings.sortBy(_.requirement).map: binding =>
-          val child = modules(instance.childModule)
-          val requirement = child.domains.find(_.path == binding.requirement).get
-          val actual = domains(binding.actual)._2
-          val operands = (Vector(binding.clock) ++ binding.reset).map(path =>
-            values.getOrElse(path, fail("instance actual has no owned SSA producer", path))
-          )
-          val expected = Vector("!nodal.capability<\"clock\">") ++
-            binding.reset.map(_ => "!nodal.capability<\"reset\">")
-          check(
-            operands.map(_._2) == expected,
-            "instance binding capability types differ",
-            binding.path
-          )
-          val instanceName = instance.path.substring(instance.path.lastIndexOf('.') + 1)
-          s"\"nodal.instance_domain_binding\"(${operands.map(_._1).mkString(", ")}) <{" +
-            s"instance = @${quoted(symbol("instance", instanceName))}, " +
-            s"requirement = @${quoted(symbol("domain", requirement.name))}, " +
-            s"actual = @${quoted(symbol("domain", actual.name))}, origin = ${quoted(binding.origin)}, " +
-            s"metadata = ${metadata(binding.path)}}> : (${operands.map(_._2).mkString(", ")}) -> ()${location(binding.path)}"
+      module.instances.filter(_.generatedScope.map(_.owner) == generatedScope)
+        .sortBy(_.path).flatMap: instance =>
+          instance.actualBindings.sortBy(_.requirement).map: binding =>
+            val child = modules(instance.childModule)
+            val requirement = child.domains.find(_.path == binding.requirement).get
+            val actual = domains(binding.actual)._2
+            val operands = (Vector(binding.clock) ++ binding.reset).map(path =>
+              values.getOrElse(path, fail("instance actual has no owned SSA producer", path))
+            )
+            val expected = Vector("!nodal.capability<\"clock\">") ++
+              binding.reset.map(_ => "!nodal.capability<\"reset\">")
+            check(
+              operands.map(_._2) == expected,
+              "instance binding capability types differ",
+              binding.path
+            )
+            val instanceName = instance.path.substring(instance.path.lastIndexOf('.') + 1)
+            s"\"nodal.instance_domain_binding\"(${operands.map(_._1).mkString(", ")}) <{" +
+              s"instance = @${quoted(symbol("instance", instanceName))}, " +
+              s"requirement = @${quoted(symbol("domain", requirement.name))}, " +
+              s"actual = @${quoted(symbol("domain", actual.name))}, origin = ${quoted(binding.origin)}, " +
+              s"metadata = ${metadata(binding.path)}}> : (${operands.map(_._2).mkString(", ")}) -> ()${location(binding.path)}"

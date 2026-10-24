@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "api_sha256": "44fc6f27e73f326354c1e69866b4bcc84eb801693eb4517cae70b94b18a53ab4",
+  "groups": {
+    "suffix": {
+      "fixtures": [
+        {
+          "maintained_path": "CandidateApi.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/dead-suffix/CandidateApi.scala",
+          "sha256": "5deb05e64522f91551e37bbc3059c89cb4d5036a1c21f3f168ac76b80c1c2aa2",
+          "compile": true
+        },
+        {
+          "maintained_path": "DeadSuffixControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/dead-suffix/DeadSuffixControls.scala",
+          "sha256": "e7d8b29430e79359fce0f268afbfbaf5f9160be491f9a3b19fd18edb87b0542f",
+          "compile": true
+        },
+        {
+          "maintained_path": "DeadSuffixRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/dead-suffix/DeadSuffixRoot.scala",
+          "sha256": "5d004ac4dd47f9b6ec167987119eb0e1fc90348347a35af6b3550266ece96f4c",
+          "compile": true
+        }
+      ]
+    }
+  },
+  "suites": {
+    "suffix-resolver": {
+      "group": "suffix",
+      "main": "deadsuffix.DeadSuffixControls",
+      "arguments": [],
+      "success": [
+        "PASS dead suffix resolver raw parity, consumers, abort restoration, legacy eager order"
+      ]
+    }
+  },
+  "default_suites": [
+    "suffix-resolver"
+  ]
+}

@@ -647,6 +647,16 @@ target_link_libraries(nodal-shape-iteration-image-unit-tests PRIVATE
 add_test(NAME nodal.native.shape-iteration-image-unit COMMAND nodal-shape-iteration-image-unit-tests)
 set_tests_properties(nodal.native.shape-iteration-image-unit PROPERTIES TIMEOUT 60)
 
+# Only the accepted literal groundwork mode is registered. The retained broader
+# no-argument probe includes symbolic obligations that are still open.
+add_executable(nodal-nested-conservative-proof-unit-tests NestedConservativeProofTest.cpp)
+llvm_update_compile_flags(nodal-nested-conservative-proof-unit-tests)
+target_link_libraries(nodal-nested-conservative-proof-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.nested-conservative-proof-unit
+  COMMAND nodal-nested-conservative-proof-unit-tests --literal-groundwork)
+set_tests_properties(nodal.native.nested-conservative-proof-unit PROPERTIES TIMEOUT 60)
+
 add_executable(nodal-digital-assignment-guard-unit-tests DigitalAssignmentGuardTest.cpp)
 llvm_update_compile_flags(nodal-digital-assignment-guard-unit-tests)
 target_link_libraries(nodal-digital-assignment-guard-unit-tests PRIVATE
@@ -682,6 +692,14 @@ target_link_libraries(nodal-sequential-circt-unit-tests PRIVATE
   MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.sequential-circt-unit COMMAND nodal-sequential-circt-unit-tests)
 set_tests_properties(nodal.native.sequential-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-hierarchy-circt-unit-tests HierarchyCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-hierarchy-circt-unit-tests)
+target_link_libraries(nodal-hierarchy-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTSeq
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.hierarchy-circt-unit COMMAND nodal-hierarchy-circt-unit-tests)
+set_tests_properties(nodal.native.hierarchy-circt-unit PROPERTIES TIMEOUT 60)
 
 add_executable(nodal-memory-model-unit-tests MemoryModelTest.cpp)
 llvm_update_compile_flags(nodal-memory-model-unit-tests)
@@ -783,3 +801,57 @@ target_link_libraries(nodal-event-circt-unit-tests PRIVATE
   MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.event-circt-unit COMMAND nodal-event-circt-unit-tests)
 set_tests_properties(nodal.native.event-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-hierarchy-boundary-model-unit-tests HierarchyBoundaryModelTest.cpp)
+llvm_update_compile_flags(nodal-hierarchy-boundary-model-unit-tests)
+target_link_libraries(nodal-hierarchy-boundary-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.hierarchy-boundary-model-unit COMMAND nodal-hierarchy-boundary-model-unit-tests)
+set_tests_properties(nodal.native.hierarchy-boundary-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-symbolic-hierarchy-circt-unit-tests SymbolicHierarchyCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-symbolic-hierarchy-circt-unit-tests)
+target_link_libraries(nodal-symbolic-hierarchy-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.symbolic-hierarchy-circt-unit COMMAND nodal-symbolic-hierarchy-circt-unit-tests)
+set_tests_properties(nodal.native.symbolic-hierarchy-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-fsm-composition-model-unit-tests FsmCompositionModelTest.cpp)
+llvm_update_compile_flags(nodal-fsm-composition-model-unit-tests)
+target_link_libraries(nodal-fsm-composition-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.fsm-composition-model-unit COMMAND nodal-fsm-composition-model-unit-tests)
+set_tests_properties(nodal.native.fsm-composition-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-generated-occurrence-circt-unit-tests GeneratedOccurrenceCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-generated-occurrence-circt-unit-tests)
+target_link_libraries(nodal-generated-occurrence-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-occurrence-circt-unit COMMAND nodal-generated-occurrence-circt-unit-tests)
+set_tests_properties(nodal.native.generated-occurrence-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-generated-interface-circt-unit-tests GeneratedInterfaceCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-generated-interface-circt-unit-tests)
+target_link_libraries(nodal-generated-interface-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-interface-circt-unit COMMAND nodal-generated-interface-circt-unit-tests)
+set_tests_properties(nodal.native.generated-interface-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-generated-direct-interface-circt-unit-tests GeneratedDirectInterfaceCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-generated-direct-interface-circt-unit-tests)
+target_link_libraries(nodal-generated-direct-interface-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-direct-interface-circt-unit COMMAND nodal-generated-direct-interface-circt-unit-tests)
+set_tests_properties(nodal.native.generated-direct-interface-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-typed-fill-circt-unit-tests TypedFillCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-typed-fill-circt-unit-tests)
+target_link_libraries(nodal-typed-fill-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.typed-fill-circt-unit COMMAND nodal-typed-fill-circt-unit-tests)
+set_tests_properties(nodal.native.typed-fill-circt-unit PROPERTIES TIMEOUT 60)

@@ -1,0 +1,186 @@
+{
+  "historical": {
+    "public/selected-child.mlir": {
+      "input_path": "selected-child.mlir",
+      "input_sha256": "9f72a3544e1305ffa47f9cc023dc97ab8b51ad2890adcc5fdab5f0fd6956c184",
+      "checks": [
+        {
+          "group": "public-five",
+          "mode": "verify",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "group": "public-five",
+          "mode": "emit",
+          "exit": 0,
+          "stdout_sha256": "69e329d35526e5608faf27dd84ef17afe01c5649b2b4aa53c36b119bf9ea5115"
+        }
+      ]
+    },
+    "public/nonunit.mlir": {
+      "input_path": "nonunit.mlir",
+      "input_sha256": "e70be5a7edf10d9ab84b1670f711971b2979cedfda9e72c8c6bee1d4a0fa5162",
+      "checks": [
+        {
+          "group": "public-five",
+          "mode": "verify",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "group": "public-five",
+          "mode": "emit",
+          "exit": 0,
+          "stdout_sha256": "cfe348bc6c965a5cb6e667679782015c1fa125da95aeb66177e6cda674261ae4"
+        }
+      ]
+    },
+    "public/unused-leaf.mlir": {
+      "input_path": "unused-leaf.mlir",
+      "input_sha256": "6dc9ad62fd38021fa7879fa853eae22da39ef505d1a061850f9d44477fffeddc",
+      "checks": [
+        {
+          "group": "public-five",
+          "mode": "verify",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "group": "public-five",
+          "mode": "emit",
+          "exit": 0,
+          "stdout_sha256": "7d51c6588a37a0573c39daca0f1e20effd623cacc2ad942d0a8918271d50cc4e"
+        }
+      ]
+    },
+    "public/boundary-only.mlir": {
+      "input_path": "boundary-only.mlir",
+      "input_sha256": "a3a3701ddf80b86f859cfe36c50b476a77ae899328cc49740e80be78c9acb5b2",
+      "checks": [
+        {
+          "group": "public-five",
+          "mode": "verify",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "group": "public-five",
+          "mode": "emit",
+          "exit": 0,
+          "stdout_sha256": "249534adc82de6f104fa2f555dbc8b6530f67a98384c6eadc46f782913dc20cb"
+        }
+      ]
+    },
+    "public/two-views.mlir": {
+      "input_path": "two-views.mlir",
+      "input_sha256": "955f9db9fef571079dd2fa28e04665f6fa2b256ceafaca8739f0103e7289e1c4",
+      "checks": [
+        {
+          "group": "public-five",
+          "mode": "verify",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "group": "public-five",
+          "mode": "emit",
+          "exit": 0,
+          "stdout_sha256": "731f3a617589b458f506164e5b99ae116f816bb080c7dd24e3e871960f129caf"
+        }
+      ]
+    }
+  },
+  "coherent-source53": {
+    "public/selected-child.mlir": {
+      "input_path": "selected-first/selected-child.mlir",
+      "input_sha256": "d4380447a2ed1a0cc1696fb5e328aa514a038de7f780b5131ebcdd2b62c42b07",
+      "checks": [
+        {
+          "group": "public-five",
+          "mode": "verify",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "group": "public-five",
+          "mode": "emit",
+          "exit": 0,
+          "stdout_sha256": "ce96ce98c0fb827fe30764ad7002613deee7387e543220a70b7ec95298bb439a"
+        }
+      ]
+    },
+    "public/nonunit.mlir": {
+      "input_path": "selected-controls/nonunit.mlir",
+      "input_sha256": "78e2bb0b1b9a663204b13f7bea0c6e6dbe25521698deb4b828f3c9db6d842ed6",
+      "checks": [
+        {
+          "group": "public-five",
+          "mode": "verify",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "group": "public-five",
+          "mode": "emit",
+          "exit": 0,
+          "stdout_sha256": "e5aee507ec00bcc08b2e088c846b61bc347c5bda98bbe29bd7c35c3375a13bdb"
+        }
+      ]
+    },
+    "public/unused-leaf.mlir": {
+      "input_path": "selected-controls/unused-leaf.mlir",
+      "input_sha256": "fb3aa7fb33c87bef4c9bf37feb9dd7f6be904e06e5234d78cd2740f5b70f91fd",
+      "checks": [
+        {
+          "group": "public-five",
+          "mode": "verify",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "group": "public-five",
+          "mode": "emit",
+          "exit": 0,
+          "stdout_sha256": "9d3e51966ff3182f0684c657bad1728475db7e4d747b77e2e329c8ab99c43f68"
+        }
+      ]
+    },
+    "public/boundary-only.mlir": {
+      "input_path": "selected-controls/boundary-only.mlir",
+      "input_sha256": "ef4ab44ad1943ca8578df2a12256d79783871fefca0867b677b8a253e475da6c",
+      "checks": [
+        {
+          "group": "public-five",
+          "mode": "verify",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "group": "public-five",
+          "mode": "emit",
+          "exit": 0,
+          "stdout_sha256": "c47a2396f433aec59d39c1d297a444f8abcca7040be91d645089dc70fed1859a"
+        }
+      ]
+    },
+    "public/two-views.mlir": {
+      "input_path": "selected-controls/two-views.mlir",
+      "input_sha256": "6dc2b521ab2c58a8ee399e397a241d904327562e113897d81c6f768bd98b1a0a",
+      "checks": [
+        {
+          "group": "public-five",
+          "mode": "verify",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "group": "public-five",
+          "mode": "emit",
+          "exit": 0,
+          "stdout_sha256": "1fb782f0d3dcd200d79890b99cd7cb6487cd0e14d0eb1b97d86acd591b068973"
+        }
+      ]
+    }
+  }
+}

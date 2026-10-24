@@ -4,8 +4,11 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "nodal/Dialect/Nodal/HierarchyBoundaryModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -470,6 +473,550 @@ int main() {
   packed("bit-pattern-nested-real-not-packed", shape("2", "f64"), identityOwner, -1);
   report("bit-pattern-fixed-query-preserves-IR",
          identityBefore == print(identityModel->getOperation()));
+
+  // Generated type-use admission is explicit and retains original DAG identity.
+  auto generated = [&](const std::string &body, int64_t lower = 0, int64_t upper = 3,
+                       int64_t step = 1, StringRef name = "family") {
+    const auto id = name.str();
+    const auto count = upper <= lower ? 0 : (upper - lower + step - 1) / step;
+    return literal(id + "_lo", lower) + literal(id + "_hi", upper) + literal(id + "_step", step) +
+           "%" + id + " = \"nodal.generate\"(%" + id + "_lo, %" + id + "_hi, %" + id +
+           "_step) <{induction = \"i\", region_id = \"Fixture." + id +
+           "\", induction_path = \"Fixture." + id +
+           ".i\", metadata = {maximum_trip_count = " + std::to_string(count) +
+           " : i64}}> ({^bb0(%" + id + "_i: i64):\n" + body +
+           "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  };
+  auto localExpression = [&](StringRef id, StringRef operands, StringRef opcode = "add",
+                             StringRef token = "Fixture.width") {
+    return "%" + id.str() + " = \"nodal.const_expr\"(" + operands.str() + ") <{operator_name = \"" +
+           opcode.str() + "\", metadata = {semantic_path = \"" + token.str() +
+           "\"}}> : (i64, i64) -> i64\n";
+  };
+  auto typedUse = [&](StringRef type) {
+    return "%typed = \"builtin.unrealized_conversion_cast\"() {test_use} : () -> " + type.str() +
+           "\n";
+  };
+  const std::string regionalWidth = literal("one", 1) + localExpression("width", "%family_i, %one");
+  auto generatedQuery = [&](StringRef name, const std::string &body, StringRef token,
+                            StringRef effect, bool expected, int64_t lower = 0, int64_t upper = 0) {
+    auto parsed = parseSourceString<mlir::ModuleOp>(model(body), ParserConfig(&context, false));
+    Operation *use = nullptr;
+    if (parsed)
+      parsed->walk([&](Operation *op) {
+        if (op->hasAttr("test_use"))
+          use = op;
+      });
+    std::string before = parsed ? print(parsed->getOperation()) : "";
+    auto result = use ? nodal::resolveGeneratedTypeDimensionExpression(use, token, effect)
+                      : FailureOr<nodal::InstantiatedIntegerExpression>(failure());
+    bool good = succeeded(result) == expected;
+    if (good && expected)
+      good = result->bounds.lower == lower && result->bounds.upper == upper &&
+             succeeded(nodal::verifyDigitalTypeOperation(use));
+    report(name, good && parsed && before == print(parsed->getOperation()));
+  };
+  generatedQuery("generated-type-exact-all-lane-width",
+                 generated(regionalWidth + typedUse(digital("Fixture.width"))), "Fixture.width",
+                 "width", true, 1, 3);
+  generatedQuery("generated-type-nonzero-nonunit-width",
+                 generated(regionalWidth + typedUse(digital("Fixture.width")), 2, 8, 2),
+                 "Fixture.width", "width", true, 3, 7);
+  generatedQuery("generated-type-shape-reuses-original-DAG",
+                 generated(regionalWidth + typedUse(shape("Fixture.width", "!nodal.uint<2>"))),
+                 "Fixture.width", "shape", true, 1, 3);
+  generatedQuery("generated-type-forward-token-rejected",
+                 generated(typedUse(digital("Fixture.width")) + regionalWidth), "Fixture.width",
+                 "width", false);
+  generatedQuery("generated-type-duplicate-token-rejected",
+                 generated(regionalWidth + localExpression("other", "%family_i, %one") +
+                           typedUse(digital("Fixture.width"))),
+                 "Fixture.width", "width", false);
+  generatedQuery("generated-type-sibling-token-rejected",
+                 generated(regionalWidth) +
+                     generated(typedUse(digital("Fixture.width")), 0, 3, 1, "other"),
+                 "Fixture.width", "width", false);
+  generatedQuery("generated-type-module-use-not-admitted",
+                 regionalWidth.substr(0, regionalWidth.find("%width")) +
+                     typedUse(digital("Fixture.width")),
+                 "Fixture.width", "width", false);
+  generatedQuery("generated-type-nonpositive-all-lane-width",
+                 generated(localExpression("width", "%family_i, %family_i") +
+                           typedUse(digital("Fixture.width"))),
+                 "Fixture.width", "width", false);
+  generatedQuery("generated-type-empty-domain-has-no-fabricated-width",
+                 generated(regionalWidth + typedUse(digital("Fixture.width")), 0, 0),
+                 "Fixture.width", "width", false);
+  generatedQuery("generated-type-overflow-all-lane-width",
+                 generated(literal("maximum", std::numeric_limits<int64_t>::max()) +
+                           localExpression("width", "%family_i, %maximum") +
+                           typedUse(digital("Fixture.width"))),
+                 "Fixture.width", "width", false);
+  const auto negativeIntermediate =
+      literal("minus", -1) + localExpression("width", "%family_i, %minus");
+  generatedQuery("generated-width-keeps-mathematical-negative-intermediate",
+                 generated(negativeIntermediate + typedUse(digital("Fixture.width")), 2, 5),
+                 "Fixture.width", "width", true, 1, 3);
+  generatedQuery(
+      "generated-shape-keeps-storage-negative-intermediate-refusal",
+      generated(negativeIntermediate + typedUse(shape("Fixture.width", "!nodal.uint<1>")), 2, 5),
+      "Fixture.width", "shape", false);
+  generatedQuery(
+      "generated-type-wrong-parameter-effect",
+      parameter("W", 1, 4, true, true, true, "\"shape\"") +
+          generated(localExpression("width", "%family_i, %W") + typedUse(digital("Fixture.width"))),
+      "Fixture.width", "width", false);
+  check("generated-type-memo-is-not-shared-across-siblings",
+        generated(regionalWidth + typedUse(digital("Fixture.width"))) +
+            generated(localExpression("width", "%other_i, %other_i") +
+                          typedUse(digital("Fixture.width")),
+                      0, 3, 1, "other"),
+        false);
+  auto guarded = [&](StringRef body) {
+    return literal("g0", 0) + literal("g1", 1) +
+           "%condition = \"nodal.static_compare\"(%g0, %g1) <{comparison = \"lt\", metadata = {}}> "
+           ": (i64, i64) -> !nodal.static_predicate\n"
+           "\"nodal.structural_if\"(%condition, %width) <{contract_version = \"structural-if-v1\", "
+           "region_id = \"Fixture.guard\", "
+           "operandSegmentSizes = array<i32: 1, 1, 0>, metadata = {semantic_path = "
+           "\"Fixture.guard\"}}> ({^bb0(%captured: i64):\n" +
+           body.str() +
+           "\"nodal.structural_yield\"() <{metadata = {}}> : () -> ()\n}, "
+           "{\"nodal.structural_yield\"() <{metadata = {}}> : () -> ()\n}) : "
+           "(!nodal.static_predicate, i64) -> ()\n";
+  };
+  generatedQuery("generated-type-explicit-structural-capture",
+                 generated(regionalWidth + guarded(typedUse(digital("Fixture.guard.then.arg0")))),
+                 "Fixture.guard.then.arg0", "width", true, 1, 3);
+  generatedQuery("generated-type-capture-cannot-be-bypassed",
+                 generated(regionalWidth + guarded(typedUse(digital("Fixture.width")))),
+                 "Fixture.width", "width", false);
+
+  auto collectionCapture = [&](StringRef body, StringRef type, StringRef capture = "%width",
+                               StringRef id = "Fixture.c") {
+    return "%mapped = \"nodal.collection\"(%input, " + capture.str() +
+           ") <{kind = \"map\", region_id = \"" + id.str() +
+           "\", operandSegmentSizes = array<i32: 1, 0, 1>, metadata = {semantic_path = \"" +
+           id.str() + "\"}}> ({^bb0(%element: !nodal.uint<8>, %captured: i64):\n" + body.str() +
+           "\"nodal.collection_yield\"(%typed) <{metadata = {}}> : (" + type.str() +
+           ") -> ()\n}) : (!nodal.shaped<\"2\", !nodal.uint<8>>, i64) -> "
+           "!nodal.shaped<\"2\", " +
+           type.str() + ">\n";
+  };
+  const std::string generatedInput = "%input = \"builtin.unrealized_conversion_cast\"() : () -> "
+                                     "!nodal.shaped<\"2\", !nodal.uint<8>>\n";
+  const auto capturedType = digital("Fixture.c.arg1");
+  generatedQuery(
+      "generated-type-collection-actual-capture",
+      generatedInput +
+          generated(regionalWidth + collectionCapture(typedUse(capturedType), capturedType)),
+      "Fixture.c.arg1", "width", true, 1, 3);
+  generatedQuery("generated-type-collection-raw-ancestor-token-rejected",
+                 generatedInput +
+                     generated(regionalWidth + collectionCapture(typedUse(digital("Fixture.width")),
+                                                                 digital("Fixture.width"))),
+                 "Fixture.width", "width", false);
+  generatedQuery("generated-type-invalid-local-token-cannot-fall-back-to-module-parameter",
+                 parameter("W", 1, 4) + generatedInput +
+                     generated(regionalWidth +
+                               collectionCapture(localExpression("invalid", "%captured, %captured",
+                                                                 "unknown", "W") +
+                                                     typedUse(digital("W")),
+                                                 digital("W"))),
+                 "W", "width", false);
+  generatedQuery("generated-type-forward-local-token-cannot-fall-back-to-module-parameter",
+                 parameter("W", 1, 4) + generatedInput +
+                     generated(regionalWidth +
+                               collectionCapture(
+                                   typedUse(digital("W")) +
+                                       localExpression("later", "%captured, %captured", "add", "W"),
+                                   digital("W"))),
+                 "W", "width", false);
+  generatedQuery(
+      "generated-type-collection-empty-retains-absent-numeric-proof",
+      generatedInput +
+          generated(regionalWidth + collectionCapture(typedUse(capturedType), capturedType), 0, 0),
+      "Fixture.c.arg1", "width", false);
+  const auto child = "\"nodal.module\"() <{sym_name = \"Child\", metadata = {}}> ({\n" +
+                     parameter("W", 1, 32) + port(digital("W"), "input") + "}) : () -> ()\n";
+  auto instanceType = [&](StringRef name, const std::string &body, bool expected,
+                          StringRef formalType = "", StringRef actualType = "") {
+    std::string localChild = child, localBody = body;
+    if (!formalType.empty()) {
+      auto position = localChild.find("type = " + digital("W"));
+      localChild.replace(position + 7, digital("W").size(), formalType.str());
+    }
+    if (!actualType.empty()) {
+      auto position = localBody.find("-> " + digital("Fixture.actual"));
+      localBody.replace(position + 3, digital("Fixture.actual").size(), actualType.str());
+    }
+    std::string source = model(generated(localBody));
+    source.insert(source.find("\"nodal.enum\"()"), localChild);
+    auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    Operation *use = nullptr;
+    if (parsed)
+      parsed->walk([&](nodal::InstancePortOp op) { use = op; });
+    report(name, use && succeeded(nodal::inspectInstancePort(use)) == expected);
+  };
+  const std::string childInstance = "\"nodal.instance\"() <{sym_name = \"child\", module = @Child, "
+                                    "parameter_bindings = {}, domain_bindings = {}, "
+                                    "generated_owner = \"Fixture.family\", generated_induction = "
+                                    "\"Fixture.family.i\", metadata = {}}> : () -> ()\n";
+  const std::string overrideWidth =
+      "\"nodal.parameter_override\"(%width) <{instance = @child, parameter = @W, generated_owner = "
+      "\"Fixture.family\", "
+      "generated_induction = \"Fixture.family.i\", metadata = {}}> : (i64) -> ()\n";
+  const std::string actualPort = "%actual = \"nodal.instance_port\"() <{instance = @child, port = "
+                                 "\"input\", direction = \"input\", metadata = {}}> : () -> " +
+                                 digital("Fixture.actual") + "\n";
+  instanceType("generated-instance-type-equal-DAG-distinct-token-names",
+               regionalWidth + childInstance + overrideWidth +
+                   localExpression("actualWidth", "%family_i, %one", "add", "Fixture.actual") +
+                   actualPort,
+               true);
+  instanceType("generated-instance-type-equal-bounds-not-equal-DAG",
+               regionalWidth + childInstance + overrideWidth + literal("three", 3) +
+                   localExpression("actualWidth", "%three, %family_i", "sub", "Fixture.actual") +
+                   actualPort,
+               false);
+
+  const auto matchingInstance =
+      regionalWidth + childInstance + overrideWidth +
+      localExpression("actualWidth", "%family_i, %one", "add", "Fixture.actual") + actualPort;
+  instanceType("generated-instance-type-recursive-shape-and-width-DAG", matchingInstance, true,
+               shape("W", digital("W")), shape("Fixture.actual", digital("Fixture.actual")));
+  instanceType("generated-instance-type-recursive-nominal-field-DAG", matchingInstance, true,
+               structure(field("lanes", shape("W", digital("W")))),
+               structure(field("lanes", shape("Fixture.actual", digital("Fixture.actual")))));
+  instanceType(
+      "generated-instance-type-retains-nominal-struct-identity", matchingInstance, false,
+      structure(field("lanes", shape("W", digital("W"))), "Packet"),
+      structure(field("lanes", shape("Fixture.actual", digital("Fixture.actual"))), "Other"));
+
+  // Checked absence belongs to this original generated Instance, never its
+  // sibling, a sampled lane or a replacement default. Numeric leaves stay closed.
+  auto emptyInstanceSource = [&](StringRef formal, StringRef actual, int64_t upper = 0,
+                                 std::string localBody = "", std::string localChild = "") {
+    if (localChild.empty())
+      localChild = child;
+    auto at = localChild.find("type = " + digital("W"));
+    localChild.replace(at + 7, digital("W").size(), formal.str());
+    if (localBody.empty())
+      localBody = matchingInstance;
+    at = localBody.find("-> " + digital("Fixture.actual"));
+    localBody.replace(at + 3, digital("Fixture.actual").size(), actual.str());
+    auto source = model(generated(localBody, 0, upper));
+    source.insert(source.find("\"nodal.enum\"()"), localChild);
+    return source;
+  };
+  auto emptyInstance = [&](StringRef name, StringRef formal, StringRef actual, bool expected,
+                           int64_t upper = 0, std::string body = "", std::string declaration = "") {
+    auto ir = parseSourceString<mlir::ModuleOp>(
+        emptyInstanceSource(formal, actual, upper, body, declaration),
+        ParserConfig(&context, false));
+    Operation *use = nullptr;
+    if (ir)
+      ir->walk([&](nodal::InstancePortOp op) { use = op; });
+    const std::string before = ir ? print(ir->getOperation()) : "";
+    bool good = use && succeeded(nodal::inspectInstancePort(use)) == expected;
+    report(name, good && before == print(ir->getOperation()));
+  };
+  emptyInstance("empty-instance-dependent-width-validity", digital("W"), digital("Fixture.actual"),
+                true);
+  emptyInstance("empty-instance-dependent-shape-and-width-validity", shape("W", digital("W")),
+                shape("Fixture.actual", digital("Fixture.actual")), true);
+  emptyInstance("empty-instance-mixed-dependent-formal-width", digital("W"), "!nodal.uint<8>",
+                true);
+  emptyInstance("empty-instance-mixed-dependent-actual-width", "!nodal.uint<8>",
+                digital("Fixture.actual"), true);
+  emptyInstance("empty-instance-mixed-shape-dimensions", shape("W,2", digital("W")),
+                shape("3,Fixture.actual", "!nodal.uint<8>"), true);
+  emptyInstance("empty-instance-concrete-width-mismatch-still-refused", "!nodal.uint<8>",
+                "!nodal.uint<9>", false);
+  emptyInstance("empty-instance-concrete-dimension-mismatch-still-refused",
+                shape("W,2", digital("W")), shape("Fixture.actual,3", digital("Fixture.actual")),
+                false);
+  emptyInstance("empty-instance-rank-retained", shape("W,2", digital("W")),
+                shape("Fixture.actual", digital("Fixture.actual")), false);
+  emptyInstance("empty-instance-scalar-kind-retained", digital("W"),
+                digital("Fixture.actual", "bits"), false);
+  emptyInstance("empty-instance-nominal-identity-retained",
+                structure(field("data", digital("W")), "Packet"),
+                structure(field("data", digital("Fixture.actual")), "Other"), false);
+  emptyInstance(
+      "empty-instance-ordered-fields-retained",
+      structure(field("a", digital("W")) + ", " + field("b", "!nodal.uint<1>")),
+      structure(field("b", "!nodal.uint<1>") + ", " + field("a", digital("Fixture.actual"))),
+      false);
+  std::string independentActualZero = matchingInstance;
+  independentActualZero.insert(
+      independentActualZero.find(actualPort),
+      localExpression("zeroDimension", "%one, %one", "sub", "Fixture.zero"));
+  emptyInstance("empty-instance-invalid-concrete-actual-dimension", shape("W,2", digital("W")),
+                shape("Fixture.actual,Fixture.zero", digital("Fixture.actual")), false, 0,
+                independentActualZero);
+  std::string independentFormalZero = child;
+  independentFormalZero.insert(
+      independentFormalZero.find("\"nodal.port\""),
+      "%zeroDimension = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\", "
+      "metadata = {semantic_path = \"Zero\"}}> : () -> i64\n");
+  emptyInstance("empty-instance-invalid-concrete-formal-dimension", shape("W,Zero", digital("W")),
+                shape("Fixture.actual,2", digital("Fixture.actual")), false, 0, "",
+                independentFormalZero);
+  emptyInstance("empty-instance-independent-actual-product-overflow", shape("W,2,2", digital("W")),
+                shape("Fixture.actual,9223372036854775807,2", digital("Fixture.actual")), false);
+  std::string invalidDefault = child;
+  auto defaultAt = invalidDefault.find("default_value = 4");
+  invalidDefault.replace(defaultAt, std::string("default_value = 4").size(), "default_value = 0");
+  emptyInstance("empty-instance-independent-formal-default-invalid", digital("W"),
+                digital("Fixture.actual"), false, 0, "", invalidDefault);
+  std::string forgedOwner = matchingInstance;
+  auto ownerAt = forgedOwner.find("generated_owner = \"Fixture.family\"");
+  forgedOwner.replace(ownerAt, std::string("generated_owner = \"Fixture.family\"").size(),
+                      "generated_owner = \"Fixture.foreign\"");
+  emptyInstance("empty-instance-foreign-generated-owner-refused", digital("W"),
+                digital("Fixture.actual"), false, 0, forgedOwner);
+  emptyInstance("nonempty-instance-mixed-width-cannot-use-empty-rule", digital("W"),
+                "!nodal.uint<8>", false, 3);
+  emptyInstance("nonempty-instance-exact-width-remains-valid", digital("W"),
+                digital("Fixture.actual"), true, 3);
+  {
+    auto ir = parseSourceString<mlir::ModuleOp>(
+        emptyInstanceSource(digital("W"), digital("Fixture.actual")),
+        ParserConfig(&context, false));
+    nodal::InstanceOp instance;
+    if (ir)
+      ir->walk([&](nodal::InstanceOp op) { instance = op; });
+    auto formal = parseType(digital("W"));
+    auto facts = nodal::inspectGeneratedInstanceDigitalStorageType(formal, instance);
+    report("empty-instance-type-facts-preserve-absence", succeeded(facts) && !facts->maximumBits);
+    report("empty-instance-numeric-width-remains-unavailable",
+           failed(nodal::inferGeneratedInstanceDigitalWidthExpression(formal, instance)));
+    report("empty-instance-numeric-boundary-leaves-remain-unavailable",
+           failed(nodal::inspectHierarchyBoundaryType(
+               formal, nodal::resolveInstanceModuleDefinition(instance), instance)));
+    auto fixed =
+        nodal::inspectGeneratedInstanceDigitalStorageType(parseType("!nodal.uint<8>"), instance);
+    report("empty-instance-independent-fixed-type-retains-number",
+           succeeded(fixed) && fixed->maximumBits && *fixed->maximumBits == 8);
+  }
+  {
+    // Query the same token/type on two actual owners in both orders. No cached
+    // absent fact may authorize a nonempty sibling or its foreign use pointer.
+    auto source = emptyInstanceSource(digital("W"), "!nodal.uint<8>");
+    std::string sibling = generated(matchingInstance, 0, 3, 1, "other");
+    for (auto replacement :
+         {std::pair{"Fixture.family", "Fixture.other"}, std::pair{"%family_i", "%other_i"}}) {
+      size_t at = 0;
+      while ((at = sibling.find(replacement.first, at)) != std::string::npos) {
+        sibling.replace(at, std::string(replacement.first).size(), replacement.second);
+        at += std::string(replacement.second).size();
+      }
+    }
+    source.insert(source.find("}) : () -> () \"nodal.module\""), sibling);
+    auto ir = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    SmallVector<Operation *> uses, instances;
+    if (ir)
+      ir->walk([&](Operation *op) {
+        if (isa<nodal::InstancePortOp>(op))
+          uses.push_back(op);
+        if (isa<nodal::InstanceOp>(op))
+          instances.push_back(op);
+      });
+    bool valid = uses.size() == 2 && instances.size() == 2;
+    auto formal = parseType(digital("W"));
+    auto fixed = parseType("!nodal.uint<8>");
+    if (valid)
+      valid = nodal::equivalentGeneratedInstanceDigitalStorageTypes(instances[0], formal, fixed,
+                                                                    uses[0]) &&
+              !nodal::equivalentGeneratedInstanceDigitalStorageTypes(instances[1], formal, fixed,
+                                                                     uses[1]) &&
+              !nodal::equivalentGeneratedInstanceDigitalStorageTypes(instances[0], formal, fixed,
+                                                                     uses[1]) &&
+              !nodal::equivalentGeneratedInstanceDigitalStorageTypes(instances[1], formal, fixed,
+                                                                     uses[1]) &&
+              nodal::equivalentGeneratedInstanceDigitalStorageTypes(instances[0], formal, fixed,
+                                                                    uses[0]);
+    report("empty-instance-sibling-nonempty-and-foreign-use-isolation", valid);
+  }
+  for (bool mixed : {false, true}) {
+    auto source =
+        emptyInstanceSource(digital("W"), mixed ? "!nodal.uint<8>" : digital("Fixture.actual"));
+    auto prefix = parameter("COUNT", 0, 4, true, true, true, "\"topology\"");
+    source.insert(source.find("%family_lo"), prefix);
+    auto from = literal("family_hi", 0);
+    auto at = source.find(from);
+    source.replace(at, from.size(),
+                   "%family_hi = \"nodal.const_parameter_ref\"() <{parameter = @COUNT, metadata = "
+                   "{}}> : () -> i64\n");
+    at = source.find("maximum_trip_count = 0");
+    source.replace(at, std::string("maximum_trip_count = 0").size(), "maximum_trip_count = 4");
+    auto ir = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    Operation *use = nullptr;
+    if (ir)
+      ir->walk([&](nodal::InstancePortOp op) { use = op; });
+    report(mixed ? "maybe-empty-instance-mixed-width-not-vacuous"
+                 : "maybe-empty-instance-exact-attained-type-valid",
+           use && succeeded(nodal::inspectInstancePort(use)) == !mixed);
+  }
+  generatedQuery("generated-type-width-effect-cannot-authorize-shape",
+                 parameter("W", 1, 4, true, true, true, "\"width\"") +
+                     generated(localExpression("width", "%family_i, %W") +
+                               typedUse(shape("Fixture.width", "!nodal.uint<1>"))),
+                 "Fixture.width", "shape", false);
+  const std::string mapType = "!nodal.shaped<\"2\", !nodal.uint<1>>";
+  const std::string pureNested =
+      "%input = \"builtin.unrealized_conversion_cast\"() : () -> " + mapType + "\n" +
+      "%mapped = \"nodal.collection\"(%input) <{kind = \"map\", region_id = \"Fixture.map\", "
+      "operandSegmentSizes = array<i32: 1, 0, 0>, metadata = {semantic_path = \"Fixture.map\"}}> "
+      "({^bb0(%element: !nodal.uint<1>):\n" +
+      generated(regionalWidth + typedUse(digital("Fixture.width"))) +
+      "\"nodal.collection_yield\"(%element) <{metadata = {}}> : (!nodal.uint<1>) -> ()\n}) : (" +
+      mapType + ") -> " + mapType + "\n";
+  generatedQuery("generated-type-pure-callback-cannot-grant-structural-type-use", pureNested,
+                 "Fixture.width", "width", false);
+  // Repeated field tokens exercise the single actual-use memo, not lane expansion.
+  std::string repeatedFields;
+  for (unsigned i = 0; i < 256; ++i) {
+    if (i)
+      repeatedFields += ", ";
+    repeatedFields += field("f" + std::to_string(i),
+                            shape("Fixture.width", "!nodal.uint<" + std::to_string(i + 1) + ">"));
+  }
+  generatedQuery("generated-type-256-distinct-fields-share-actual-token-proof",
+                 generated(regionalWidth + typedUse(structure(repeatedFields)), 0, 1000000),
+                 "Fixture.width", "shape", true, 1, 1000000);
+
+  // Empty attainment is a checked absence, never an invented scalar width.
+  auto emptyType = [&](StringRef name, const std::string &body, bool valid, bool queryValid = true,
+                       StringRef effect = "width", bool duplicateFields = false) {
+    auto parsed = parseSourceString<mlir::ModuleOp>(model(body), ParserConfig(&context, false));
+    Operation *use = nullptr;
+    if (parsed)
+      parsed->walk([&](Operation *op) {
+        if (op->hasAttr("test_use"))
+          use = op;
+      });
+    if (use && duplicateFields) {
+      auto original = cast<nodal::StructType>(use->getResult(0).getType());
+      use->getResult(0).setType(nodal::StructType::get(
+          &context, original.getName(),
+          ArrayAttr::get(&context, {original.getFields()[0], original.getFields()[0]})));
+    }
+    const auto before = parsed ? print(parsed->getOperation()) : "";
+    auto facts = use ? nodal::resolveGeneratedTypeDimensionFacts(use, "Fixture.width", effect)
+                     : FailureOr<nodal::StructuralIntegerFacts>(failure());
+    bool good = use && succeeded(facts) == queryValid &&
+                succeeded(nodal::verifyDigitalTypeOperation(use)) == valid;
+    if (queryValid)
+      good &=
+          succeeded(facts) && !facts->expression &&
+          failed(nodal::resolveGeneratedTypeDimensionExpression(use, "Fixture.width", effect)) &&
+          failed(nodal::inferDigitalStorageMaximumBits(use->getResult(0).getType(), use));
+    report(name, good && parsed && before == print(parsed->getOperation()));
+  };
+  auto zeroParameter = parameter("ZERO", 0, 0);
+  zeroParameter.replace(zeroParameter.find("default_value = 4"),
+                        std::string("default_value = 4").size(), "default_value = 0");
+  emptyType("empty-dependent-width-is-valid-without-attained-footprint",
+            generated(regionalWidth + typedUse(digital("Fixture.width")), 0, 0), true);
+  emptyType("empty-dependent-extent-is-valid-without-attained-footprint",
+            generated(regionalWidth + typedUse(shape("Fixture.width", "!nodal.uint<2>")), 0, 0),
+            true, true, "shape");
+  emptyType(
+      "empty-dependent-recursive-member-still-validates-all-fields",
+      generated(regionalWidth + typedUse(structure(field("dependent", digital("Fixture.width")) +
+                                                   ", " + field("fixed", "!nodal.uint<7>"))),
+                0, 0),
+      true);
+  emptyType("empty-dependent-field-cannot-hide-missing-sibling-width",
+            generated(regionalWidth +
+                          typedUse(structure(field("dependent", digital("Fixture.width")) + ", " +
+                                             field("missing", digital("Fixture.missing")))),
+                      0, 0),
+            false);
+  emptyType("empty-dependent-field-cannot-hide-invalid-concrete-shape",
+            zeroParameter +
+                generated(regionalWidth + typedUse(structure(
+                                              field("dependent", digital("Fixture.width")) + ", " +
+                                              field("bad", shape("ZERO", "!nodal.uint<1>")))),
+                          0, 0),
+            false);
+  emptyType(
+      "empty-dependent-field-cannot-hide-forged-duplicate-field-schema",
+      generated(regionalWidth + typedUse(structure(field("dependent", digital("Fixture.width")) +
+                                                   ", " + field("fixed", "!nodal.uint<2>"))),
+                0, 0),
+      false, true, "width", true);
+  emptyType(
+      "empty-shape-cannot-hide-independent-zero-dimension",
+      zeroParameter +
+          generated(regionalWidth + typedUse(shape("Fixture.width,ZERO", "!nodal.uint<1>")), 0, 0),
+      false, true, "shape");
+  emptyType("empty-shape-cannot-hide-independent-overflow-product",
+            generated(regionalWidth +
+                          typedUse(shape("Fixture.width,9223372036854775807,2", "!nodal.uint<1>")),
+                      0, 0),
+            false, true, "shape");
+  emptyType("empty-dependent-width-still-rejects-forward-reference",
+            generated(typedUse(digital("Fixture.width")) + regionalWidth, 0, 0), false, false);
+  emptyType("empty-dependent-width-still-rejects-duplicate-token",
+            generated(regionalWidth + localExpression("other", "%family_i, %one") +
+                          typedUse(digital("Fixture.width")),
+                      0, 0),
+            false, false);
+  emptyType("empty-dependent-width-cannot-use-sibling-token",
+            generated(regionalWidth, 0, 0) +
+                generated(typedUse(digital("Fixture.width")), 0, 0, 1, "other"),
+            false, false);
+  emptyType(
+      "empty-dependent-width-still-checks-parameter-effect",
+      parameter("W", 1, 4, true, true, true, "\"shape\"") +
+          generated(localExpression("width", "%family_i, %W") + typedUse(digital("Fixture.width")),
+                    0, 0),
+      false, false);
+  emptyType(
+      "empty-dependent-shape-still-checks-storage-arithmetic",
+      generated(negativeIntermediate + typedUse(shape("Fixture.width", "!nodal.uint<1>")), 0, 0),
+      false, false, "shape");
+  emptyType("empty-dependent-width-preserves-mathematical-arithmetic",
+            generated(negativeIntermediate + typedUse(digital("Fixture.width")), 0, 0), true);
+  emptyType("empty-dependent-expression-does-not-hide-independent-overflow",
+            generated(literal("maximum", std::numeric_limits<int64_t>::max()) +
+                          localExpression("bad", "%maximum, %maximum", "add", "Fixture.bad") +
+                          localExpression("width", "%family_i, %bad") +
+                          typedUse(digital("Fixture.width")),
+                      0, 0),
+            false, false);
+  auto wrongEmptyCount = generated(regionalWidth + typedUse(digital("Fixture.width")), 0, 0);
+  const auto countPosition = wrongEmptyCount.find("maximum_trip_count = 0");
+  wrongEmptyCount.replace(countPosition, std::string("maximum_trip_count = 0").size(),
+                          "maximum_trip_count = 1");
+  emptyType("empty-dependent-type-requires-exact-domain-contract", wrongEmptyCount, false, false);
+  auto selectedEmpty = parseSourceString<mlir::ModuleOp>(
+      model(generated("", 0, 0) + typedUse("i64")), ParserConfig(&context, false));
+  Operation *emptyFamily = nullptr, *emptyUse = nullptr;
+  if (selectedEmpty)
+    selectedEmpty->walk([&](Operation *op) {
+      if (isa<nodal::GenerateOp>(op))
+        emptyFamily = op;
+      if (op->hasAttr("test_use"))
+        emptyUse = op;
+    });
+  report("checked-empty-family-cannot-supply-selected-ordinal-zero",
+         emptyFamily && emptyUse &&
+             failed(nodal::resolveGeneratedOrdinal(emptyFamily, emptyFamily->getOperand(0),
+                                                   emptyUse)));
+  // A possibly empty parameterized family still has attained lanes and retains
+  // their nonpositive bound rejection; zero in its envelope is not vacuity.
+  const auto maybePrefix = parameter("W", 0, 4, true, true, true, "\"shape\", \"width\"");
+  auto maybeBody = generated(
+      localExpression("width", "%family_i, %family_i") + typedUse(digital("Fixture.width")), 0, 4);
+  auto maybeHeader = maybeBody.find("%family_lo, %family_hi, %family_step");
+  maybeBody.replace(maybeHeader, std::string("%family_lo, %family_hi, %family_step").size(),
+                    "%family_lo, %W, %family_step");
+  emptyType("possibly-empty-family-still-validates-attained-width", maybePrefix + maybeBody, false,
+            false);
 
   llvm::outs() << "DIGITAL_TYPE_MODEL_SUMMARY " << (cases - failures) << '/' << cases << '\n';
   return failures ? 1 : 0;

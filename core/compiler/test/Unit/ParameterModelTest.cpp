@@ -12,6 +12,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <iterator>
 #include <limits>
 
 namespace {
@@ -1046,6 +1047,624 @@ int checkGeneratedParameterQueries(mlir::MLIRContext &context) {
   return 0;
 }
 
+int checkFiniteConstructorBindingPurpose(mlir::MLIRContext &context) {
+  constexpr llvm::StringLiteral source = R"mlir(module {
+  "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = 3 : i64, metadata = {}, sym_name = "N", type = i64, variability = "symbolic"}> : () -> ()
+    %lo = "nodal.const_literal"() <{metadata = {}, spelling = "-4", value = -4 : i64}> : () -> i64
+    %hi = "nodal.const_literal"() <{metadata = {}, spelling = "8", value = 8 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%lo, %hi) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @N}> : (i64, i64) -> ()
+  }) : () -> ()
+  "nodal.module"() <{metadata = {}, sym_name = "Parent"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = 3 : i64, metadata = {}, sym_name = "P", type = i64, variability = "symbolic"}> : () -> ()
+    %plo = "nodal.const_literal"() <{metadata = {}, spelling = "-2", value = -2 : i64}> : () -> i64
+    %phi = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%plo, %phi) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @P}> : (i64, i64) -> ()
+    %p = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @P}> : () -> i64
+    %zero = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0 : i64}> : () -> i64
+    %two = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %family = "nodal.generate"(%zero, %two, %one) <{induction = "i", region_id = "Parent.lanes", induction_path = "Parent.lanes.i", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0(%i: i64):
+      %actual = "nodal.const_expr"(%i, %p) <{metadata = {}, operator_name = "add"}> : (i64, i64) -> i64
+      "nodal.instance"() <{domain_bindings = {}, generated_owner = "Parent.lanes", generated_induction = "Parent.lanes.i", metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "u"}> : () -> ()
+      "nodal.parameter_override"(%actual) <{generated_owner = "Parent.lanes", generated_induction = "Parent.lanes.i", instance = @u, parameter = @N, metadata = {}}> : (i64) -> ()
+    }) : (i64, i64, i64) -> !nodal.generated_family
+  }) : () -> ()
+})mlir";
+  auto replace = [](std::string text, llvm::StringRef before, llvm::StringRef after) {
+    auto position = text.find(before.str());
+    if (position == std::string::npos)
+      return std::string();
+    text.replace(position, before.size(), after.str());
+    return text;
+  };
+  unsigned cases = 0, failures = 0;
+  std::string diagnostics;
+  mlir::ScopedDiagnosticHandler capture(&context, [&](mlir::Diagnostic &diagnostic) {
+    llvm::raw_string_ostream out(diagnostics);
+    diagnostic.print(out);
+    out << '\n';
+    return mlir::success();
+  });
+  auto run = [&](llvm::StringRef name, std::string text, bool factsValid, bool admission,
+                 bool wholeValid, bool absent = false) {
+    ++cases;
+    diagnostics.clear();
+    auto module =
+        mlir::parseSourceString<mlir::ModuleOp>(text, mlir::ParserConfig(&context, false));
+    bool pass = false;
+    if (module) {
+      auto *child = namedOperation(module->getOperation(), "Child");
+      auto *parent = namedOperation(module->getOperation(), "Parent");
+      mlir::Operation *instance = nullptr, *producer = nullptr;
+      parent->walk([&](nodal::InstanceOp op) {
+        if (op.getSymName() == "u")
+          instance = op;
+      });
+      parent->walk([&](nodal::ConstExprOp op) {
+        if (!producer)
+          producer = op;
+      });
+      auto facts = nodal::resolveGeneratedInstanceIntegerParameterFacts(
+          instance, namedOperation(child, "N"), nodal::ParameterIntegerMode::MathematicalSigned64);
+      bool admitted =
+          producer && mlir::succeeded(nodal::verifyConstructorBindingIntegerOperation(producer));
+      bool whole = mlir::succeeded(mlir::verify(*module)) &&
+                   mlir::succeeded(nodal::verifyParameterModel(*module));
+      pass = mlir::succeeded(facts) == factsValid && admitted == admission && whole == wholeValid;
+      if (!pass)
+        llvm::errs() << name << " facts=" << mlir::succeeded(facts) << " admission=" << admitted
+                     << " whole=" << whole << "\n"
+                     << diagnostics;
+      if (factsValid)
+        pass &= bool(facts->expression) != absent;
+      // The binding purpose must never grant the ordinary actual structural eligibility.
+      if (producer && producer->getNextNode())
+        pass &= mlir::failed(nodal::resolveStructuralIntegerExpression(producer->getResult(0),
+                                                                       producer->getNextNode()));
+    }
+    if (!pass) {
+      ++failures;
+      llvm::errs() << "CONSTRUCTOR_BINDING_FAIL " << name << '\n';
+    }
+  };
+  const auto original = source.str();
+  run("finite-signed-all-lane-actual", original, true, true, true);
+  auto empty = replace(
+      replace(original, "spelling = \"2\", value = 2 : i64", "spelling = \"0\", value = 0 : i64"),
+      "maximum_trip_count = 2", "maximum_trip_count = 0");
+  run("checked-empty-ordinary-actual", empty, true, true, true, true);
+  run("all-lane-range-not-default",
+      replace(original, "spelling = \"4\", value = 4", "spelling = \"8\", value = 8"), false, false,
+      false);
+  auto structural =
+      replace(original, "classification = \"ordinary\"", "classification = \"structural\"");
+  structural =
+      replace(structural, "    %lo = ",
+              "    \"nodal.parameter_envelope\"() <{parameter = @N, effects = [\"width\"], policy "
+              "= \"static_generate\", metadata = {}}> : () -> ()\n    %lo = ");
+  run("structural-formal-needs-structural-actual", structural, false, false, false);
+  run("structural-formal-empty-still-needs-effects",
+      replace(empty, "classification = \"ordinary\"", "classification = \"structural\""), false,
+      false, false);
+  const std::string range = "    \"nodal.parameter_constraint\"(%plo, %phi) <{constraint_kind = "
+                            "\"range\", lower_inclusive = true, upper_inclusive = true, metadata = "
+                            "{}, parameter = @P}> : (i64, i64) -> ()\n";
+  run("unbounded-ordinary-actual", replace(original, range, ""), false, false, false);
+  run("empty-does-not-hide-unbounded", replace(empty, range, ""), false, false, false);
+  auto runtime =
+      replace(original, "    %family = \"nodal.generate\"(%zero, %two, %one)",
+              "    %runtime = \"nodal.dynamic_value\"(%p) <{metadata = {}, origin = "
+              "\"runtime\"}> : (i64) -> i64\n    %family = \"nodal.generate\"(%zero, %two, %one)");
+  runtime = replace(runtime, "(%i, %p)", "(%i, %runtime)");
+  run("runtime-not-constructor-static", runtime, false, false, false);
+  run("foreign-parameter-reference",
+      replace(original, "parameter = @P}> : () -> i64", "parameter = @Foreign}> : () -> i64"),
+      false, false, false);
+  run("forged-override-owner",
+      replace(
+          original,
+          "generated_owner = \"Parent.lanes\", generated_induction = \"Parent.lanes.i\", instance",
+          "generated_owner = \"Parent.other\", generated_induction = \"Parent.lanes.i\", instance"),
+      false, false, false);
+  run("forged-override-induction",
+      replace(original, "generated_induction = \"Parent.lanes.i\", instance",
+              "generated_induction = \"Parent.other.i\", instance"),
+      false, false, false);
+  auto dead = replace(original, "      \"nodal.parameter_override\"(%actual)",
+                      "      \"nodal.parameter_override\"(%p)");
+  run("dead-ordinary-producer-not-admitted", dead, true, false, false);
+  auto mixed = replace(
+      original, "      \"nodal.instance\"()",
+      "      %comparison = \"nodal.static_compare\"(%actual, %p) <{comparison = \"eq\", metadata = "
+      "{}}> : (i64, i64) -> !nodal.static_predicate\n      \"nodal.instance\"()");
+  run("mixed-structural-consumer-refused", mixed, true, false, false);
+  auto arithmetic =
+      replace(original, "      \"nodal.instance\"()",
+              "      %second = \"nodal.const_expr\"(%actual, %i) <{metadata = {}, operator_name = "
+              "\"sub\"}> : (i64, i64) -> i64\n      \"nodal.instance\"()");
+  arithmetic = replace(arithmetic, "\"nodal.parameter_override\"(%actual)",
+                       "\"nodal.parameter_override\"(%second)");
+  run("actual-arithmetic-use-chain", arithmetic, true, true, true);
+  run("dead-arithmetic-use-chain",
+      replace(arithmetic, "\"nodal.parameter_override\"(%second)",
+              "\"nodal.parameter_override\"(%actual)"),
+      true, false, false);
+  auto two = replace(original, "    }) : (i64, i64, i64) -> !nodal.generated_family",
+                     "      \"nodal.instance\"() <{domain_bindings = {}, generated_owner = "
+                     "\"Parent.lanes\", generated_induction = \"Parent.lanes.i\", metadata = {}, "
+                     "module = @Child, parameter_bindings = {}, sym_name = \"v\"}> : () -> ()\n    "
+                     "  \"nodal.parameter_override\"(%actual) <{generated_owner = "
+                     "\"Parent.lanes\", generated_induction = \"Parent.lanes.i\", instance = @v, "
+                     "parameter = @N, metadata = {}}> : (i64) -> ()\n    }) : (i64, i64, i64) -> "
+                     "!nodal.generated_family");
+  run("two-ordinary-sinks-share-original-dag", two, true, true, true);
+  run("every-sink-formal-must-resolve",
+      replace(two, "instance = @v, parameter = @N", "instance = @v, parameter = @Missing"), true,
+      false, false);
+  run("every-sink-instance-must-resolve",
+      replace(two, "instance = @v, parameter = @N", "instance = @Missing, parameter = @N"), true,
+      false, false);
+
+  const std::string captureBody = R"mlir(
+      %predicate = "nodal.static_compare"(%i, %i) <{comparison = "eq", metadata = {semantic_path = "Parent.lanes.predicate"}}> : (i64, i64) -> !nodal.static_predicate
+      "nodal.structural_if"(%predicate, %actual) <{contract_version = "structural-if-v1", region_id = "Parent.lanes.choice", operandSegmentSizes = array<i32: 1, 1, 0>, metadata = {semantic_path = "Parent.lanes.choice"}}> ({
+      ^bb0(%captured: i64):
+        %innerZero = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0 : i64}> : () -> i64
+        %innerOne = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+        %innerFamily = "nodal.generate"(%innerZero, %innerOne, %innerOne) <{induction = "j", region_id = "Parent.lanes.choice.then.inner", induction_path = "Parent.lanes.choice.then.inner.j", metadata = {maximum_trip_count = 1 : i64}}> ({
+        ^bb0(%j: i64):
+          %innerActual = "nodal.const_expr"(%j, %captured) <{metadata = {}, operator_name = "add"}> : (i64, i64) -> i64
+          "nodal.instance"() <{domain_bindings = {}, generated_owner = "Parent.lanes.choice.then.inner", generated_induction = "Parent.lanes.choice.then.inner.j", metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "u"}> : () -> ()
+          "nodal.parameter_override"(%innerActual) <{generated_owner = "Parent.lanes.choice.then.inner", generated_induction = "Parent.lanes.choice.then.inner.j", instance = @u, parameter = @N, metadata = {}}> : (i64) -> ()
+        }) : (i64, i64, i64) -> !nodal.generated_family
+        "nodal.structural_yield"() <{metadata = {semantic_path = "Parent.lanes.choice.then.yield"}}> : () -> ()
+      }, {
+        "nodal.structural_yield"() <{metadata = {semantic_path = "Parent.lanes.choice.else.yield"}}> : () -> ()
+      }) : (!nodal.static_predicate, i64) -> ()
+)mlir";
+  auto captured = original;
+  auto firstInstance = captured.find("      \"nodal.instance\"");
+  auto familyEnd = captured.find("    }) : (i64, i64, i64)", firstInstance);
+  captured.replace(firstInstance, familyEnd - firstInstance, captureBody);
+  run("exact-structural-capture-chain", captured, true, true, true);
+  run("raw-outer-capture-bypass", replace(captured, "(%j, %captured)", "(%j, %actual)"), false,
+      false, false);
+  run("capture-alias-unrelated-producer",
+      replace(captured, "(%predicate, %actual)", "(%predicate, %p)"), true, false, false);
+  auto capturedMixed = replace(
+      captured, "        %innerZero = ",
+      "        %forbidden = \"nodal.static_compare\"(%captured, %captured) <{comparison = \"eq\", "
+      "metadata = {}}> : (i64, i64) -> !nodal.static_predicate\n        %innerZero = ");
+  run("every-captured-alias-use-is-checked", capturedMixed, true, false, false);
+  auto capturedEmpty = replace(
+      replace(captured, "spelling = \"2\", value = 2 : i64", "spelling = \"0\", value = 0 : i64"),
+      "maximum_trip_count = 2", "maximum_trip_count = 0");
+  run("checked-empty-capture-chain", capturedEmpty, true, true, true, true);
+
+  auto unusedCapture = captureBody;
+  auto innerStart = unusedCapture.find("        %innerZero = ");
+  auto innerEnd = unusedCapture.find("        \"nodal.structural_yield\"", innerStart);
+  unusedCapture.erase(innerStart, innerEnd - innerStart);
+  run("unused-capture-not-justified-by-separate-sink",
+      replace(original, "    }) : (i64, i64, i64) -> !nodal.generated_family",
+              unusedCapture + "    }) : (i64, i64, i64) -> !nodal.generated_family"),
+      true, false, false);
+  auto capturedAndDirect = replace(
+      captured, "      %predicate = ",
+      "      \"nodal.instance\"() <{domain_bindings = {}, generated_owner = \"Parent.lanes\", "
+      "generated_induction = \"Parent.lanes.i\", metadata = {}, module = @Child, "
+      "parameter_bindings = {}, sym_name = \"v\"}> : () -> ()\n"
+      "      \"nodal.parameter_override\"(%actual) <{generated_owner = \"Parent.lanes\", "
+      "generated_induction = \"Parent.lanes.i\", instance = @v, parameter = @N, "
+      "metadata = {}}> : (i64) -> ()\n      %predicate = ");
+  run("live-captured-and-direct-ordinary-sinks", capturedAndDirect, true, true, true);
+  auto bothArms =
+      replace(replace(replace(captured, "(%predicate, %actual)", "(%predicate, %actual, %actual)"),
+                      "array<i32: 1, 1, 0>", "array<i32: 1, 1, 1>"),
+              "(!nodal.static_predicate, i64) -> ()", "(!nodal.static_predicate, i64, i64) -> ()");
+  const std::string elseYield =
+      "        \"nodal.structural_yield\"() <{metadata = {semantic_path = "
+      "\"Parent.lanes.choice.else.yield\"}}> : () -> ()";
+  run("unused-counterpart-cannot-borrow-live-arm",
+      replace(bothArms, elseYield, "      ^bb1(%capturedElse: i64):\n" + elseYield), true, false,
+      false);
+  auto inner = captureBody.substr(innerStart, innerEnd - innerStart);
+  inner = replace(inner, "%captured", "%capturedElse");
+  // Original family identity and provenance must name the actual else arm.
+  for (unsigned i = 0; i != 3; ++i) {
+    inner = replace(inner, "Parent.lanes.choice.then.inner", "Parent.lanes.choice.else.inner");
+    inner = replace(inner, "Parent.lanes.choice.then.inner", "Parent.lanes.choice.else.inner");
+  }
+  run("both-captured-arms-reach-original-ordinary-sinks",
+      replace(bothArms, elseYield, "      ^bb1(%capturedElse: i64):\n" + inner + elseYield), true,
+      true, true);
+  // Direct-query controls deliberately mutate ancestry after parsing. A full
+  // body verifier must not be a prerequisite for the producer admission API.
+  for (llvm::StringRef wrapperName : {"nodal.behavioral_if", "nodal.hardware_loop"}) {
+    ++cases;
+    auto ir =
+        mlir::parseSourceString<mlir::ModuleOp>(original, mlir::ParserConfig(&context, false));
+    bool good = false;
+    if (ir) {
+      mlir::Operation *producer = nullptr;
+      ir->walk([&](nodal::ConstExprOp op) { producer = op; });
+      auto *family = producer ? producer->getParentOp() : nullptr;
+      if (family) {
+        mlir::OperationState state(family->getLoc(), wrapperName);
+        state.addAttribute("contract_version",
+                           mlir::StringAttr::get(&context, "bounded-digital-v1"));
+        state.addRegion();
+        auto *wrapper = mlir::Operation::create(state);
+        family->getBlock()->getOperations().insert(family->getIterator(), wrapper);
+        auto *body = new mlir::Block();
+        wrapper->getRegion(0).push_back(body);
+        family->moveBefore(body, body->end());
+        good = mlir::failed(nodal::verifyConstructorBindingIntegerOperation(producer));
+      }
+    }
+    if (!good) {
+      ++failures;
+      llvm::errs() << "CONSTRUCTOR_BINDING_FAIL runtime-ancestry " << wrapperName << '\n';
+    }
+  }
+
+  auto rangeCase = [&](llvm::StringRef name, std::string type, std::string low, std::string high,
+                       std::string value, bool expected, bool exclude = false) {
+    ++cases;
+    std::string text =
+        "module { \"nodal.module\"() <{sym_name = \"Range\", metadata = {}}> ({\n"
+        "\"nodal.parameter\"() <{sym_name = \"X\", type = " +
+        type + ", default_value = " + value + " : " + type +
+        ", classification = \"ordinary\", variability = \"symbolic\", metadata = {}}> : () -> ()\n"
+        "%lo = \"nodal.const_literal\"() <{spelling = \"" +
+        low + "\", value = " + low + " : " + type + ", metadata = {}}> : () -> " + type +
+        "\n"
+        "%hi = \"nodal.const_literal\"() <{spelling = \"" +
+        high + "\", value = " + high + " : " + type + ", metadata = {}}> : () -> " + type +
+        "\n"
+        "\"nodal.parameter_constraint\"(%lo, %hi) <{parameter = @X, constraint_kind = \"range\", "
+        "lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (" +
+        type + ", " + type + ") -> ()\n";
+    if (exclude)
+      text += "\"nodal.parameter_constraint\"(%lo) <{parameter = @X, constraint_kind = "
+              "\"exclude\", lower_inclusive = false, upper_inclusive = false, metadata = {}}> : (" +
+              type + ") -> ()\n";
+    if (type == "ui64") {
+      text = replace(replace(text, "\"nodal.const_literal\"", "\"nodal.constant\""),
+                     "\"nodal.const_literal\"", "\"nodal.constant\"");
+    }
+    text += "}) : () -> () }";
+    auto ir = mlir::parseSourceString<mlir::ModuleOp>(text, mlir::ParserConfig(&context, false));
+    bool good = ir && mlir::succeeded(mlir::verify(*ir)) &&
+                mlir::succeeded(nodal::verifyParameterModel(*ir));
+    if (!ir || good != expected) {
+      ++failures;
+      llvm::errs() << "CONSTRUCTOR_BINDING_FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  rangeCase("mathematical-negative-lower-bound", "i64", "-4", "8", "3", true);
+  rangeCase("mathematical-negative-default", "i64", "-4", "8", "-4", true);
+  rangeCase("mathematical-upper-default", "i64", "-4", "8", "8", true);
+  rangeCase("mathematical-outside-negative-range", "i64", "-4", "8", "-5", false);
+  rangeCase("mathematical-minimum", "i64", "-9223372036854775808", "9223372036854775807",
+            "-9223372036854775808", true);
+  rangeCase("mathematical-maximum", "i64", "-9223372036854775808", "9223372036854775807",
+            "9223372036854775807", true);
+  rangeCase("mathematical-negative-exclusion", "i64", "-4", "8", "-4", false, true);
+  rangeCase("explicit-unsigned-high-bit-preserved", "ui64", "0", "18446744073709551615",
+            "18446744073709551615", true);
+  rangeCase("explicit-unsigned-order-preserved", "ui64", "18446744073709551615",
+            "18446744073709551615", "0", false);
+  llvm::outs() << "CONSTRUCTOR_BINDING_CASES " << cases << " FAILURES " << failures << '\n';
+  return failures ? 1 : 0;
+}
+
+int checkEmptyGeneratedInstanceParameterFacts(mlir::MLIRContext &context) {
+  constexpr llvm::StringLiteral source = R"mlir(module {
+  "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
+    "nodal.parameter"() <{classification = "structural", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "W", type = i64, variability = "symbolic"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 8 : i64, metadata = {}, parameter_kind = "integer", sym_name = "D", type = i64, variability = "symbolic"}> : () -> ()
+    %zero = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0 : i64}> : () -> i64
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %two = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    %eight = "nodal.const_literal"() <{metadata = {}, spelling = "8", value = 8 : i64}> : () -> i64
+    %sixteen = "nodal.const_literal"() <{metadata = {}, spelling = "16", value = 16 : i64}> : () -> i64
+    %huge = "nodal.const_literal"() <{metadata = {}, spelling = "9223372036854775807", value = 9223372036854775807 : i64}> : () -> i64
+    %w = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @W}> : () -> i64
+    %doubled = "nodal.const_expr"(%w, %w) <{metadata = {}, operator_name = "add"}> : (i64, i64) -> i64
+    "nodal.parameter_value"(%doubled) <{metadata = {}, parameter = @D}> : (i64) -> ()
+    "nodal.parameter_constraint"(%one, %eight) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @W}> : (i64, i64) -> ()
+    "nodal.parameter_constraint"(%two, %sixteen) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @D}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["width"], metadata = {}, parameter = @W, policy = "static_generate"}> : () -> ()
+    %independent = "nodal.const_expr"(%one, %one) <{metadata = {}, operator_name = "add"}> : (i64, i64) -> i64
+    %mixed = "nodal.const_expr"(%w, %independent) <{metadata = {}, operator_name = "add"}> : (i64, i64) -> i64
+    %runtime = "nodal.dynamic_value"(%one) <{metadata = {}, origin = "runtime"}> : (i64) -> i64
+  }) : () -> ()
+  "nodal.module"() <{metadata = {}, sym_name = "Parent"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1 : i64, metadata = {}, parameter_kind = "integer", sym_name = "N", type = i64, variability = "fixed"}> : () -> ()
+    %lower = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    %upper = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    %step = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    "nodal.generate"(%lower, %upper, %step) <{induction = "i", region_id = "Parent.lanes", induction_path = "Parent.lanes.i", metadata = {maximum_trip_count = 0 : i64}}> ({
+    ^bb0(%i: i64):
+      "nodal.instance"() <{domain_bindings = {}, generated_owner = "Parent.lanes", generated_induction = "Parent.lanes.i", metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "u"}> : () -> ()
+      "nodal.parameter_override"(%i) <{generated_owner = "Parent.lanes", generated_induction = "Parent.lanes.i", instance = @u, parameter = @W, metadata = {}}> : (i64) -> ()
+    }) : (i64, i64, i64) -> ()
+  }) : () -> ()
+})mlir";
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!module)
+    return fail("empty generated instance parameter fixture did not parse");
+  auto *parent = namedOperation(module->getOperation(), "Parent");
+  auto *child = namedOperation(module->getOperation(), "Child");
+  auto *width = namedOperation(child, "W");
+  auto *dependent = namedOperation(child, "D");
+  auto *instance = namedOperation(parent, "u");
+  auto *scope = instance->getParentOp();
+  auto *override = &scope->getRegion(0).front().back();
+  auto induction = scope->getRegion(0).front().getArgument(0);
+  llvm::SmallVector<mlir::Value> expressions;
+  mlir::Value reference, runtime, zero, one, huge;
+  mlir::Operation *envelope = nullptr;
+  child->walk([&](nodal::ConstExprOp op) { expressions.push_back(op->getResult(0)); });
+  child->walk([&](nodal::ConstParameterRefOp op) { reference = op->getResult(0); });
+  child->walk([&](nodal::DynamicValueOp op) { runtime = op->getResult(0); });
+  child->walk([&](nodal::ParameterEnvelopeOp op) { envelope = op; });
+  child->walk([&](nodal::ConstLiteralOp op) {
+    const auto value = op->getAttrOfType<mlir::IntegerAttr>("value").getInt();
+    if (value == 0)
+      zero = op->getResult(0);
+    if (value == 1)
+      one = op->getResult(0);
+    if (value == std::numeric_limits<int64_t>::max())
+      huge = op->getResult(0);
+  });
+  if (expressions.size() != 3 || !envelope || !reference || !runtime || !zero || !one || !huge)
+    return fail("empty generated instance fixture lost its retained expressions");
+  const auto doubled = expressions[0], independent = expressions[1], mixed = expressions[2];
+  auto parameterFacts = [&](mlir::Operation *formal) {
+    return nodal::resolveGeneratedInstanceIntegerParameterFacts(instance, formal);
+  };
+  auto expressionFacts = [&](mlir::Value value) {
+    return nodal::resolveGeneratedInstanceIntegerExpressionFacts(instance, value);
+  };
+  auto absent = [](const auto &facts) { return mlir::succeeded(facts) && !facts->expression; };
+  auto bounded = [](const auto &facts, int64_t lower, int64_t upper) {
+    return mlir::succeeded(facts) && facts->expression &&
+           facts->expression->bounds.lower == lower && facts->expression->bounds.upper == upper;
+  };
+
+  auto domain = nodal::resolveGeneratedDomain(scope);
+  if (mlir::failed(domain) || domain->maximumTripCount || domain->attainedInductionBounds ||
+      domain->induction != induction)
+    return fail("empty instance facts fixture did not retain actual empty induction ownership");
+  if (mlir::failed(nodal::verifyParameterModel(*module)))
+    return fail("checked empty generated override failed the parameter model validity gate");
+  if (!absent(parameterFacts(width)) || !absent(expressionFacts(reference)))
+    return fail("empty induction override became a default, zero, or invented width interval");
+  if (!absent(parameterFacts(dependent)) || !absent(expressionFacts(doubled)) ||
+      !absent(expressionFacts(mixed)))
+    return fail("dependent child expression did not propagate checked unattainment");
+  if (!bounded(expressionFacts(one), 1, 1) || !bounded(expressionFacts(independent), 2, 2))
+    return fail("checked unattainment incorrectly erased independent child constants");
+  llvm::SmallVector<std::pair<mlir::Value, nodal::InstantiatedIntegerExpression>> selected{
+      {induction, nodal::makeLiteralIntegerExpression(2)}};
+  if (mlir::succeeded(nodal::resolveGeneratedInstanceIntegerParameter(instance, width)) ||
+      mlir::succeeded(nodal::resolveGeneratedInstanceIntegerParameter(instance, dependent)) ||
+      mlir::succeeded(nodal::resolveGeneratedInstanceIntegerExpression(instance, doubled)) ||
+      mlir::succeeded(nodal::resolveSelectedInstanceIntegerParameter(instance, width, selected)) ||
+      mlir::succeeded(
+          nodal::resolveSelectedInstanceIntegerExpression(instance, doubled, selected)) ||
+      mlir::succeeded(nodal::resolveInstanceIntegerParameter(instance, width)))
+    return fail("numeric or selected query manufactured a lane in an empty generated instance");
+
+  const auto type = mlir::IntegerType::get(&context, 64);
+  const auto emptyMetadata = scope->getAttr("metadata");
+  auto *upperLiteral = scope->getOperand(1).getDefiningOp();
+  upperLiteral->setAttr("value", mlir::IntegerAttr::get(type, 5));
+  upperLiteral->setAttr("spelling", mlir::StringAttr::get(&context, "5"));
+  scope->setAttr(
+      "metadata",
+      mlir::DictionaryAttr::get(
+          &context, {mlir::NamedAttribute(mlir::StringAttr::get(&context, "maximum_trip_count"),
+                                          mlir::IntegerAttr::get(type, 3))}));
+  if (!bounded(parameterFacts(width), 2, 4) || !bounded(parameterFacts(dependent), 4, 8) ||
+      !bounded(expressionFacts(doubled), 4, 8))
+    return fail("nonempty instance facts lost actual induction or dependent expression bounds");
+  auto numeric = nodal::resolveGeneratedInstanceIntegerExpression(instance, doubled);
+  auto selectedWidth = nodal::resolveSelectedInstanceIntegerParameter(instance, width, selected);
+  if (mlir::failed(numeric) || numeric->bounds.lower != 4 || numeric->bounds.upper != 8 ||
+      mlir::failed(selectedWidth) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*selectedWidth,
+                                                       nodal::makeLiteralIntegerExpression(2)))
+    return fail("facts extension changed nonempty numeric or selected generated queries");
+  upperLiteral->setAttr("value", mlir::IntegerAttr::get(type, 2));
+  upperLiteral->setAttr("spelling", mlir::StringAttr::get(&context, "2"));
+  scope->setAttr("metadata", emptyMetadata);
+
+  // Unattainment waives no malformed declaration/default/envelope contract.
+  auto savedDefault = width->getAttr("default_value");
+  width->setAttr("default_value", mlir::IntegerAttr::get(type, 9));
+  if (mlir::succeeded(parameterFacts(width)) || mlir::succeeded(expressionFacts(doubled)))
+    return fail("empty actual hid a formal default outside its constraint");
+  width->setAttr("default_value", savedDefault);
+  savedDefault = dependent->getAttr("default_value");
+  dependent->setAttr("default_value", mlir::IntegerAttr::get(type, 9));
+  if (mlir::succeeded(parameterFacts(dependent)))
+    return fail("empty dependent actual hid a mismatched canonical formal default");
+  dependent->setAttr("default_value", savedDefault);
+  auto savedPolicy = envelope->getAttr("policy");
+  envelope->setAttr("policy", mlir::StringAttr::get(&context, "fixed_topology"));
+  if (mlir::succeeded(parameterFacts(width)))
+    return fail("empty actual hid an invalid structural envelope policy");
+  envelope->setAttr("policy", savedPolicy);
+  auto savedEffects = envelope->getAttr("effects");
+  envelope->removeAttr("effects");
+  if (mlir::succeeded(parameterFacts(width)))
+    return fail("empty actual accepted a structural envelope without an effects array");
+  envelope->setAttr("effects", mlir::StringAttr::get(&context, "width"));
+  if (mlir::succeeded(parameterFacts(width)))
+    return fail("empty actual accepted a malformed structural envelope effects array");
+  envelope->setAttr("effects", mlir::ArrayAttr::get(&context, {}));
+  if (mlir::succeeded(parameterFacts(width)))
+    return fail("empty actual accepted an empty structural effects array");
+  envelope->setAttr(
+      "effects", mlir::ArrayAttr::get(&context, {mlir::StringAttr::get(&context, "unsupported")}));
+  if (mlir::succeeded(parameterFacts(width)))
+    return fail("empty actual accepted an unsupported structural effect name");
+  envelope->setAttr("effects", mlir::ArrayAttr::get(&context, {mlir::IntegerAttr::get(type, 1)}));
+  if (mlir::succeeded(parameterFacts(width)))
+    return fail("empty actual accepted a non-string structural effect entry");
+  envelope->setAttr("effects", savedEffects);
+  auto savedVariability = width->getAttr("variability");
+  width->setAttr("variability", mlir::StringAttr::get(&context, "fixed"));
+  if (mlir::succeeded(parameterFacts(width)))
+    return fail("empty actual permitted overriding a fixed child formal");
+  width->setAttr("variability", savedVariability);
+
+  // Labels cannot replace exact lexical ownership, even with no attained lane.
+  for (auto *operation : {instance, override}) {
+    for (auto attribute : {"generated_owner", "generated_induction"}) {
+      auto saved = operation->getAttr(attribute);
+      operation->setAttr(attribute, mlir::StringAttr::get(&context, "Parent.foreign"));
+      if (mlir::succeeded(parameterFacts(width)) || mlir::succeeded(expressionFacts(doubled)))
+        return fail("empty instance facts accepted forged generated ownership");
+      operation->setAttr(attribute, saved);
+    }
+  }
+  override->setOperand(0, reference);
+  if (mlir::succeeded(parameterFacts(width)))
+    return fail("empty generated override accepted foreign-module actual SSA");
+  override->setOperand(0, induction);
+  if (mlir::succeeded(parameterFacts(namedOperation(parent, "N"))) ||
+      mlir::succeeded(expressionFacts(induction)))
+    return fail("empty generated instance accepted a foreign formal or child expression");
+
+  // Visit the independent operand after discovering absence in the first one.
+  // A checked empty dependency is not permission to skip malformed arithmetic.
+  auto *operation = independent.getDefiningOp();
+  operation->setAttr("operator_name", mlir::StringAttr::get(&context, "div"));
+  operation->setOperand(1, zero);
+  if (mlir::succeeded(expressionFacts(mixed)))
+    return fail("empty child dependency hid independent division by zero");
+  operation->setAttr("operator_name", mlir::StringAttr::get(&context, "add"));
+  operation->setOperands({huge, one});
+  if (mlir::succeeded(expressionFacts(mixed)))
+    return fail("empty child dependency hid independent arithmetic overflow");
+  operation->setOperands({one, runtime});
+  if (mlir::succeeded(expressionFacts(mixed)))
+    return fail("empty child dependency hid an independent runtime operand");
+  operation->setOperands({one, independent});
+  const bool acceptedCycle = mlir::succeeded(expressionFacts(mixed));
+  operation->setOperands({one, one});
+  if (acceptedCycle)
+    return fail("empty child dependency hid an independent cyclic operand");
+  if (!absent(parameterFacts(width)) || !absent(parameterFacts(dependent)) ||
+      !absent(expressionFacts(mixed)))
+    return fail("fresh empty instance query retained a prior mutation or failed cache");
+  return 0;
+}
+
+int checkDependentGeneratedBounds(mlir::MLIRContext &context) {
+  const char *source = R"mlir(module {
+  "nodal.module"() <{metadata = {}, sym_name = "Dependent"}> ({
+    %lo = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0 : i64}> : () -> i64
+    %hi = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    %step = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    "nodal.generate"(%lo, %hi, %step) <{induction = "i", region_id = "Dependent.outer", induction_path = "Dependent.outer.i", metadata = {maximum_trip_count = 4 : i64}}> ({
+    ^bb0(%i: i64):
+      %zero = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0 : i64}> : () -> i64
+      %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+      %upper = "nodal.const_expr"(%i, %one) <{metadata = {}, operator_name = "add"}> : (i64, i64) -> i64
+      "nodal.generate"(%zero, %upper, %one) <{induction = "j", region_id = "Dependent.outer.inner", induction_path = "Dependent.outer.inner.j", metadata = {maximum_trip_count = 4 : i64}}> ({
+      ^bb0(%j: i64):
+      }) : (i64, i64, i64) -> ()
+    }) : (i64, i64, i64) -> ()
+  }) : () -> ()
+})mlir";
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!module)
+    return fail("dependent Generate fixture did not parse");
+  llvm::SmallVector<mlir::Operation *> scopes;
+  module->walk([&](nodal::GenerateOp op) { scopes.push_back(op); });
+  if (scopes.size() != 2)
+    return fail("dependent Generate fixture lost exact owners");
+  auto *outer = scopes[0], *inner = scopes[1];
+  if (outer->getAttrOfType<mlir::StringAttr>("region_id").getValue() != "Dependent.outer")
+    std::swap(outer, inner);
+  auto domain = nodal::resolveGeneratedDomain(inner);
+  if (mlir::failed(domain) || domain->maximumTripCount != 4 ||
+      domain->upperExclusive.bounds.lower != 1 || domain->upperExclusive.bounds.upper != 4 ||
+      mlir::failed(nodal::verifyParameterModel(*module)))
+    return fail("actual ancestor induction did not retain bounded dependent domain");
+  // Module-wide dependency caching must not authorize a later sibling use of
+  // the same already-verified regional SSA expression.
+  mlir::Operation *escaped = inner->clone();
+  outer->getBlock()->getOperations().insert(std::next(outer->getIterator()), escaped);
+  bool escapedAccepted = mlir::succeeded(nodal::verifyParameterModel(*module));
+  escaped->erase();
+  if (escapedAccepted)
+    return fail("cached regional bound escaped into a sibling Generate");
+  auto metadata = inner->getAttr("metadata");
+  inner->setAttr(
+      "metadata",
+      mlir::DictionaryAttr::get(
+          &context,
+          {mlir::NamedAttribute(mlir::StringAttr::get(&context, "maximum_trip_count"),
+                                mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 3))}));
+  if (mlir::succeeded(nodal::resolveGeneratedDomain(inner)))
+    return fail("dependent bound accepted forged maximum count");
+  inner->setAttr("metadata", metadata);
+  auto upper = inner->getOperand(1);
+  inner->setOperand(1, inner->getRegion(0).front().getArgument(0));
+  if (mlir::succeeded(nodal::resolveGeneratedDomain(inner)))
+    return fail("inner induction became its own bound");
+  inner->setOperand(1, upper);
+  auto *outerUpper = outer->getOperand(1).getDefiningOp();
+  auto upperAttr = outerUpper->getAttr("value"), outerMetadata = outer->getAttr("metadata");
+  outerUpper->setAttr("value", mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 0));
+  outerUpper->setAttr("spelling", mlir::StringAttr::get(&context, "0"));
+  outer->setAttr(
+      "metadata",
+      mlir::DictionaryAttr::get(
+          &context,
+          {mlir::NamedAttribute(mlir::StringAttr::get(&context, "maximum_trip_count"),
+                                mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 0))}));
+  if (mlir::succeeded(nodal::resolveGeneratedDomain(inner)))
+    return fail("empty ancestor invented an attained induction interval");
+  outerUpper->setAttr("value", upperAttr);
+  outerUpper->setAttr("spelling", mlir::StringAttr::get(&context, "4"));
+  outer->setAttr("metadata", outerMetadata);
+  // A fresh public query must not retain the prior mutation or failure.
+  if (mlir::failed(nodal::resolveGeneratedDomain(inner)))
+    return fail("query-local domain cache survived an independent call");
+  auto i64 = mlir::IntegerType::get(&context, 64);
+  outer->getOperand(0).getDefiningOp()->setAttr("value", mlir::IntegerAttr::get(i64, 2));
+  outer->getOperand(0).getDefiningOp()->setAttr("spelling", mlir::StringAttr::get(&context, "2"));
+  outerUpper->setAttr("value", mlir::IntegerAttr::get(i64, 8));
+  outerUpper->setAttr("spelling", mlir::StringAttr::get(&context, "8"));
+  outer->getOperand(2).getDefiningOp()->setAttr("value", mlir::IntegerAttr::get(i64, 2));
+  outer->getOperand(2).getDefiningOp()->setAttr("spelling", mlir::StringAttr::get(&context, "2"));
+  outer->setAttr(
+      "metadata",
+      mlir::DictionaryAttr::get(
+          &context, {mlir::NamedAttribute(mlir::StringAttr::get(&context, "maximum_trip_count"),
+                                          mlir::IntegerAttr::get(i64, 3))}));
+  inner->setAttr(
+      "metadata",
+      mlir::DictionaryAttr::get(
+          &context, {mlir::NamedAttribute(mlir::StringAttr::get(&context, "maximum_trip_count"),
+                                          mlir::IntegerAttr::get(i64, 7))}));
+  domain = nodal::resolveGeneratedDomain(inner);
+  if (mlir::failed(domain) || domain->maximumTripCount != 7 ||
+      domain->upperExclusive.bounds.lower != 3 || domain->upperExclusive.bounds.upper != 7)
+    return fail("dependent bound lost nonzero positive-step ancestor envelope");
+  llvm::outs() << "Dependent generated bound checks: 7 passed\n";
+  return 0;
+}
+
 int checkGeneratedWaveformParameterLookup(mlir::MLIRContext &context) {
   std::string source = kValid.str();
   const auto end = source.rfind("  }) : () -> ()");
@@ -1188,7 +1807,10 @@ int main() {
   if (checkParameterRenderBudget(context) || checkStaticIntegerMaximum(context) ||
       checkStaticReductionPrimitives(context) || checkMathematicalIntegerMode(context) ||
       checkSymbolicDigitalParameters(context) || checkInstanceParameterQueries(context) ||
-      checkGeneratedParameterQueries(context) || checkGeneratedWaveformParameterLookup(context))
+      checkGeneratedParameterQueries(context) ||
+      checkEmptyGeneratedInstanceParameterFacts(context) ||
+      checkFiniteConstructorBindingPurpose(context) || checkDependentGeneratedBounds(context) ||
+      checkGeneratedWaveformParameterLookup(context))
     return 1;
 
   auto valid = mlir::parseSourceString<mlir::ModuleOp>(kValid, &context);
@@ -1228,6 +1850,69 @@ int main() {
   if (!sawBooleanDag)
     return fail("Boolean comparison and logical expression did not retain structure");
 
+  {
+    mlir::Operation *count = nullptr;
+    valid->walk([&](nodal::ParameterOp op) {
+      if (op->getAttrOfType<mlir::StringAttr>("sym_name").getValue() == "COUNT")
+        count = op;
+    });
+    if (!count)
+      return fail("shared-work parameter fixture absent");
+    auto *owner = count->getParentOp();
+    auto old = nodal::resolveOwnedIntegerParameter(owner, count);
+    unsigned remaining = 65536;
+    auto shared = nodal::resolveOwnedIntegerParameter(owner, count, remaining);
+    unsigned cost = 65536 - remaining;
+    if (mlir::failed(old) || mlir::failed(shared) || cost < 2 ||
+        !nodal::equivalentInstantiatedIntegerExpressions(*old, *shared))
+      return fail("shared-work parameter changed original semantic facts");
+    unsigned zero = 0, shortWork = cost - 1;
+    if (mlir::succeeded(nodal::resolveOwnedIntegerParameter(owner, count, zero)) || zero ||
+        mlir::succeeded(nodal::resolveOwnedIntegerParameter(owner, count, shortWork)) || shortWork)
+      return fail("shared-work parameter replenished an exhausted leaf budget");
+    auto bounds = nodal::inferParameterIntegerBounds(count, remaining);
+    auto ordinary = nodal::inferParameterIntegerBounds(count);
+    if (mlir::failed(bounds) || mlir::failed(ordinary) || remaining >= 65536 - cost ||
+        bounds->lower != ordinary->lower || bounds->upper != ordinary->upper)
+      return fail("shared bound interpreter changed ordinary range or reset work");
+  }
+
+  {
+    auto repeated = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(module {
+      "nodal.module"() <{sym_name="Budget", metadata={}}> ({
+        "nodal.parameter"() <{sym_name="N", type=i64, default_value=1:i64, classification="ordinary", parameter_kind="integer", variability="symbolic", metadata={}}> : () -> ()
+        %lo = "nodal.const_literal"() <{value=1:i64, spelling="1", metadata={}}> : () -> i64
+        %hi = "nodal.const_literal"() <{value=4:i64, spelling="4", metadata={}}> : () -> i64
+        "nodal.parameter_constraint"(%lo,%hi) <{parameter=@N, constraint_kind="range", lower_inclusive=true, upper_inclusive=true, metadata={}}> : (i64,i64) -> ()
+        %n = "nodal.const_parameter_ref"() <{parameter=@N, metadata={}}> : () -> i64
+        %other = "nodal.const_parameter_ref"() <{parameter=@N, metadata={}}> : () -> i64
+        %twice = "nodal.const_expr"(%n,%n) <{operator_name="add", metadata={semantic_path="Budget.twice"}}> : (i64,i64) -> i64
+      }) : () -> ()
+    })mlir",
+                                                            mlir::ParserConfig(&context, false));
+    if (!repeated)
+      return fail("repeated-DAG budget fixture absent");
+    nodal::ConstExprOp twice;
+    mlir::Value other;
+    repeated->walk([&](nodal::ConstExprOp op) { twice = op; });
+    repeated->walk([&](nodal::ConstParameterRefOp op) { other = op->getResult(0); });
+    auto *owner = twice->getParentOp();
+    unsigned sharedWork = 65536, separateWork = 65536;
+    auto shared = nodal::resolveOwnedIntegerExpression(owner, twice->getResult(0), sharedWork);
+    auto ordinary = nodal::resolveOwnedIntegerExpression(owner, twice->getResult(0));
+    twice->setOperand(1, other);
+    auto separate = nodal::resolveOwnedIntegerExpression(owner, twice->getResult(0), separateWork);
+    if (mlir::failed(shared) || mlir::failed(ordinary) || mlir::failed(separate) ||
+        !nodal::equivalentInstantiatedIntegerExpressions(*shared, *ordinary) ||
+        !nodal::equivalentInstantiatedIntegerExpressions(*shared, *separate) ||
+        sharedWork <= separateWork || sharedWork == 65536)
+      return fail("repeated actual DAG did not retain bounded charged memo reuse");
+    unsigned before = sharedWork;
+    if (mlir::failed(
+            nodal::resolveOwnedIntegerExpression(owner, twice->getResult(0), sharedWork)) ||
+        sharedWork >= before)
+      return fail("nested ordinary query replenished shared remaining work");
+  }
   auto badConstraint = mlir::parseSourceString<mlir::ModuleOp>(kBadConstraint, &context);
   if (!badConstraint || mlir::succeeded(nodal::verifyParameterModel(*badConstraint)))
     return fail("range or exclusion constraint was not enforced");

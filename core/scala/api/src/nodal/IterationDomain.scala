@@ -87,6 +87,21 @@ private[nodal] object IterationDomain:
     case "static_integer_choose_zero" => Some(Arithmetic.ChooseZero)
     case _ => None
 
+  /** Reuse only a nonneutral operand after the caller has checked every original operand and
+    * arithmetic bound. These are actual literal facts, never singleton parameter envelopes.
+    */
+  def neutralArithmeticOperand(operation: Arithmetic, literals: Vector[Option[Long]]): Option[Int] =
+    if literals.size != operation.arity then None
+    else
+      operation match
+        case Arithmetic.Add =>
+          if literals(0).contains(0L) then Some(1)
+          else Option.when(literals(1).contains(0L))(0)
+        case Arithmetic.Multiply =>
+          if literals(0).contains(1L) then Some(1)
+          else Option.when(literals(1).contains(1L))(0)
+        case _ => None
+
   /** Wide intermediates also serve trip-count proofs, where distance can exceed signed 64 bits. */
   private def wideArithmetic(
       operation: Arithmetic,
@@ -196,6 +211,17 @@ private[nodal] object IterationDomain:
       wideArithmetic(Arithmetic.Subtract, Vector(upperExclusive, lower)).flatMap: (_, distance) =>
         positiveTripCount(if identicalBounds then BigInt(0) else distance, step.lower, maximum)
           .map(count => Structural(lower, upperExclusive, step, maximum, count))
+
+  /** A selected family ordinal must exist for every legal setting, never only the default. */
+  def verifyOrdinal(domain: Structural, ordinal: Bounds): Either[Problem, Unit] =
+    val distance = BigInt(domain.upperExclusive.lower) - BigInt(domain.lower.upper)
+    positiveTripCount(distance, domain.step.upper, None).flatMap: minimum =>
+      if ordinal.lower < 0L || ordinal.upper >= minimum.toLong then
+        Left(Problem(
+          ProblemKind.OrdinalOutOfBounds,
+          "generated ordinal does not exist for every legal parameter setting"
+        ))
+      else Right(())
 
   /** Conservative attained values for a validated positive domain. Empty domains have no value.
     * Exact fixed endpoints retain the last strided value instead of filling the excluded tail.

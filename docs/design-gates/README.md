@@ -117,7 +117,14 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
   preserve the unified range contract.
 - [NodalStructuralIf-DG v0.1](NodalStructuralIf-DG-v0.1.md): approved bounded
   F55 structural predicates, read-only branch results and guard-qualified writes;
-  supplies only the required symbolic-if portion of the F58 gate.
+  supplies the historical symbolic-if portion of the F58 gate.
+- [NodalAreasHierarchy-DG v0.1](NodalAreasHierarchy-DG-v0.1.md): approved
+  lightweight lexical Areas, typed members and separate-compilation ownership.
+- [NodalGeneratedAreas-DG v0.1](NodalGeneratedAreas-DG-v0.1.md): approved
+  bounded typed Area families, ordinal selection and guarded member ownership.
+  Together these three gates specify the bounded F-058.A.1 extension; its
+  [contract reconciliation](../implementation/increment58-readiness.md#checkpoint-76-additive-area-contract-reconciliation)
+  does not complete F-058.B.2.2 execution or selected generated external writes.
 - [NodalSequentialState-DG v0.1](NodalSequentialState-DG-v0.1.md): approved
   first F56 register/behavioral-guard contract with actual local bindings and
   sequential normalization; remaining flat-FSM and memory work stays open.

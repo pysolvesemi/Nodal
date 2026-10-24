@@ -1,7 +1,7 @@
 # Selected conservative literal parameters
 
-This focused runner maintains the selected one-child conservative parameter
-slice. It does not rebuild a native probe, discover toolchain artifacts, invoke
+This focused runner maintains the selected one-child and shared-anchor two-child conservative parameter
+slices. It does not rebuild a native probe, discover toolchain artifacts, invoke
 CI, certify unsupported parameter combinations, or execute held downstream
 consumer/comparator/firtool work.
 
@@ -63,13 +63,18 @@ six unsupported source forms plus recovery, eight forged snapshot forms, eight
 duplicate-attribute order cases, duplicate-binding transport, and freshly authored
 two-child topology. No generated two-child input is committed.
 
-The native phase makes 25 invocations: nine positive verify/adapt/emit calls,
-twelve named mutation emits, one duplicate-snapshot refusal, and three two-child
-verify/refusal/transaction calls. Assertions retain real parameter use in the
+The native phase makes 28 invocations: nine one-child verify/adapt/emit calls,
+twelve named mutation emits, one duplicate-snapshot refusal, three two-child
+verify/adapt/emit calls, and three independent fixed-override emit/transaction
+checks. The original Scala topology and gain-binding assertions remain intact.
+Two-child output checks retain gains 3/7, default gain 2, the gain equation,
+nonunit occurrence normalization, two child instances/four terminals, fourteen
+correspondence records, and six actual shared-top aliases (four generated and
+two selected at ordinal 1). Assertions retain real parameter use in the
 child equation, different actual/default values, nonunit induction, adapter
 instance/terminal shape, eight correspondence records and flow directions,
 malformed attachment/refusal cases, sixteen additional bindings and a late
-unknown binding, and transactional unsupported-topology refusal. Mutation
+unknown binding, and transactional fixed-override refusals on one-child and two-child inputs. Mutation
 anchors are counted and selected occurrence symbols are derived from fresh MLIR.
 This is a focused text-based boundary regression, not another semantic engine.
 

@@ -1907,3 +1907,70 @@ for explicit inputs, cases and limits. No CI, full qualification or new target
 consumer run was performed. Public pending-geometry callbacks, context/provenance/
 source-order scheduling, nested callback admission and the rest of Foundation 58
 remain open. This is an internal prerequisite checkpoint, not increment completion.
+
+## Checkpoint 57: checked shared-anchor physical identity
+
+The canonical ShapeModel mapper now has a named one-way extension from a checked
+generated occurrence to an invariant scalar projection of a module-owned root.
+It retains authentic relation/projection checks, supported direct Generate scope,
+source inverse and round-trip proof, and transactional result assignment. It
+never guesses a generated lane by inverting a shared scalar. The legacy public
+mapper keeps its ABI and behavior; there is no second graph or layout engine.
+
+ConservativeConnectivity first preserves the existing traversal, shortcuts, edge
+order and terminal results. Only Unknown continues into two bounded searches;
+Equal requires an exact physical-point intersection, not shared component/root
+membership. Both searches spend the original remaining work allowance and a
+cumulative state ceiling including the legacy traversal. Deduplication and
+intersection checks are charged. The existing limits remain 16,384 work and
+1,024 states. Enhanced varying-map work is larger (367 versus 497 in the measured
+case), and left exploration can exhaust before an intersection is reached; this
+is a bounded proof-availability limitation, not permission to increase limits.
+
+Nine authored causal profiles distinguish topology from child count: a one-child
+star already failed before this change, whereas one/two-child chains passed.
+All 18 candidate verify/emit calls pass, preserving the 15 previously successful
+outputs byte-for-byte. The actual rejected pair was the first child's generated
+p[1]/n[1] selectors. Singleton and different-ordinal shared-anchor controls also
+pass, while separate/isolated anchors remain distinct. Thirteen mapper runs
+exercise 1,796 checks, including provenance, malformed/foreign projections,
+reverse refusal, holes/endpoints, output immutability and exact operand capture
+preflight. The latter is not captured-Generate admission.
+
+A separate instrumented test-only source records 111 budget/state queries:
+legacy chain success at 1,792 and refusal at 1,791 remain unchanged; the shared
+star succeeds at 5,429, with explicit dedup/intersection exhaustion below it and
+a cumulative six-state/five-state boundary. Instrumentation only lowers limits
+and is absent from production. Fourteen emitted-source outputs pass 479 topology
+and parameter assertions; these are source/output checks, not simulation.
+Predecessor evidence remains 120 exact matches plus five audited shared-anchor
+expectation changes, not 125 unchanged passes. The earlier maintained run remains
+23 exact plus two obsolete two-child refusal expectations.
+
+The maintained successor now freshly compiles all nine fixtures and passes six
+Scala mains plus 28 native invocations against the checkpoint-56 API, matched
+bridge/plugin and exact native candidate. Its two-child positive checks retain
+gains 3/7, default/equation, nonunit occurrence normalization, real shared-top
+aliases and correspondence inventory. Independent fixed-override backend failures
+replace the obsolete transaction expectation; all existing mutation controls
+remain. An initial bundled/source formatting mismatch correctly refused before
+compilation. A private matching bundle then passed without weakening that gate.
+See [the maintained guide](../../tests/scala/domain-hierarchy/SELECTED_CONSERVATIVE_PARAMETERS.md).
+
+Invariant scalar projections can have an array root. A minimal same-coordinate
+authored control verifies and compares Equal; a different-coordinate raw API
+control stays Unknown, never falsely Equal, and its full module is refused. This
+is not complete alias classification, child-array support or new array backend
+admission. Floating-terminal rejection also remains separate from alias proof.
+Invalid diagnostic-printer and null-parent test-harness attempts are retained
+as invalid evidence, not successes.
+
+Independent code/evidence review and pinned new-hunk formatting pass. Formatting
+rebuilds produce identical objects and executable; inherited unrelated findings
+remain explicit. Original 73 link inputs and 480 dependency hashes stay unchanged,
+including existing CIRCT dependencies: this is Nodal source work, not CIRCT-free
+execution or the held comparator/firtool consumer repair. Compact source/recipe/
+receipt retention and sampled allocation preserve the 36 MiB owned cap and
+235 MiB reserve. No CI or full qualification ran. Pending geometry/context/source
+order, broader selected/backend profiles and the remaining Foundation 58 work
+remain open; this is a partial checkpoint, not increment completion.

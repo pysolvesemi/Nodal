@@ -3124,12 +3124,11 @@ StaticShapeScalarLocation locateStaticShapeScalar(const StaticShapeProjection &r
   return locateStaticShapeScalar(region, point, use, limits);
 }
 
-ShapeRegionProofStatus mapStaticShapeSameOccurrencePoint(const StaticShapeProjection &source,
-                                                         const StaticShapePoint &point,
-                                                         const StaticShapeProjection &destination,
-                                                         Operation *actualRelationUse,
-                                                         StaticShapePoint &result,
-                                                         ShapeRegionProofLimits limits) {
+static ShapeRegionProofStatus
+mapSameOccurrencePoint(const StaticShapeProjection &source, const StaticShapePoint &point,
+                       const StaticShapeProjection &destination, Operation *actualRelationUse,
+                       StaticShapePoint &result, ShapeRegionProofLimits limits,
+                       bool allowInvariantDestination) {
   if (!actualRelationUse || !source.root || !destination.root || !point.root)
     return RegionStatus::Invalid;
   auto selected = [](const StaticShapeProjection &projection) {
@@ -3154,20 +3153,48 @@ ShapeRegionProofStatus mapStaticShapeSameOccurrencePoint(const StaticShapeProjec
   auto status = deriveCheckedIterationImage(source, query, a);
   if (status != RegionStatus::Proved)
     return status;
-  status = deriveCheckedIterationImage(destination, query, b);
-  if (status != RegionStatus::Proved)
-    return status;
-  if (a.iterationCount() != 1 || b.iterationCount() != 1 ||
-      a.iteration->loop != b.iteration->loop ||
-      a.iteration->loop != actualRelationUse->getParentOp() ||
-      !isa<GenerateOp>(a.iteration->loop) || !isa<ModuleOp>(a.iteration->loop->getParentOp()) ||
-      a.iteration->stride <= 0 || a.iteration->stride != b.iteration->stride ||
-      a.iteration->varyingAxis != b.iteration->varyingAxis ||
-      !query.equal(a.iteration->domain.step, b.iteration->domain.step) ||
-      !query.equal(a.iteration->occurrenceWidth, query.one) ||
-      !query.equal(b.iteration->occurrenceWidth, query.one) ||
-      !query.equal(a.iteration->offset, b.iteration->offset))
-    return query.failedStatus();
+  // The optional one-way case has a module-owned, occurrence-invariant
+  // scalar destination. Never attempt to invert it into a generated lane.
+  bool invariantDestination = false;
+  if (allowInvariantDestination) {
+    status = deriveRegion(destination, query, b, true, std::nullopt, true);
+    if (status != RegionStatus::Proved)
+      return status;
+    invariantDestination = b.iterationCount() == 0;
+  }
+  if (invariantDestination) {
+    Operation *definition = destination.root.getDefiningOp();
+    Operation *scope = actualRelationUse->getParentOp();
+    if (!definition || !scope || !isa<GenerateOp>(scope) || !isa<ModuleOp>(scope->getParentOp()) ||
+        definition->getParentOp() != scope->getParentOp() || a.iterationCount() != 1 ||
+        a.iteration->loop != scope || a.iteration->stride <= 0 ||
+        !query.equal(a.iteration->occurrenceWidth, query.one))
+      return query.failedStatus();
+    StaticShapePoint anchor;
+    status = pointFromRegion(b, query, anchor);
+    if (status != RegionStatus::Proved)
+      return status;
+    for (const auto &coordinate : anchor.coordinates)
+      if (!query.invariant(coordinate))
+        return query.failedStatus();
+    if (!anchor.flatOrdinal || !query.invariant(*anchor.flatOrdinal))
+      return query.failedStatus();
+  } else {
+    status = deriveCheckedIterationImage(destination, query, b);
+    if (status != RegionStatus::Proved)
+      return status;
+    if (a.iterationCount() != 1 || b.iterationCount() != 1 ||
+        a.iteration->loop != b.iteration->loop ||
+        a.iteration->loop != actualRelationUse->getParentOp() ||
+        !isa<GenerateOp>(a.iteration->loop) || !isa<ModuleOp>(a.iteration->loop->getParentOp()) ||
+        a.iteration->stride <= 0 || a.iteration->stride != b.iteration->stride ||
+        a.iteration->varyingAxis != b.iteration->varyingAxis ||
+        !query.equal(a.iteration->domain.step, b.iteration->domain.step) ||
+        !query.equal(a.iteration->occurrenceWidth, query.one) ||
+        !query.equal(b.iteration->occurrenceWidth, query.one) ||
+        !query.equal(a.iteration->offset, b.iteration->offset))
+      return query.failedStatus();
+  }
   auto location =
       stridedImage(a) ? locateStridedScalarImage(a, point, query) : locate(a, point, query);
   if (location.status != RegionStatus::Proved)
@@ -3195,14 +3222,34 @@ ShapeRegionProofStatus mapStaticShapeSameOccurrencePoint(const StaticShapeProjec
   auto recovered = dimensions ? pointFlat(roundTrip, query, *dimensions) : std::nullopt;
   if (!original || !recovered || !query.equal(*original, *recovered))
     return query.failedStatus();
-  status = specializeRegion(b, {occurrence}, query);
-  if (status != RegionStatus::Proved)
-    return status;
+  if (!invariantDestination) {
+    status = specializeRegion(b, {occurrence}, query);
+    if (status != RegionStatus::Proved)
+      return status;
+  }
   StaticShapePoint mapped;
   status = pointFromRegion(b, query, mapped);
   if (status == RegionStatus::Proved)
     result = std::move(mapped);
   return status;
+}
+
+ShapeRegionProofStatus mapStaticShapeSameOccurrencePoint(const StaticShapeProjection &source,
+                                                         const StaticShapePoint &point,
+                                                         const StaticShapeProjection &destination,
+                                                         Operation *actualRelationUse,
+                                                         StaticShapePoint &result,
+                                                         ShapeRegionProofLimits limits) {
+  return mapSameOccurrencePoint(source, point, destination, actualRelationUse, result, limits,
+                                false);
+}
+
+ShapeRegionProofStatus mapStaticShapeSameOccurrenceOrInvariantPoint(
+    const StaticShapeProjection &source, const StaticShapePoint &point,
+    const StaticShapeProjection &destination, Operation *actualRelationUse,
+    StaticShapePoint &result, ShapeRegionProofLimits limits) {
+  return mapSameOccurrencePoint(source, point, destination, actualRelationUse, result, limits,
+                                true);
 }
 
 ShapeRegionProofStatus mapStaticShapeOrdinal(const StaticShapeRegion &region,

@@ -347,6 +347,15 @@ ShapeRegionProofStatus mapStaticShapeSameOccurrencePoint(const StaticShapeProjec
                                                          StaticShapePoint &result,
                                                          ShapeRegionProofLimits limits = {});
 
+/// As above, additionally allowing a checked one-way varying point to an
+/// invariant module-owned scalar destination. The source still requires the
+/// original injective direct Generate map and exact inverse/round-trip proof.
+/// This never maps an invariant scalar back to a guessed generated occurrence.
+ShapeRegionProofStatus mapStaticShapeSameOccurrenceOrInvariantPoint(
+    const StaticShapeProjection &source, const StaticShapePoint &point,
+    const StaticShapeProjection &destination, mlir::Operation *actualRelationUse,
+    StaticShapePoint &result, ShapeRegionProofLimits limits = {});
+
 ShapeRegionProofStatus mapStaticShapeOrdinal(const StaticShapeRegion &region,
                                              const InstantiatedIntegerExpression &ordinal,
                                              mlir::Operation *use, StaticShapePoint &result,

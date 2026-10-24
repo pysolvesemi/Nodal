@@ -15,4 +15,6 @@ object ReplayTwoLiteralChildren:
     assert(bindings.contains(Vector("gain" -> "7.0")))
     val text = ScalaToMlirBridge.fromSnapshot(snapshot, Backend.VerilogA).text
     val _ = Files.writeString(Path.of(args(0)), text)
-    println("PASS two-child authored topology; native transactional refusal remains required")
+    println(
+      "PASS two-child authored topology and bindings; native shared-anchor output checks required"
+    )

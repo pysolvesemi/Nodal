@@ -196,8 +196,53 @@ def main():
             require(all(f'.extra{i}({100+i})' in emitted for i in range(16)), 'lost extra bindings')
     native('duplicate-snapshot', 'emit', False, "duplicate key 'gain'")
     native('two-child', 'verify')
-    native('two-child', 'emit', False, 'unproved physical alias identity')
-    require('failure_is_transactional=1' in native('two-child', 'transaction'), 'nontransactional refusal')
+    adapted = native('two-child', 'adapt')
+    emitted = native('two-child', 'emit')
+    for text in ('parameter real gain = 2;', 'V(observed, reference) <+ (gain * 1);',
+                 'i = 2; i < 8; i = i + 2'):
+        require(text in emitted, 'two-child: missing ' + text)
+    require(emitted.count('#(.gain(3))') == 1 and emitted.count('#(.gain(7))') == 1,
+            'two-child: distinct literal bindings lost')
+    require(adapted.count('"nodal.instance"()') == 2 and
+            adapted.count('"nodal.instance_terminal"()') == 4,
+            'two-child: adapter instance/terminal structure mismatch')
+    records = [base64.b64decode(x, validate=True).decode() for x in
+               re.findall(r'// nodal.interface_correspondence mlir-v1 (\S+)', emitted)]
+    require(len(records) == 14 and
+            sum('flow_orientation = "into_component"' in x for x in records) == 2,
+            'two-child: correspondence/flow inventory mismatch')
+    require(all('discipline = "electrical"' in x and 'selected_access = "connect"' in x
+                for x in records), 'two-child: correspondence capability mismatch')
+    bindings = [json.loads(x) for x in re.findall(r'// nodal.array_binding (.+)', emitted)]
+    aliases = [x for x in bindings if x.get('alias_helper') == 'nodal_alias_electrical']
+    selected = [x for x in aliases if not x.get('source_scope')]
+    generated = [x for x in aliases if x.get('source_scope')]
+    require(len(bindings) == 10 and len(selected) == 2 and len(generated) == 4,
+            'two-child: shared-anchor relation inventory mismatch')
+    require(all(x['right']['target_actual'] == 'top' and
+                x['right']['root'] == 'SelectedTwoLiteralParameters.top' for x in aliases),
+            'two-child: relation no longer reaches the actual shared module anchor')
+    require(len({x['left']['root'] for x in generated}) == 4 and
+            len({x['left']['root'] for x in selected}) == 2 and
+            {x['left']['root'] for x in selected} <= {x['left']['root'] for x in generated},
+            'two-child: distinct generated endpoints/selected occurrences lost')
+    require(all(len(x['left']['stages']) == 1 and
+                x['left']['stages'][0]['expression'] == '1' for x in selected),
+            'two-child: selected ordinal changed')
+    require(all(len(x['left']['stages']) == 1 and
+                x['left']['stages'][0]['expression'] == '((i - 2) / 2)' for x in generated),
+            'two-child: nonunit occurrence normalization changed')
+    # Backend failures are independent of the now-supported shared-anchor topology.
+    # Verifier/parser failures cannot exercise the backend transaction mode.
+    require('failure_is_transactional=1' in native('fixed-override', 'transaction'),
+            'fixed-override: nontransactional backend refusal')
+    broken = replace((output / 'two-child.mlir').read_text(),
+                     'variability = "symbolic"', 'variability = "fixed"')
+    (output / 'two-child-fixed-override.mlir').write_text(broken)
+    native('two-child-fixed-override', 'emit', False,
+           'NODAL-PARAMETER-OVERRIDE-001: fixed parameter cannot be overridden')
+    require('failure_is_transactional=1' in native('two-child-fixed-override', 'transaction'),
+            'two-child-fixed-override: nontransactional backend refusal')
     (output / 'summary.json').write_text(json.dumps({'status': 'pass', 'scala_mains': len(mains),
         'native_invocations': native_count, 'historical_old_native_comparisons': 0}, indent=2) + '\n')
     print(f'PASS: {len(mains)} Scala mains; {native_count} native invocations. Results: {output}')

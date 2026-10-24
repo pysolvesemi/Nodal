@@ -2587,107 +2587,145 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
     if (injectiveTree)
       return Alias::Distinct;
   }
-  llvm::SmallVector<StaticShapePoint, 8> pending{std::move(start)};
-  bool uncertain = false;
-  for (unsigned cursor = 0; cursor < pending.size(); ++cursor) {
-    if (++work > maximumWork || pending.size() > maximumStates)
-      return Alias::ResourceLimit;
-    auto relation = comparePoints(pending[cursor], target);
-    if (relation == Alias::Equal)
-      return Alias::Equal;
-    uncertain |= relation == Alias::Unknown;
-    // Copy: appending a mapped point may reallocate pending.
-    StaticShapePoint point = pending[cursor];
-    for (auto [a, b] : families)
-      uncertain |= point.root == a || point.root == b;
-    llvm::SmallPtrSet<Operation *, 4> mappedScopes;
-    for (Operation *scope : familyScopes) {
-      if (!mappedScopes.insert(scope).second)
-        continue;
-      auto found = hiddenEdges.find(scope);
-      if (found == hiddenEdges.end())
-        continue;
-      for (const auto &edge : found->second)
+  // One traversal preserves the legacy edge order and allowances. The
+  // optional continuation spends only the original query's remaining budget.
+  // Its total state ceiling includes the completed legacy traversal.
+  uint64_t totalStates = 0;
+  auto traverse = [&](llvm::SmallVectorImpl<StaticShapePoint> &pending, bool enhanced,
+                      llvm::ArrayRef<StaticShapePoint> opposite) -> Alias {
+    auto append = [&](StaticShapePoint next) {
+      for (const auto &old : pending) {
+        if (enhanced && ++work > maximumWork)
+          return false;
+        if (comparePoints(old, next) == Alias::Equal)
+          return true;
+      }
+      if (enhanced && ++totalStates > maximumStates)
+        return false;
+      pending.push_back(std::move(next));
+      return true;
+    };
+    bool uncertain = false;
+    for (unsigned cursor = 0; cursor < pending.size(); ++cursor) {
+      if (++work > maximumWork || pending.size() > maximumStates)
+        return Alias::ResourceLimit;
+      if (!enhanced) {
+        auto relation = comparePoints(pending[cursor], target);
+        if (relation == Alias::Equal)
+          return Alias::Equal;
+        uncertain |= relation == Alias::Unknown;
+      } else {
+        for (const auto &other : opposite) {
+          if (++work > maximumWork)
+            return Alias::ResourceLimit;
+          if (comparePoints(pending[cursor], other) == Alias::Equal)
+            return Alias::Equal;
+        }
+      }
+      // Copy: appending a mapped point may reallocate pending.
+      StaticShapePoint point = pending[cursor];
+      for (auto [a, b] : families)
+        uncertain |= point.root == a || point.root == b;
+      llvm::SmallPtrSet<Operation *, 4> mappedScopes;
+      for (Operation *scope : familyScopes) {
+        if (!mappedScopes.insert(scope).second)
+          continue;
+        auto found = hiddenEdges.find(scope);
+        if (found == hiddenEdges.end())
+          continue;
+        for (const auto &edge : found->second)
+          for (bool reverse : {false, true}) {
+            if (++work > maximumWork)
+              return Alias::ResourceLimit;
+            const auto &from = reverse ? edge.right : edge.left;
+            const auto &to = reverse ? edge.left : edge.right;
+            if (point.root != from.shape.projection.root)
+              continue;
+            constexpr uint64_t allowance = 512;
+            if (work + allowance > maximumWork)
+              return Alias::ResourceLimit;
+            work += allowance;
+            StaticShapePoint mapped;
+            auto mapper = enhanced ? mapStaticShapeSameOccurrenceOrInvariantPoint
+                                   : mapStaticShapeSameOccurrencePoint;
+            auto status = mapper(from.shape.projection, point, to.shape.projection, edge.site,
+                                 mapped, ShapeRegionProofLimits{allowance, 64});
+            if (status == ShapeRegionProofStatus::ResourceLimit)
+              return Alias::ResourceLimit;
+            if (status != ShapeRegionProofStatus::Proved)
+              continue; // Existing family uncertainty remains; never infer Distinct.
+            if (!append(std::move(mapped)))
+              return Alias::ResourceLimit;
+          }
+      }
+      for (const auto &edge : edges) {
         for (bool reverse : {false, true}) {
           if (++work > maximumWork)
             return Alias::ResourceLimit;
           const auto &from = reverse ? edge.right : edge.left;
-          const auto &to = reverse ? edge.left : edge.right;
+          const auto &region = reverse ? edge.rightRegion : edge.leftRegion;
+          const auto &destination = reverse ? edge.leftRegion : edge.rightRegion;
           if (point.root != from.shape.projection.root)
             continue;
-          constexpr uint64_t allowance = 512;
-          if (work + allowance > maximumWork)
+          // A scalar relation in this exact occurrence directly connects its two
+          // checked points. Aggregate iteration-image remapping is neither needed
+          // nor permission to identify a different occurrence of the template.
+          const auto &to = reverse ? edge.left : edge.right;
+          StaticShapePoint fromPoint, toPoint;
+          if (resolveStaticShapePoint(from.shape.projection, edge.site, fromPoint) ==
+                  ShapeRegionProofStatus::Proved &&
+              comparePoints(point, fromPoint) == Alias::Equal &&
+              resolveStaticShapePoint(to.shape.projection, edge.site, toPoint) ==
+                  ShapeRegionProofStatus::Proved) {
+            if (!append(std::move(toPoint)))
+              return Alias::ResourceLimit;
+            continue;
+          }
+          if (!region || !destination) {
+            uncertain = true;
+            continue;
+          }
+          auto location = locateStaticShapeScalar(*region, point, edge.site);
+          if (location.status == ShapeRegionProofStatus::ResourceLimit)
             return Alias::ResourceLimit;
-          work += allowance;
-          StaticShapePoint mapped;
-          auto status = mapStaticShapeSameOccurrencePoint(
-              from.shape.projection, point, to.shape.projection, edge.site, mapped,
-              ShapeRegionProofLimits{allowance, 64});
+          if (location.membership == ShapeRegionMembership::Outside)
+            continue;
+          if (location.membership != ShapeRegionMembership::Inside || !location.ordinal) {
+            uncertain = true;
+            continue;
+          }
+          StaticShapePoint next;
+          auto status = mapStaticShapeOrdinal(*destination, *location.ordinal, edge.site, next);
           if (status == ShapeRegionProofStatus::ResourceLimit)
             return Alias::ResourceLimit;
-          if (status != ShapeRegionProofStatus::Proved)
-            continue; // Existing family uncertainty remains; never infer Distinct.
-          if (!llvm::any_of(pending, [&](const StaticShapePoint &old) {
-                return comparePoints(old, mapped) == Alias::Equal;
-              }))
-            pending.push_back(std::move(mapped));
+          if (status != ShapeRegionProofStatus::Proved) {
+            uncertain = true;
+            continue;
+          }
+          if (!append(std::move(next)))
+            return Alias::ResourceLimit;
         }
-    }
-    for (const auto &edge : edges) {
-      for (bool reverse : {false, true}) {
-        if (++work > maximumWork)
-          return Alias::ResourceLimit;
-        const auto &from = reverse ? edge.right : edge.left;
-        const auto &region = reverse ? edge.rightRegion : edge.leftRegion;
-        const auto &destination = reverse ? edge.leftRegion : edge.rightRegion;
-        if (point.root != from.shape.projection.root)
-          continue;
-        // A scalar relation in this exact occurrence directly connects its two
-        // checked points. Aggregate iteration-image remapping is neither needed
-        // nor permission to identify a different occurrence of the template.
-        const auto &to = reverse ? edge.left : edge.right;
-        StaticShapePoint fromPoint, toPoint;
-        if (resolveStaticShapePoint(from.shape.projection, edge.site, fromPoint) ==
-                ShapeRegionProofStatus::Proved &&
-            comparePoints(point, fromPoint) == Alias::Equal &&
-            resolveStaticShapePoint(to.shape.projection, edge.site, toPoint) ==
-                ShapeRegionProofStatus::Proved) {
-          if (!llvm::any_of(pending, [&](const StaticShapePoint &old) {
-                return comparePoints(old, toPoint) == Alias::Equal;
-              }))
-            pending.push_back(std::move(toPoint));
-          continue;
-        }
-        if (!region || !destination) {
-          uncertain = true;
-          continue;
-        }
-        auto location = locateStaticShapeScalar(*region, point, edge.site);
-        if (location.status == ShapeRegionProofStatus::ResourceLimit)
-          return Alias::ResourceLimit;
-        if (location.membership == ShapeRegionMembership::Outside)
-          continue;
-        if (location.membership != ShapeRegionMembership::Inside || !location.ordinal) {
-          uncertain = true;
-          continue;
-        }
-        StaticShapePoint next;
-        auto status = mapStaticShapeOrdinal(*destination, *location.ordinal, edge.site, next);
-        if (status == ShapeRegionProofStatus::ResourceLimit)
-          return Alias::ResourceLimit;
-        if (status != ShapeRegionProofStatus::Proved) {
-          uncertain = true;
-          continue;
-        }
-        bool seen = llvm::any_of(pending, [&](const StaticShapePoint &old) {
-          return comparePoints(old, next) == Alias::Equal;
-        });
-        if (!seen)
-          pending.push_back(std::move(next));
       }
     }
-  }
-  return uncertain ? Alias::Unknown : Alias::Distinct;
+    return uncertain ? Alias::Unknown : Alias::Distinct;
+  };
+  llvm::SmallVector<StaticShapePoint, 8> legacy{start};
+  Alias original = traverse(legacy, false, {});
+  if (original != Alias::Unknown)
+    return original;
+  totalStates = legacy.size();
+  legacy.clear();
+  if (++totalStates > maximumStates)
+    return Alias::ResourceLimit;
+  llvm::SmallVector<StaticShapePoint, 8> fromLeft{std::move(start)};
+  if (traverse(fromLeft, true, {}) == Alias::ResourceLimit)
+    return Alias::ResourceLimit;
+  if (++totalStates > maximumStates)
+    return Alias::ResourceLimit;
+  llvm::SmallVector<StaticShapePoint, 8> fromRight{std::move(target)};
+  Alias intersection = traverse(fromRight, true, fromLeft);
+  return intersection == Alias::Equal || intersection == Alias::ResourceLimit ? intersection
+                                                                              : Alias::Unknown;
 }
 
 LogicalResult nodal::verifyConservativeArrayBindings(Operation *scope) {

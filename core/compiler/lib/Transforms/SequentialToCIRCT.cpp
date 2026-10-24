@@ -259,6 +259,9 @@ struct InterfaceTargetFacts {
   bool generatedTemplatesReady = false;
   SmallVector<DigitalInterfaceBoundaryType, 4> generatedTypes;
   SmallVector<DigitalInterfaceTemplateDriver, 4> generatedDrivers;
+  bool selectedInputsReady = false;
+  unsigned interfaceWork = 0;
+  SmallVector<DigitalSelectedInterfaceInput> selectedInputs;
 };
 struct HierarchyTargetPlan {
   std::shared_ptr<HierarchyModel> proof;
@@ -2183,11 +2186,13 @@ private:
     DictionaryAttr layout;
   };
   struct GeneratedInstanceInput {
-    DigitalSelectedInputAssignment assignment;
-    Type laneType;
+    Operation *family;
+    Type originalType, laneType;
+    SmallVector<DigitalSelectedInterfaceInputLane> lanes;
   };
   llvm::MapVector<InstanceLogicalPortKey, GeneratedInstanceInput> generatedInstanceInputs;
   llvm::DenseSet<Operation *> selectedInstanceInputs;
+  SmallVector<DigitalSelectedInterfaceInput> selectedInterfaceInputs;
   llvm::DenseMap<InstanceLogicalPortKey, Value> generatedInstanceInputValues;
   struct SelectedInstanceRead {
     InstanceLogicalPortKey key;
@@ -2511,12 +2516,38 @@ private:
           return reject(assignment.instance, "selected input exceeds fixed scalar carrier budget");
         cost += assignment.lanes.size() + 16;
         InstanceLogicalPortKey key{assignment.instance, {assignment.port, Attribute()}};
-        generatedInstanceInputs.try_emplace(key, GeneratedInstanceInput{assignment, type});
+        GeneratedInstanceInput input{assignment.family, original, type, {}};
+        for (const auto &lane : assignment.lanes)
+          input.lanes.push_back({lane.ordinal, lane.assignment->getOperand(0), lane.source,
+                                 lane.assignment, nullptr});
+        generatedInstanceInputs.try_emplace(key, std::move(input));
         for (const auto &lane : assignment.lanes)
           staticOperations.insert(lane.assignment); // Consumed by the exact input transport.
       }
       for (Operation *op : selectedInstanceInputs)
         staticOperations.insert(op); // A destination view, never an output read or SSA producer.
+    }
+    llvm::DenseMap<Operation *, Value> certifiedInterfaceInputEffects;
+    for (const auto &fact : selectedInterfaceInputs) {
+      auto type = dyn_cast_if_present<IntegerType>(targetValueType(fact.type));
+      if (!type || fact.lanes.empty() || fact.lanes.size() > maximumWidth / type.getWidth() ||
+          fact.lanes.size() + 16 > maximumGeneratedOperations - cost)
+        return reject(fact.instance, "selected Interface input exceeds fixed scalar carrier budget");
+      cost += fact.lanes.size() + 16;
+      InstanceLogicalPortKey key{fact.instance, {fact.endpoint, fact.path}};
+      GeneratedInstanceInput input{fact.family, fact.type, type, {}};
+      llvm::append_range(input.lanes, fact.lanes);
+      if (!generatedInstanceInputs.try_emplace(key, std::move(input)).second)
+        return reject(fact.instance, "selected Interface input repeats its original logical leaf");
+      for (const auto &lane : fact.lanes) {
+        if (!lane.selection || !isa<InterfaceBoundaryOp>(lane.selection) ||
+            !lane.effect || !isa<InterfaceDriveOp>(lane.effect))
+          return reject(fact.instance, "selected Interface input lost its certified effect/selection");
+        certifiedInterfaceInputEffects.try_emplace(lane.effect, lane.target);
+        staticOperations.insert(lane.effect);
+        staticOperations.insert(lane.selection);
+        staticOperations.insert(lane.target.getDefiningOp());
+      }
     }
     for (const auto &access : interfaceAccesses) {
       if (cost >= maximumGeneratedOperations)
@@ -2530,6 +2561,47 @@ private:
       if (endpointIndex == interfaceEndpoints.end())
         return reject(op, "selected Interface member lost its complete original endpoint");
       const auto &endpoint = endpoints[endpointIndex->second];
+      if (access.identity.access.getValue() == "in") {
+        InstanceLogicalPortKey key{endpoint.instance, {endpoint.declaration, access.identity.path}};
+        auto input = generatedInstanceInputs.find(key);
+        if (input == generatedInstanceInputs.end())
+          return reject(op, "selected Interface input lacks its complete certified lane writers");
+        for (OpOperand &use : access.value.getUses()) {
+          if (cost >= maximumGeneratedOperations)
+            return reject(op, "selected Interface input uses exceed target operation budget");
+          ++cost;
+          Operation *effect = use.getOwner();
+          if (use.getOperandNumber() == 0 &&
+              certifiedInterfaceInputEffects.lookup(effect) == access.value)
+            continue;
+          // Observation is a verified zero-result effect, not a readable SSA
+          // input carrier. It must name the exact already-certified selection;
+          // observing an otherwise unauthored input does not activate this path.
+          if (!isa<InterfaceObserveOp>(effect) ||
+              effect->getParentOp() != source.getOperation() ||
+              effect->getNumOperands() != 1 || effect->getNumResults() != 0 ||
+              use.getOperandNumber() != 0 || effect->getOperand(0) != access.value ||
+              input->second.originalType != access.leaf.type ||
+              access.value.getType() != access.leaf.type)
+            return reject(op, "selected Interface input requires destination-only member uses");
+          bool certifiedSelection = false;
+          for (const auto &lane : input->second.lanes) {
+            if (cost >= maximumGeneratedOperations)
+              return reject(effect, "selected Interface observation exceeds target operation budget");
+            ++cost;
+            if (lane.selection == access.identity.selection) {
+              certifiedSelection = true;
+              break;
+            }
+          }
+          if (!certifiedSelection)
+            return reject(effect, "selected Interface observation requires its exact certified lane selection");
+          staticOperations.insert(effect);
+        }
+        staticOperations.insert(op);
+        staticOperations.insert(access.identity.selection);
+        continue;
+      }
       if (access.identity.access.getValue() != "out")
         return reject(op, "selected Interface target requires an original ordinary output");
       Operation *selection = access.identity.selection;
@@ -3212,7 +3284,7 @@ private:
           auto input = generatedInstanceInputs.find(key);
           if (input == generatedInstanceInputs.end())
             continue;
-          if (parent || input->second.assignment.family != &op ||
+          if (parent || input->second.family != &op ||
               op.getParentOp() != source.getOperation() || !port.input || port.inout ||
               port.splitRoute || !generatedBusType(input->second.laneType, family.capacity))
             return reject(instance, "selected input requires its exact direct ordinary family");
@@ -3220,7 +3292,7 @@ private:
           appendGeneratedPort(family.ports, {}, true,
                               family.captures.size() + family.inputs.size() - 1,
                               input->second.laneType, key.second.first,
-                              key.second.first->getAttrOfType<TypeAttr>("type").getValue());
+                              input->second.originalType);
         }
       }
       for (auto [index, out] : llvm::enumerate(family.outputs))
@@ -4097,10 +4169,10 @@ private:
         const auto &input = generatedInstanceInputs.find(key)->second;
         SmallVector<Value> lanes;
         // comb.concat is MSB-first; checked ordinal zero occupies the low slice.
-        for (const auto &lane : llvm::reverse(input.assignment.lanes)) {
+        for (const auto &lane : llvm::reverse(input.lanes)) {
           Value actual = values.lookup(capturedValue(lane.source));
           if (!actual || actual.getType() != input.laneType)
-            return reject(lane.assignment, "selected input actual RHS did not map");
+            return reject(lane.effect, "selected input actual RHS did not map");
           lanes.push_back(actual);
         }
         Value bus = lanes.front();
@@ -4823,6 +4895,35 @@ private:
       endpoints = localEndpoints;
       interfaceAccesses = localInterfaceAccesses;
     }
+    // The existing endpoint/access inventory activates selected-input transport.
+    // Ordinary Interface modules retain their old query path and target fees.
+    bool hasSelectedInput = false;
+    unsigned selectedInputUses = 0;
+    for (const auto &access : interfaceAccesses) {
+      if (hasSelectedInput)
+        break;
+      if (!access.identity.selection || access.identity.access.getValue() != "in")
+        continue;
+      for (OpOperand &use : access.value.getUses()) {
+        if (++selectedInputUses > maximumAuthoredOperations)
+          return reject(source, "selected Interface drive inventory exceeds authored-work budget");
+        if (use.getOperandNumber() == 0 && isa<InterfaceDriveOp>(use.getOwner())) {
+          hasSelectedInput = true;
+          break;
+        }
+      }
+    }
+    if (hasSelectedInput && !templateFacts->selectedInputsReady) {
+      SmallVector<DigitalInterfaceValueDependencies> dependencies;
+      if (failed(collectDigitalInterfaceDependencies(source, dependencies, nullptr, nullptr,
+                                                     templateFacts->selectedInputs,
+                                                     templateFacts->interfaceWork)))
+        return failure();
+      templateFacts->selectedInputsReady = true;
+    }
+    // Interface verification owns its independent structural cap. Only actual
+    // transfer/carrier work is charged to this target's shared counter below.
+    selectedInterfaceInputs = templateFacts->selectedInputs;
     SmallVector<std::pair<Operation *, Operation *>> typeSeeds;
     SmallVector<LogicalPortKey> typeKeys;
     llvm::DenseSet<LogicalPortKey> seenTypes;

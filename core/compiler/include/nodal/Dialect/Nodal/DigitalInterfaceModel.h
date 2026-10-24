@@ -8,6 +8,8 @@
 
 #include "llvm/ADT/SmallVector.h"
 
+#include <cstdint>
+
 namespace nodal {
 /// Resolve the original endpoint's actual lexical definition, preserving regional
 /// precedence and scope. This shallow query does not build a connectivity graph.
@@ -205,6 +207,25 @@ struct DigitalResolvedTopology {
   llvm::SmallVector<DigitalResolvedComponent> components;
   llvm::SmallVector<DigitalResolvedEndpoint> endpoints;
 };
+/// Complete declaration-owned ordinary child input leaf, not a proxy identity.
+/// Ordinals index authored lanes; selection retains the checked lower/step proof
+/// ingress. Borrowed facts remain valid only while the original IR is unchanged.
+struct DigitalSelectedInterfaceInputLane {
+  int64_t ordinal = 0;
+  mlir::Value target, source;
+  mlir::Operation *effect = nullptr;
+  mlir::Operation *selection = nullptr;
+};
+struct DigitalSelectedInterfaceInput {
+  mlir::Operation *instance = nullptr;
+  mlir::Operation *endpoint = nullptr;
+  mlir::Operation *member = nullptr;
+  mlir::Operation *family = nullptr;
+  mlir::StringAttr path;
+  mlir::Type type;
+  llvm::SmallVector<DigitalSelectedInterfaceInputLane, 4> lanes;
+};
+
 /// Append dependencies and optional coherent observations transactionally after
 /// one shared validation. Unaccessed or undriven external leaves do not create
 /// observations. Ordering follows canonical values in authored source order;
@@ -213,6 +234,17 @@ mlir::LogicalResult collectDigitalInterfaceDependencies(
     mlir::Operation *module, llvm::SmallVectorImpl<DigitalInterfaceValueDependencies> &dependencies,
     llvm::SmallVectorImpl<DigitalInterfaceObservationGroup> *observations = nullptr,
     DigitalResolvedTopology *topology = nullptr);
+/// One Interface-owned verification/counter for dependencies and complete
+/// selected-input facts. interfaceWorkConsumed is OUTPUT ONLY, including on
+/// failure; it is never an Assignment or target budget balance. Existing callers
+/// retain the overload above and its unchanged limits and behavior.
+mlir::LogicalResult collectDigitalInterfaceDependencies(
+    mlir::Operation *module,
+    llvm::SmallVectorImpl<DigitalInterfaceValueDependencies> &dependencies,
+    llvm::SmallVectorImpl<DigitalInterfaceObservationGroup> *observations,
+    DigitalResolvedTopology *topology,
+    llvm::SmallVectorImpl<DigitalSelectedInterfaceInput> &selectedInputs,
+    unsigned &interfaceWorkConsumed);
 } // namespace nodal
 
 #endif

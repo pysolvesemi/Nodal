@@ -140,6 +140,72 @@ std::string generatedFamily(StringRef name, StringRef count, const std::string &
          " : i64, semantic_path = \"Top." + n + "\"}}> ({^bb0(%" + n + "_index: i64):\n" + body +
          "}) : (i64, i64, i64) -> !nodal.generated_family\n";
 }
+std::string selectedInterfaceDrive(StringRef target, StringRef source) {
+  return "\"nodal.interface_drive\"(%" + target.str() + ", %" + source.str() +
+         ") <{metadata = {interface_abi_version = 1 : i64}}> : (" + bit + ", " + bit + ") -> ()\n";
+}
+std::string selectedInterfaceFixture() {
+  const std::string version = "interface_abi_version = 1 : i64";
+  auto entry = [&](StringRef path) {
+    return "{path = \"" + path.str() + "\", access = \"in\", leaf_role = \"consumer\", "
+           "nested_roles = [], nested_interfaces = []}";
+  };
+  std::string definition =
+      "\"nodal.interface\"() <{sym_name = \"Bus\", metadata = {" + version +
+      ", semantic_identity = \"SelectedInputBus\"}}> ({\n" +
+      "\"nodal.interface_role\"() <{sym_name = \"consumer\", kind = \"explicit\", metadata = {" +
+      version + ", access = [" + entry("first") + ", " + entry("second") + "]}}> : () -> ()\n";
+  for (StringRef name : {"first", "second"})
+    definition += "\"nodal.interface_member\"() <{sym_name = \"" + name.str() +
+                  "\", type = " + bit + ", protocol = \"plain\", roles = [\"consumer\"], metadata = {" +
+                  version + ", analog = {}}}> : () -> ()\n";
+  definition += "}) : () -> ()\n";
+  auto member = [&](StringRef value, StringRef endpoint, StringRef path) {
+    return "%" + value.str() + " = \"nodal.member_access\"() <{instance = @" + endpoint.str() +
+           ", path = \"" + path.str() + "\", metadata = {" + version +
+           ", role = \"consumer\"}}> : () -> " + bit + "\n";
+  };
+  std::string endpoint =
+      "\"nodal.interface_instance\"() <{sym_name = \"endpoint\", definition = @Bus, role = "
+      "\"consumer\", metadata = {" + version +
+      ", dimensions = [], domain = @req, semantic_path = \"Lane.endpoint\"}}> : () -> ()\n";
+  std::string abi = "\"nodal.interface_abi\"() <{logical_path = \"Lane.endpoint\", layout_policy = "
+                    "\"structural\", members = [";
+  for (StringRef path : {"first", "second"}) {
+    if (path == "second") abi += ", ";
+    abi += "{path = \"" + path.str() + "\", type = " + bit +
+           ", role = \"consumer\", access = \"in\", nested_roles = [], nested_interfaces = []}";
+  }
+  abi += "], metadata = {" + version + ", instance = @endpoint}}> : () -> ()\n";
+  std::string body =
+      "\"nodal.instance\"() <{sym_name = \"lane\", module = @Lane, parameter_bindings = {}, "
+      "domain_bindings = {req = @a}, generated_owner = \"Top.lanes\", generated_induction = "
+      "\"Top.lanes.index\", metadata = {}}> : () -> ()\n" + binding("lane", "req", "a") +
+      "\"nodal.generated_export\"() <{target = @lane, kind = \"instance\", member = \"child\", "
+      "access = \"read\", metadata = {}}> : () -> ()\n";
+  std::string top = domain("a") + domain("b") + port("x", "input", "a") + port("y", "input", "a") +
+                    generatedFamily("lanes", "2", body);
+  for (unsigned lane = 0; lane < 2; ++lane) {
+    std::string n = std::to_string(lane);
+    top += "\"nodal.interface_boundary\"(%lanes, %lanes_" + std::string(lane ? "step" : "lo") +
+           ") <{sym_name = \"selected" + n + "\", instance = @lane, endpoint = \"endpoint\", "
+           "member = \"child\", metadata = {" + version +
+           ", dimensions = [], semantic_path = \"Top.selected" + n +
+           "\", actual_types = [{path = \"first\", type = " + bit +
+           "}, {path = \"second\", type = " + bit +
+           "}]}}> : (!nodal.generated_family, i64) -> ()\n";
+    top += member("first" + n, "selected" + n, "first") +
+           member("second" + n, "selected" + n, "second");
+  }
+  top += selectedInterfaceDrive("first1", "y") + selectedInterfaceDrive("second1", "x") +
+         selectedInterfaceDrive("first0", "x") + selectedInterfaceDrive("second0", "y");
+  std::string child = requirement("req") + definition + endpoint + abi +
+                      member("input", "endpoint", "first") + port("out", "output", "req") +
+                      assign("out", "input");
+  return "module attributes {nodal.root.module = @Top} {\n" + module("Top", top) +
+         module("Lane", child) + "}\n";
+}
+
 std::string generatedChild(StringRef family) {
   std::string scope = "generated_owner = \"Top." + family.str() +
                       "\", generated_induction = \"Top." + family.str() + ".index\", ";
@@ -2469,6 +2535,137 @@ int main() {
       llvm::errs() << "FAIL " << name << '\n' << diagnostics;
     }
   }
+
+  auto selectedInterfaceQuery = [&](StringRef name, std::string source, bool expected) {
+    ++count;
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    SmallVector<nodal::DigitalInterfaceValueDependencies> dependencies;
+    SmallVector<nodal::DigitalSelectedInterfaceInput> facts;
+    unsigned work = 123; // Output-only, never an imported Assignment balance.
+    bool actual = parsed && succeeded(nodal::collectDigitalInterfaceDependencies(
+        &parsed->getBody()->front(), dependencies, nullptr, nullptr, facts, work));
+    if (actual) {
+      actual = facts.size() == 2 && work > 0;
+      SmallVector<nodal::DigitalInterfaceValueDependencies> repeatedDependencies;
+      SmallVector<nodal::DigitalSelectedInterfaceInput> repeatedFacts;
+      unsigned repeatedWork = ~0u;
+      actual &= succeeded(nodal::collectDigitalInterfaceDependencies(
+          &parsed->getBody()->front(), repeatedDependencies, nullptr, nullptr,
+          repeatedFacts, repeatedWork)) && repeatedWork == work && repeatedFacts.size() == facts.size();
+      for (const auto &fact : facts) {
+        actual &= fact.instance && fact.endpoint && fact.member && fact.family &&
+                  fact.lanes.size() == 2;
+        for (auto [index, lane] : llvm::enumerate(fact.lanes))
+          actual &= lane.ordinal == static_cast<int64_t>(index) &&
+                    isa<nodal::InterfaceBoundaryOp>(lane.selection) &&
+                    isa<nodal::InterfaceDriveOp>(lane.effect) &&
+                    lane.effect->getOperand(0) == lane.target &&
+                    lane.effect->getOperand(1) == lane.source;
+      }
+    }
+    if (!parsed || actual != expected) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  const auto interfaceInputs = selectedInterfaceFixture();
+  selectedInterfaceQuery("selected-interface-complete-two-leaves-reversed-writers", interfaceInputs, true);
+  selectedInterfaceQuery("selected-interface-unobserved-leaf-missing-lane",
+      replace(interfaceInputs, selectedInterfaceDrive("second0", "y"), ""), false);
+  auto noSecondWriters = replace(interfaceInputs, selectedInterfaceDrive("second0", "y"), "");
+  noSecondWriters = replace(noSecondWriters, selectedInterfaceDrive("second1", "x"), "");
+  selectedInterfaceQuery("selected-interface-declared-leaf-zero-writers", noSecondWriters, false);
+  selectedInterfaceQuery("selected-interface-duplicate-writer",
+      replace(interfaceInputs, selectedInterfaceDrive("first0", "x"),
+              selectedInterfaceDrive("first0", "x") + selectedInterfaceDrive("first0", "y")), false);
+  selectedInterfaceQuery("selected-interface-duplicate-lane-alias",
+      replace(interfaceInputs, "interface_boundary\"(%lanes, %lanes_step)",
+                              "interface_boundary\"(%lanes, %lanes_lo)"), false);
+  selectedInterfaceQuery("selected-interface-forged-child",
+      replace(interfaceInputs, "sym_name = \"selected0\", instance = @lane",
+                              "sym_name = \"selected0\", instance = @missing"), false);
+  auto signedInterface = interfaceInputs;
+  for (size_t pos = 0; (pos = signedInterface.find(bit, pos)) != std::string::npos; pos += 14)
+    signedInterface.replace(pos, bit.size(), "!nodal.sint<1>");
+  selectedInterfaceQuery("selected-interface-signed-profile-remains-closed", signedInterface, false);
+  auto noSecondAccesses = noSecondWriters;
+  for (StringRef value : {"second0", "second1"}) {
+    auto begin = noSecondAccesses.find("%" + value.str() + " =");
+    auto end = noSecondAccesses.find('\n', begin);
+    noSecondAccesses.erase(begin, end - begin + 1);
+  }
+  selectedInterfaceQuery("selected-interface-required-leaf-never-accessed", noSecondAccesses, false);
+  auto missingEndpoint = interfaceInputs;
+  auto childBegin = missingEndpoint.find("sym_name = \"Lane\"");
+  auto endpointBegin = missingEndpoint.find("\"nodal.interface_instance\"", childBegin);
+  auto endpointEnd = missingEndpoint.find("%input =", endpointBegin);
+  auto spareEndpoint = missingEndpoint.substr(endpointBegin, endpointEnd - endpointBegin);
+  for (size_t pos = 0; (pos = spareEndpoint.find("endpoint", pos)) != std::string::npos; pos += 5)
+    spareEndpoint.replace(pos, 8, "spare");
+  missingEndpoint.insert(endpointEnd, spareEndpoint);
+  selectedInterfaceQuery("selected-interface-unprojected-required-endpoint", missingEndpoint, false);
+  auto templateInterface = interfaceInputs;
+  std::string templateDriver =
+      "\"nodal.interface_boundary\"() <{sym_name = \"bodyEndpoint\", instance = @lane, "
+      "endpoint = \"endpoint\", metadata = {interface_abi_version = 1 : i64, "
+      "semantic_path = \"Top.bodyEndpoint\"}}> : () -> ()\n"
+      "%bodyInput = \"nodal.member_access\"() <{instance = @bodyEndpoint, path = \"first\", "
+      "metadata = {interface_abi_version = 1 : i64, role = \"consumer\"}}> : () -> " + bit + "\n" +
+      selectedInterfaceDrive("bodyInput", "x");
+  auto bodyExport = templateInterface.find("\"nodal.generated_export\"");
+  templateInterface.insert(bodyExport, templateDriver);
+  selectedInterfaceQuery("selected-interface-template-writer-collision", templateInterface, false);
+  auto stridedInterface = interfaceInputs;
+  stridedInterface = replace(stridedInterface, "value = 0 : i64, spelling = \"0\"",
+                                              "value = 4 : i64, spelling = \"4\"");
+  stridedInterface = replace(stridedInterface, "value = 2 : i64, spelling = \"2\"",
+                                              "value = 8 : i64, spelling = \"8\"");
+  stridedInterface = replace(stridedInterface, "value = 1 : i64, spelling = \"1\"",
+                                              "value = 2 : i64, spelling = \"2\"");
+  auto firstBoundary = stridedInterface.find("\"nodal.interface_boundary\"");
+  stridedInterface.insert(firstBoundary,
+      "%ordinal0 = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\", metadata = {}}> : () -> i64\n"
+      "%ordinal1 = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\", metadata = {}}> : () -> i64\n");
+  stridedInterface = replace(stridedInterface, "interface_boundary\"(%lanes, %lanes_lo)",
+                                              "interface_boundary\"(%lanes, %ordinal0)");
+  stridedInterface = replace(stridedInterface, "interface_boundary\"(%lanes, %lanes_step)",
+                                              "interface_boundary\"(%lanes, %ordinal1)");
+  selectedInterfaceQuery("selected-interface-ordinal-not-induction-coordinate", stridedInterface, true);
+  ++count;
+  diagnostics.clear();
+  auto budgetInterface = parseSourceString<mlir::ModuleOp>(interfaceInputs, ParserConfig(&context, false));
+  bool budgetRejected = false;
+  if (budgetInterface) {
+    auto hierarchy = nodal::HierarchyModel::create(budgetInterface->getOperation());
+    nodal::DigitalAssignmentProofLimits limits;
+    limits.maximumGuardWork = 1;
+    budgetRejected = succeeded(hierarchy) && failed(nodal::verifyHierarchyDependencies(*hierarchy, limits));
+  }
+  if (!budgetRejected) {
+    ++failures;
+    llvm::errs() << "FAIL selected-interface-existing-low-selection-budget\n" << diagnostics;
+  }
+  check("selected-interface-input-hierarchy-transfers-unused-leaf", interfaceInputs, true);
+  auto interfaceCycle = replace(interfaceInputs, assign("out", "input"), assign("out", "out"));
+  check("selected-interface-input-unused-child-cycle", interfaceCycle, false);
+  // Combinational observations retain source provenance but are not strict CDC
+  // samples. Exercise that provenance through an actual parent register sample.
+  std::string strictInterfaceSample =
+      "%sampledInterfaceOutput = \"nodal.instance_port\"(%lanes, %lanes_step) "
+      "<{member = \"child\", instance = @lane, port = \"out\", direction = \"output\", "
+      "metadata = {}}> : (!nodal.generated_family, i64) -> " + bit + "\n"
+      "%interfaceSample = \"nodal.digital_storage\"() <{name = \"interfaceSample\", "
+      "kind = \"register\", domain = @a, metadata = {}}> : () -> " + bit + "\n" +
+      assign("interfaceSample", "sampledInterfaceOutput", "register_next");
+  auto interfaceSampled = replace(interfaceInputs, selectedInterfaceDrive("second0", "y"),
+      selectedInterfaceDrive("second0", "y") + strictInterfaceSample);
+  check("selected-interface-input-strict-matching-domain", interfaceSampled, true);
+  auto interfaceForeign = replace(interfaceSampled, "sym_name = \"y\", type = " + bit +
+      ", direction = \"input\", domain = @a", "sym_name = \"y\", type = " + bit +
+      ", direction = \"input\", domain = @b");
+  check("selected-interface-input-actual-foreign-domain", interfaceForeign, false,
+        "NODAL-CDC-001: foreign or unresolved input domain is sampled without an explicit crossing");
 
   check("generated-child-guarded-capture", guardedGeneratedFixture(), true);
   check("generated-child-guarded-raw-outer-rejected", guardedGeneratedFixture(true), false,

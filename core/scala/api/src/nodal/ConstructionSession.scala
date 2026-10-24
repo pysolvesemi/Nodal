@@ -3796,8 +3796,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     ).toSet
     val continuousWriteCounts = mutable.HashMap.empty[DeclarationRef, Int]
     val selectedInputInstances = mutable.HashSet.empty[InstanceRecord]
+    val selectedInterfaceInstances = mutable.HashSet.empty[InstanceRecord]
+    def selectedInterfaceInputs: Boolean = selectedInterfaceInstances.nonEmpty
     val continuousDrivers = mutable.HashMap.empty[DeclarationRef, Vector[Any]]
     publicationElements(operations.iterator).filter(operation =>
+      if operation.kind == "interface-drive" then
+        operation.values.headOption.collect { case endpoint: InterfaceEndpoint => endpoint }.foreach:
+          endpoint =>
+            Option(declarationIds.get(DigitalInterfaceContract.root(endpoint))).flatMap(
+              instanceInterfacePorts.get
+            ).filter(_.generated.nonEmpty).foreach: binding =>
+              publicationCharge(2L)
+              selectedInterfaceInstances += binding.instance.get
+              selectedInputInstances += binding.instance.get
       Set("assignment", "value-connect").contains(operation.kind) && operation.values.size == 2
     ).foreach: operation =>
       val target =
@@ -3876,6 +3887,43 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ).getOrElse(crossingFailure("selected input driver is absent"))
       requireSelectedInputTarget(proxy, binding, proxy.module)
       proxy
+    def selectedInterfaceDriver(
+        port: DeclarationRef,
+        member: String,
+        selection: GeneratedSymbolSelectionRecord
+    ): DeclarationRef =
+      val family = selection.reference.family.generatedRegion
+      val exported = generatedAreaPath(family, selection.reference.members).members.getOrElse(
+        selection.member, crossingFailure("selected Interface instance export is absent")
+      )
+      val instance = generatedInstanceExportTarget(family, exported)._2
+      val bindings = publicationElements(instanceInterfacePorts.iterator).filter:
+        (_, binding) => binding.instance.exists(_ eq instance) && binding.port == port
+      val aliases = bindings.toVector
+      publicationCharge(aliases.size.toLong * 3L)
+      val paths = aliases.map((proxy, _) => s"${declarationPath(proxy)}.$member").toSet +
+        s"${declarationPath(port)}.$member"
+      val effects = publicationElements(interfaces.connectivity).filter(effect =>
+        (effect.kind == "interface-drive" || effect.kind == "interface-connect") &&
+          (paths(effect.target) || effect.kind == "interface-connect" && effect.source.exists(paths))
+      ).toVector
+      val lane = aliases.filter((_, binding) =>
+        binding.generated.exists(sameSelectedInputLane(_, selection))
+      )
+      publicationCharge(lane.size.toLong * 3L + effects.size.toLong * 3L)
+      val lanePaths = lane.map((proxy, _) => s"${declarationPath(proxy)}.$member").toSet
+      val writers = effects.filter(effect => lanePaths(effect.target))
+      val collision = publicationElements(effects).exists(effect => effect.kind != "interface-drive" ||
+        !publicationElements(aliases).exists((proxy, binding) => binding.generated.nonEmpty &&
+          effect.target == s"${declarationPath(proxy)}.$member"))
+      if collision || writers.size != 1 || writers.head.kind != "interface-drive" ||
+        writers.head.region.nonEmpty
+      then crossingFailure("selected Interface input requires exactly one lane drive and no template or connect writer")
+      val (proxy, binding) = lane.find((proxy, _) =>
+        writers.head.target == s"${declarationPath(proxy)}.$member"
+      ).getOrElse(crossingFailure("selected Interface driver is absent"))
+      requireSelectedInterfaceInputTarget(proxy, binding, member, proxy.module)
+      proxy
     // Query-local grouping of existing authored boundaries; no second occurrence registry.
     // With no selected writers, preserve the old observation path without inventory scans.
     val selectedObservationContexts =
@@ -3891,6 +3939,30 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             contexts.getOrElseUpdate(binding.instance, mutable.ArrayBuffer.empty) += selection
             if continuousWriteCounts.getOrElse(proxy, 0) != 0 then
               val _ = selectedInputDriver(binding.port, selection)
+      if selectedInterfaceInputs then
+        publicationElements(instanceInterfacePorts.iterator).foreach: (_, binding) =>
+          binding.instance.filter(selectedInputInstances).foreach: instance =>
+            binding.generated.foreach: selection =>
+              publicationCharge(3L)
+              contexts.getOrElseUpdate(instance, mutable.ArrayBuffer.empty) += selection
+        // Inventory the original declarations, never only accessed proxy members or writers.
+        publicationElements(contexts.iterator).filter((instance, _) =>
+          selectedInterfaceInstances(instance)
+        ).foreach: (instance, selections) =>
+          publicationElements(records(instance.child).declarations).foreach: declaration =>
+            declaration.value match
+              case endpoint: InterfacePort[?, ?]
+                  if endpoint.exported && !endpoint.boundary && endpoint.origin.isEmpty =>
+                val leaves = ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role)
+                publicationElements(leaves).filter(_.access == "in").foreach: leaf =>
+                  publicationElements(selections.toVector.distinct).foreach: selection =>
+                    val _ = selectedInterfaceDriver(declaration.reference, leaf.name, selection)
+              case endpoint: InterfaceArray[?, ?]
+                  if endpoint.exported && !endpoint.boundary && endpoint.origin.isEmpty =>
+                val leaves = ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role)
+                if publicationElements(leaves).exists(_.access == "in") then
+                  crossingFailure("selected child Interface input arrays are outside the scalar drive profile")
+              case _ => ()
       val children = publicationElements(selectedInputInstances).map(_.child).toSet
       publicationElements(records.valuesIterator).foreach: module =>
         publicationElements(module.instances).foreach: instance =>
@@ -3982,9 +4054,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         values: Vector[Expr[?]],
         owner: Long,
         strict: Boolean,
-        inferSourceOwnership: Boolean = false
+        inferSourceOwnership: Boolean = false,
+        initialSelections: Vector[GeneratedSymbolSelectionRecord] = Vector.empty
     ): SampleFacts =
-      val facts = values.map(sampleFacts(_, owner, strict, inferSourceOwnership))
+      val facts = values.map(value => sampleFacts(
+        value, owner, strict, inferSourceOwnership, initialSelections = initialSelections
+      ))
       SampleFacts(
         facts.iterator.flatMap(_.domains).toSet,
         facts.iterator.flatMap(_.sources).toSet,
@@ -4458,6 +4533,23 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                                 case Some(_) => crossingFailure(
                                     "ordinary parent Interface member has no actual driver"
                                   )
+                                case None if selectedInterfaceInputs &&
+                                    activeSelections.nonEmpty && member.access == "in" &&
+                                    publicationElements(selectedInterfaceInstances).exists(instance =>
+                                      instance.child == sample.endpoint.module &&
+                                        instance.generatedScope.contains(
+                                          activeSelections.last.reference.family.generatedRegion
+                                        )
+                                    ) =>
+                                  val proxy = selectedInterfaceDriver(
+                                    sample.endpoint, sample.member, activeSelections.last
+                                  )
+                                  selectedOccurrenceSeen = true
+                                  enqueue(
+                                    Vector(InterfaceMemberSample(proxy, sample.member)),
+                                    proxy.module,
+                                    selections = activeSelections.dropRight(1)
+                                  )
                                 case None
                                     if originalInterfaceInputs.contains(
                                       sample.endpoint
@@ -4786,7 +4878,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           case Some(contexts) => publicationElements(contexts).foreach(observe)
     publicationElements(expressionValues.iterator).filter(_._2.interfaceMember.nonEmpty).foreach:
       (reference, value) =>
-        verifyReconvergence(sampleFacts(value, reference.module, strict = false))
+        if !selectedInterfaceInputs then
+          verifyReconvergence(sampleFacts(value, reference.module, strict = false))
+        else
+          publicationCharge(1L)
+          val contexts = selectedObservationContexts.get(reference.module)
+            .map(_.toVector).getOrElse(Vector(Vector.empty[GeneratedSymbolSelectionRecord]))
+          publicationElements(contexts).foreach: selections =>
+            verifyReconvergence(sampleFacts(
+              value, reference.module, strict = false, initialSelections = selections
+            ))
     val ownersByPath = publicationElements(records.keysIterator).map(owner =>
       publicationProbe(modulePath(owner) -> owner)
     ).toMap
@@ -4795,10 +4896,35 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         group.owner,
         crossingFailure("Interface observation lost its actual construction owner")
       )
-      verifyReconvergence(combinedFacts(group.values, owner, strict = false))
+      if !selectedInterfaceInputs then
+        verifyReconvergence(combinedFacts(group.values, owner, strict = false))
+      else
+        publicationCharge(1L)
+        val contexts = selectedObservationContexts.get(owner).map(_.toVector)
+          .getOrElse(Vector(Vector.empty[GeneratedSymbolSelectionRecord]))
+        publicationElements(contexts).foreach: selections =>
+          verifyReconvergence(combinedFacts(
+            group.values, owner, strict = false, initialSelections = selections
+          ))
     publicationCharge(operations.size.toLong)
     operations.zipWithIndex.foreach: (operation, index) =>
       publicationCharge(1L)
+      if selectedInterfaceInputs && operation.kind == "interface-drive" then
+        val root = Option(declarationIds.get(
+          DigitalInterfaceContract.root(operation.values.head.asInstanceOf[InterfaceEndpoint])
+        ))
+        root.flatMap(instanceInterfacePorts.get).filter(_.generated.nonEmpty).foreach: binding =>
+          val reference = root.get
+          val domain = instanceInterfaceDomain(reference).flatMap(resolved.get).getOrElse(
+            crossingFailure("selected Interface input has no actual resolved domain")
+          )
+          val facts = sampleFacts(operation.values(2), operation.owner, strict = false)
+          if facts.domains.exists(_ != domain) || facts.crossings.nonEmpty ||
+            facts.waivers.nonEmpty || facts.events.nonEmpty
+          then crossingFailure("selected Interface driver requires its exact ordinary occurrence domain")
+          val _ = selectedInterfaceDriver(
+            binding.port, operation.values(1).asInstanceOf[String], binding.generated.get
+          )
       if operation.kind == "assignment" && operation.values.size == 2 then
         val target =
           digitalAssignmentRoot(
@@ -12633,9 +12759,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           instanceInterfacePorts.get(reference).exists(_.generated.nonEmpty)
         )
       then
-        fail(
-          "NODAL-AREA-058-CAPABILITY",
-          "selected Interface writes require exact lane-qualified driver proof"
+        if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
+          activeArea.nonEmpty || values.size != 3
+        then fail("NODAL-AREA-058-CAPABILITY", "selected Interface drive must be Module-local")
+        val reference = interfaceReferences.head
+        val member = values(1) match
+          case value: String => value
+          case _ => fail("NODAL-HIERARCHY-058-INTERFACE", "selected drive needs an exact leaf")
+        requireSelectedInterfaceInputTarget(
+          reference, instanceInterfacePorts(reference), member, currentModule.handle
         )
     val digitalAssignment = Set("assignment", "value-connect").contains(kind) &&
       analogStack.isEmpty && analogSemanticContext.isEmpty &&
@@ -14724,6 +14856,71 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       CandidateRuntime.typeDescriptor(left), CandidateRuntime.typeDescriptor(right)
     )
     if !exact.contains(true) then invalid()
+
+  /** Selected Interface writes retain the original exported endpoint and declared input leaf. */
+  private def requireSelectedInterfaceInputTarget(
+      root: DeclarationRef,
+      binding: InterfaceBoundaryRecord,
+      member: String,
+      owner: Long
+  ): Unit =
+    def invalid(): Nothing = fail(
+      "NODAL-HIERARCHY-058-INTERFACE",
+      "selected Interface input requires a plain scalar leaf of a direct fixed generated child",
+      Some(declarationPath(root))
+    )
+    val selection = binding.generated.getOrElse(invalid())
+    val instance = binding.instance.getOrElse(invalid())
+    val reference = selection.reference
+    val family = reference.family.generatedRegion
+    val original = records(binding.port.module).declarations(binding.port.index)
+    val endpoint = original.value match
+      case value: InterfacePort[?, ?]
+          if value.exported && !value.boundary && value.origin.isEmpty => value
+      case _ => invalid()
+    val proxy = records(root.module).declarations(root.index).value match
+      case value: InterfacePort[?, ?] if value.origin.isEmpty => value
+      case _ => invalid()
+    boundDomainCharge(records(owner).generatedRegions.size.toLong +
+      records(owner).instances.size.toLong + areas.size.toLong)
+    if root.module != owner || family.owner != owner || !family.areaFamily ||
+      !records(owner).generatedRegions.exists(_ eq family) ||
+      !family.familyHandle.exists(_ eq reference.family) ||
+      family.parentOrdinal.nonEmpty || family.digitalRegion.isEmpty ||
+      family.digitalRegion.exists(_.parent.nonEmpty) || reference.family.selectionPrefix.nonEmpty ||
+      reference.members.nonEmpty || binding.scope.nonEmpty ||
+      !Vector(family.lower, family.upperExclusive, family.step).forall(value =>
+        conservativeIntegerLiteral(value).nonEmpty
+      ) || family.maximumTripCount <= 0 ||
+      !conservativeIntegerLiteral(reference.ordinal).exists(value =>
+        value >= 0L && value < family.maximumTripCount.toLong
+      ) || !instance.generatedScope.contains(family) ||
+      !records(owner).instances.exists(_ eq instance) || binding.port.module != instance.child ||
+      valueRegion(binding.port).nonEmpty || areas.exists(area =>
+        boundDomainCharge(area.declarations.size.toLong)
+        area.declarations.contains(binding.port)
+      ) || records(instance.child).generatedRegions.exists(region =>
+        boundDomainCharge(1L + region.declarations.size.toLong)
+        region.declarations.contains(binding.port)
+      ) ||
+      (proxy.definition ne endpoint.definition) || proxy.role != endpoint.role ||
+      !family.yieldedArea.flatMap(_.members.get(selection.member)).exists(value =>
+        generatedInstanceExportTarget(family, value)._2 eq instance
+      )
+    then invalid()
+    val leaves = ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role)
+    boundDomainCharge(leaves.size.toLong)
+    val leaf = leaves.find(_.name == member).getOrElse(invalid())
+    val scalar = leaf.dataType.exists(value =>
+      val dataType = CandidateRuntime.typeDescriptor(value)
+      dataType.kind == "Bool" || Set("UInt", "Bits")(dataType.kind) &&
+        dataType.arguments.size == 1 &&
+        conservativeIntegerLiteral(dataType.arguments.head).exists(_ > 0L)
+    )
+    if leaf.protocol != "plain" || leaf.mode.nonEmpty || leaf.access != "in" ||
+      leaf.nestedRoles.nonEmpty || leaf.nestedInterfaces.nonEmpty || !scalar ||
+      endpoint.role.name == "monitor"
+    then invalid()
 
   private def sameSelectedInputLane(
       left: GeneratedSymbolSelectionRecord,

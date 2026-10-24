@@ -3607,3 +3607,94 @@ public default/Extended policy, generated target/exporter and downstream behavio
 remain their existing open work. No CI, full qualification, firtool/Verilog
 exporter, held comparator/installation work, simulator or formal lane was run.
 No new generated Verilog-* witness or universal parameter/scale claim is made.
+
+## Checkpoint 79: selected generated child Interface-input routing
+
+This partial B.2.2 checkpoint extends canonical checkpoint 78
+`a09f3b3e70a55b238d20933769119a8a9ef5d0be` on 2026-10-23. It narrowly amends the
+historical Interface-write exclusions above; those statements describe their
+then-admitted slices. F-058.B.2.2, B.2 and Foundation 58 remain open.
+
+### Scope and shared ownership
+
+Explicit `driveMember` writes may target whole ordinary Bool/literal UInt/Bits
+input leaves on original child Interface endpoints in a direct fixed nonempty
+generated Instance family. Original child/endpoint/role/leaf identity, exact
+selection, static ordinal, actual RHS, scalar type and domain provenance survive
+source capture, bridge and native proof. Ordinals are not induction coordinates.
+Interface `connect`, whole-role inversion and arbitrary selected input reads are
+not admitted.
+
+One existing Interface Model collects dependencies and selected-input facts under
+its own unchanged cumulative work limit. Its output work count is not initialized
+from Assignment work. Actual selected drives activate declaration-driven coverage
+for every required original input leaf and endpoint on that child, even without
+member access or observation. Canonical writer inventory retains omitted aliases,
+template writers and connect effects as collision evidence; only actual admitted
+drive effects supply lane facts. Zero-effect, wholly unaccessed declarations in
+unactivated profiles do not acquire a new execution obligation.
+
+The checkpoint-78 Assignment/Sequential owners transfer every represented node,
+including unused cycles and ordinary descendants, and all observation/sample
+obligations before retiring template execution. Exact endpoint boundary selections,
+not synthetic scalar ports, establish contexts. Existing receiver-context sampling,
+actual cross-lane edges and cycle checks remain intact. Interface, Assignment and
+target budgets retain their distinct owners and limits; actual work is charged,
+without per-leaf resets, refunds, a parallel registry or a raised default.
+
+Standalone same-selection input `observeMember` is nonwriting. After canonical
+ownership/role/type verification, the target consumes only a parent-local,
+one-operand, zero-result observe whose original logical identity/type and exact
+selection match an already-certified lane. Each lane comparison is charged. This
+creates no SSA input carrier, does not activate otherwise unauthored coverage and
+does not admit general selected input reads.
+
+### Focused evidence and preserved failures
+
+- Actual source default-budget two-lane and observation positives pass, together
+  with six causal negatives and the unchanged 65536 bridge scan-exhaustion control.
+- Actual source missing-lane and feedback examples capture successfully, then
+  native conversion rejects with exit 1 and no output: respectively complete
+  declared leaf coverage and a causal combinational dependency cycle.
+- The corrected hierarchy fixture passes 363 cases with zero failures. The first
+  362-case run's single foreign-domain failure is preserved: its combinational
+  observation did not constitute strict CDC sampling. A test-only matched pair
+  adds actual register sampling; same-domain succeeds and foreign-domain sampling
+  requires the exact canonical CDC refusal. Production canonical code was unchanged.
+- The original target suite records 36 cases with 35 passes and one diagnostic-
+  marker mismatch. The foreign-endpoint alias was correctly rejected with
+  `NODAL-INTERFACE-054-001: typed member access must resolve an actual fully typed local instance`.
+  Its case-sensitive expected marker did not match. Independent review confirms
+  the one-marker source correction; this is composed evidence, not a fresh 36/0
+  execution. Because the failed marker short-circuited the test conjunction, its
+  final unchanged-input comparison was not evaluated in that run. The duplicate-
+  boundary observation negative likewise exercises early canonical physical-
+  identity rejection, not the deeper target selection guard.
+- The same target binary converts and verifies actual two-lane and observation
+  Scala-derived input as CIRCT IR. Both outputs are byte-identical, 59937 bytes,
+  SHA-256 `43a974ae07d935f0486394975f4aba3e32ae25e30b79c6201546ba7b959de69b`.
+  This supports nonwriting observation behavior; it is not Verilog text or a
+  simulation result. The original native-v3 49 KiB output-cap failure is preserved;
+  native-v4 receipts record the subsequent admitted conversions.
+- All six accounting-control outputs and the separate whole-model 131072
+  diagnostic match checkpoint 78 exactly. The latter is diagnostic parity only,
+  not default-budget whole-model acceptance or an Extended-policy implementation.
+
+Exact commands, frozen inputs, archives and receipts are retained under
+`.work/f58-selected-interface-inputs/`, including `test-output/native-v3/`,
+`test-output/native-v4/` and `test-output/interface-predecessor-parity-v2/`.
+Original failures and pre-correction source bytes are preserved rather than
+relabeled. A maintained test expectation correction does not imply another native
+suite execution or production rebuild.
+
+### Remaining boundary
+
+Symbolic/nested selected writes, Interface arrays and nested leaves, direct
+generated Interface declarations, broad roles/protocols, state/aggregate/crossing
+source profiles and general selected reads remain outside this narrow slice.
+Standalone/nested/reusable/helper Area completion, guarded existence and remaining
+runtime projections still belong to the open B.2.2 contract. Default whole-model
+capacity and public Extended policy remain unresolved separately. No held
+firtool/Verilog exporter, comparator repair, installation, simulator, formal lane,
+CI or full qualification was run. No universal scale/performance or generated
+Verilog-* acceptance claim is made.

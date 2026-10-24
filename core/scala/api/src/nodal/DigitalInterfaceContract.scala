@@ -895,6 +895,16 @@ private[nodal] object DigitalInterfaceContract:
               9,
               "interface resolved drive requires push-pull mode; constrained modes require explicit inout operations"
             )
+          if context.boundary.exists(_.selection.nonEmpty) then
+            ConstructionKernel.chargePublicationWork(1L)
+            val selectedType = actualType(leaf, context)
+            val scalar = selectedType == "Bool" ||
+              selectedType.matches("(?:UInt|Bits)\\([1-9][0-9]*\\)")
+            if context.dimensions.nonEmpty || leaf.protocol != "plain" ||
+              leaf.mode.nonEmpty || leaf.access != "in" || leaf.nestedRoles.nonEmpty ||
+              leaf.nestedInterfaces.nonEmpty || operation.region.nonEmpty || !scalar ||
+              !context.boundary.exists(_.instance.nonEmpty)
+            then fail(3, "selected Interface drive requires its original plain scalar input leaf")
           val expected = actualType(leaf, context)
           val target = s"${context.path}.${leaf.name}"
           if leaf.mode.isEmpty && !driven.add(target) then

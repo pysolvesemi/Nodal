@@ -156,12 +156,13 @@ int main(int argc, char **argv) {
   }
   auto positive = [&](StringRef name, const std::string &input, unsigned childResults = 1,
                       unsigned helperResults = 1, bool selectedInputTransport = false,
-                      bool normalizedInputSlice = false) {
+                      bool normalizedInputSlice = false, bool interfaceInputs = false) {
     diagnostics.clear();
     auto module = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
     bool valid = module && succeeded(verify(*module)) && succeeded(lower(*module));
     unsigned definitions = 0, helpers = 0, loops = 0, instances = 0, children = 0;
     unsigned exactInputBuses = 0, exactInputSlices = 0, exactChildInputs = 0;
+    unsigned interfaceBuses = 0, interfaceSlices = 0, interfaceChildInputs = 0;
     if (valid) {
       module->walk([&](Operation *operation) {
         if (selectedInputTransport && operation->getName().getStringRef() == "comb.concat" &&
@@ -172,6 +173,43 @@ int main(int argc, char **argv) {
           auto lowValue = low ? low->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
           exactInputBuses +=
               highValue && lowValue && highValue.getInt() == 34 && lowValue.getInt() == 17;
+        }
+        if (interfaceInputs) {
+          valid &= operation->getName().getDialectNamespace() != "nodal";
+          if (operation->getName().getStringRef() == "comb.concat" &&
+              operation->getNumOperands() == 2) {
+            auto high = operation->getOperand(0).getDefiningOp();
+            auto low = operation->getOperand(1).getDefiningOp();
+            auto h = high ? high->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+            auto l = low ? low->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+            if (h && l)
+              interfaceBuses +=
+                  (operation->getResult(0).getType().isInteger(16) && h.getInt() == 34 &&
+                   l.getInt() == 17) ||
+                  (operation->getResult(0).getType().isInteger(32) && h.getInt() == 514 &&
+                   l.getInt() == 257);
+          }
+          if (auto instance = dyn_cast<circt::hw::InstanceOp>(operation)) {
+            if (instance.getModuleName() == "Child") {
+              for (Value operand : operation->getOperands())
+                if (auto argument = dyn_cast<BlockArgument>(operand))
+                  interfaceChildInputs += argument.getType().isInteger(8) ||
+                                          argument.getType().isInteger(16);
+            } else {
+              for (Value operand : operation->getOperands()) {
+                auto slice = operand.getDefiningOp();
+                if (!slice || slice->getName().getStringRef() != "sv.verbatim.expr" ||
+                    slice->getNumOperands() != 3)
+                  continue;
+                auto concat = slice->getOperand(0).getDefiningOp();
+                if (concat && concat->getName().getStringRef() == "comb.concat")
+                  interfaceSlices += (operand.getType().isInteger(8) &&
+                                      concat->getResult(0).getType().isInteger(16)) ||
+                                     (operand.getType().isInteger(16) &&
+                                      concat->getResult(0).getType().isInteger(32));
+              }
+            }
+          }
         }
         definitions += isa<circt::hw::HWModuleOp>(operation);
         helpers += operation->hasAttr("nodal.generated_template");
@@ -215,6 +253,8 @@ int main(int argc, char **argv) {
       });
       if (selectedInputTransport)
         valid &= exactInputBuses == 1 && exactInputSlices == 1 && exactChildInputs == 1;
+      if (interfaceInputs)
+        valid &= interfaceBuses == 2 && interfaceSlices == 2 && interfaceChildInputs == 2;
       valid &= definitions == 3 && helpers == 1 && loops == 1 && instances == 2 && children == 1 &&
                succeeded(verify(*module));
     }
@@ -463,6 +503,118 @@ int main(int argc, char **argv) {
                           "member = \"child\", port = \"input\"");
   negative("selected-input-view-never-becomes-an-output-carrier", selectedInput,
            "selected input");
+  // Two original Interface leaves remain distinct logical ports. No scalar
+  // input declarations or body-local proxy values stand in for either leaf.
+  auto selectedInterface = selectedInputs;
+  auto eraseLine = [](std::string &text, StringRef prefix) {
+    auto at = text.find(prefix.str());
+    if (at == std::string::npos)
+      llvm::report_fatal_error("missing selected Interface fixture line");
+    text.erase(at, text.find('\n', at) - at + 1);
+  };
+  for (auto line : {"    %input0 =", "    %input1 =",
+                    "    \"nodal.digital_assign\"(%input0",
+                    "    \"nodal.digital_assign\"(%input1",
+                    "    \"nodal.port\"() <{direction = \"input\", domain = @required"})
+    eraseLine(selectedInterface, line);
+  selectedInterface = replace(selectedInterface,
+      "%v7 = \"nodal.port_value\"() <{metadata = {}, port = @input}>",
+      "%v7 = \"nodal.member_access\"() <{instance = @endpoint, path = \"small\", "
+      "metadata = {interface_abi_version = 1 : i64, role = \"sink\"}}>");
+  auto childDefinition = selectedInterface.find("sym_name = \"Child\"");
+  auto childInputRead = selectedInterface.find("    %v7 =", childDefinition);
+  selectedInterface.insert(childInputRead, R"mlir(
+    "nodal.interface"() <{sym_name = "Bus", metadata = {interface_abi_version = 1 : i64, semantic_identity = "SelectedInput.Bus"}}> ({
+      "nodal.interface_role"() <{sym_name = "sink", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "small", access = "in", leaf_role = "sink", nested_roles = [], nested_interfaces = []}, {path = "wide", access = "in", leaf_role = "sink", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+      "nodal.interface_member"() <{sym_name = "small", type = !nodal.uint<8>, protocol = "plain", roles = ["sink"], metadata = {interface_abi_version = 1 : i64}}> : () -> ()
+      "nodal.interface_member"() <{sym_name = "wide", type = !nodal.uint<16>, protocol = "plain", roles = ["sink"], metadata = {interface_abi_version = 1 : i64}}> : () -> ()
+    }) : () -> ()
+    "nodal.interface_instance"() <{sym_name = "endpoint", definition = @Bus, role = "sink", metadata = {interface_abi_version = 1 : i64, dimensions = [], domain = @required, semantic_path = "Child.endpoint"}}> : () -> ()
+    "nodal.interface_abi"() <{logical_path = "Child.endpoint", layout_policy = "structural", members = [{path = "small", type = !nodal.uint<8>, role = "sink", access = "in", nested_roles = [], nested_interfaces = []}, {path = "wide", type = !nodal.uint<16>, role = "sink", access = "in", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @endpoint}}> : () -> ()
+    "nodal.port"() <{direction = "output", domain = @required, metadata = {}, sym_name = "wideOutput", type = !nodal.uint<16>}> : () -> ()
+    %wideOut = "nodal.port_value"() <{metadata = {}, port = @wideOutput}> : () -> !nodal.uint<16>
+    %wideIn = "nodal.member_access"() <{instance = @endpoint, path = "wide", metadata = {interface_abi_version = 1 : i64, role = "sink"}}> : () -> !nodal.uint<16>
+    "nodal.digital_assign"(%wideOut, %wideIn) <{kind = "continuous", metadata = {}}> : (!nodal.uint<16>, !nodal.uint<16>) -> ()
+)mlir");
+  selectedInterface.insert(selectedInterface.find("    %v20 ="), R"mlir(
+    %wideRhs0 = "nodal.const_literal"() <{metadata = {}, spelling = "257", value = 257 : i64}> : () -> !nodal.uint<16>
+    %wideRhs1 = "nodal.const_literal"() <{metadata = {}, spelling = "514", value = 514 : i64}> : () -> !nodal.uint<16>
+    "nodal.interface_boundary"(%v13, %v8) <{sym_name = "selected0", instance = @child, endpoint = "endpoint", member = "child", metadata = {interface_abi_version = 1 : i64, dimensions = [], semantic_path = "Top.selected0", actual_types = [{path = "small", type = !nodal.uint<8>}, {path = "wide", type = !nodal.uint<16>}]}}> : (!nodal.generated_family, i64) -> ()
+    "nodal.interface_boundary"(%v13, %v10) <{sym_name = "selected1", instance = @child, endpoint = "endpoint", member = "child", metadata = {interface_abi_version = 1 : i64, dimensions = [], semantic_path = "Top.selected1", actual_types = [{path = "small", type = !nodal.uint<8>}, {path = "wide", type = !nodal.uint<16>}]}}> : (!nodal.generated_family, i64) -> ()
+    %small0 = "nodal.member_access"() <{instance = @selected0, path = "small", metadata = {interface_abi_version = 1 : i64, role = "sink"}}> : () -> !nodal.uint<8>
+    %small1 = "nodal.member_access"() <{instance = @selected1, path = "small", metadata = {interface_abi_version = 1 : i64, role = "sink"}}> : () -> !nodal.uint<8>
+    %wide0 = "nodal.member_access"() <{instance = @selected0, path = "wide", metadata = {interface_abi_version = 1 : i64, role = "sink"}}> : () -> !nodal.uint<16>
+    %wide1 = "nodal.member_access"() <{instance = @selected1, path = "wide", metadata = {interface_abi_version = 1 : i64, role = "sink"}}> : () -> !nodal.uint<16>
+    "nodal.interface_drive"(%small1, %rhs1) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.uint<8>, !nodal.uint<8>) -> ()
+    "nodal.interface_drive"(%wide0, %wideRhs0) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.uint<16>, !nodal.uint<16>) -> ()
+    "nodal.interface_drive"(%small0, %rhs0) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.uint<8>, !nodal.uint<8>) -> ()
+    "nodal.interface_drive"(%wide1, %wideRhs1) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.uint<16>, !nodal.uint<16>) -> ()
+    "nodal.port"() <{direction = "output", domain = @core, metadata = {}, sym_name = "wideFirst", type = !nodal.uint<16>}> : () -> ()
+    "nodal.port"() <{direction = "output", domain = @core, metadata = {}, sym_name = "wideSecond", type = !nodal.uint<16>}> : () -> ()
+    %wideFirst = "nodal.port_value"() <{metadata = {}, port = @wideFirst}> : () -> !nodal.uint<16>
+    %wideSecond = "nodal.port_value"() <{metadata = {}, port = @wideSecond}> : () -> !nodal.uint<16>
+    %wideOutput0 = "nodal.instance_port"(%v13, %v8) <{direction = "output", instance = @child, member = "child", port = "wideOutput", metadata = {}}> : (!nodal.generated_family, i64) -> !nodal.uint<16>
+    %wideOutput1 = "nodal.instance_port"(%v13, %v10) <{direction = "output", instance = @child, member = "child", port = "wideOutput", metadata = {}}> : (!nodal.generated_family, i64) -> !nodal.uint<16>
+    "nodal.digital_assign"(%wideFirst, %wideOutput0) <{kind = "continuous", metadata = {}}> : (!nodal.uint<16>, !nodal.uint<16>) -> ()
+    "nodal.digital_assign"(%wideSecond, %wideOutput1) <{kind = "continuous", metadata = {}}> : (!nodal.uint<16>, !nodal.uint<16>) -> ()
+)mlir");
+  positive("selected-interface-two-widths-two-lanes-exact-rhs", selectedInterface,
+           2, 2, false, false, true);
+  // Observation consumes no SSA input carrier. Both the writer's member and
+  // a separate member alias must retain the exact certified boundary selection.
+  const std::string observeSmall =
+      "    \"nodal.interface_observe\"(%small0) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.uint<8>) -> ()\n";
+  auto observedInterface = selectedInterface;
+  observedInterface.insert(observedInterface.find("    %v20 ="), observeSmall);
+  positive("selected-interface-certified-input-observe", observedInterface,
+           2, 2, false, false, true);
+  const std::string observedAlias =
+      "    %observedAlias = \"nodal.member_access\"() <{instance = @selected0, path = \"small\", metadata = {interface_abi_version = 1 : i64, role = \"sink\"}}> : () -> !nodal.uint<8>\n";
+  auto aliasObservedInterface = selectedInterface;
+  aliasObservedInterface.insert(aliasObservedInterface.find("    %v20 ="),
+      observedAlias + replace(observeSmall, "%small0", "%observedAlias"));
+  positive("selected-interface-certified-input-alias-observe", aliasObservedInterface,
+           2, 2, false, false, true);
+  negative("selected-interface-observe-foreign-endpoint-identity",
+      replace(aliasObservedInterface, observedAlias,
+              replace(observedAlias, "instance = @selected0", "instance = @foreignEndpoint")),
+      "NODAL-INTERFACE-054-001: typed member access must resolve an actual fully typed local instance");
+  negative("selected-interface-observe-forged-role-permission",
+      replace(aliasObservedInterface, observedAlias,
+              replace(observedAlias, "role = \"sink\"", "role = \"drive\"")), "role");
+  auto unmatchedObservedInterface = aliasObservedInterface;
+  auto boundaryAt = unmatchedObservedInterface.find("    \"nodal.interface_boundary\"(%v13, %v8)");
+  auto boundaryLine = unmatchedObservedInterface.substr(boundaryAt,
+      unmatchedObservedInterface.find('\n', boundaryAt) - boundaryAt + 1);
+  boundaryLine = replace(boundaryLine, "sym_name = \"selected0\"",
+                         "sym_name = \"observedBoundary\"");
+  boundaryLine = replace(boundaryLine, "Top.selected0", "Top.observedBoundary");
+  unmatchedObservedInterface.insert(boundaryAt, boundaryLine);
+  unmatchedObservedInterface = replace(unmatchedObservedInterface, observedAlias,
+      replace(observedAlias, "instance = @selected0", "instance = @observedBoundary"));
+  negative("selected-interface-observe-duplicate-boundary-identity",
+      unmatchedObservedInterface, "duplicate selected Interface must reuse its physical identity");
+  auto incompleteObservedInterface = observedInterface;
+  eraseLine(incompleteObservedInterface, "    \"nodal.interface_drive\"(%wide1");
+  negative("selected-interface-observe-does-not-waive-complete-coverage",
+      incompleteObservedInterface, "selected");
+  auto missingInterfaceLane = selectedInterface;
+  eraseLine(missingInterfaceLane, "    \"nodal.interface_drive\"(%wide1");
+  negative("selected-interface-one-leaf-missing-lane", missingInterfaceLane, "selected");
+  auto duplicateInterfaceLane = selectedInterface;
+  auto effect = duplicateInterfaceLane.find("    \"nodal.interface_drive\"(%small0");
+  duplicateInterfaceLane.insert(effect, duplicateInterfaceLane.substr(
+      effect, duplicateInterfaceLane.find('\n', effect) - effect + 1));
+  negative("selected-interface-duplicate-lane-writer", duplicateInterfaceLane,
+           "multiple authored drivers");
+  negative("selected-interface-wrong-original-endpoint",
+           replace(selectedInterface, "endpoint = \"endpoint\", member = \"child\"",
+                   "endpoint = \"missing\", member = \"child\""), "endpoint");
+  auto readInterfaceInput = selectedInterface;
+  readInterfaceInput = replace(readInterfaceInput,
+      "\"nodal.interface_drive\"(%small0, %rhs0)",
+      "\"nodal.interface_drive\"(%small0, %small1)");
+  negative("selected-interface-destination-cannot-be-rhs", readInterfaceInput, "selected");
   if (emitSelectedInput && !emittedSelectedInput)
     report("selected-input-representative-was-not-emitted", false);
   auto &summary = emitSelectedInput ? llvm::errs() : llvm::outs();

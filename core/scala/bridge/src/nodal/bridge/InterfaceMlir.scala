@@ -156,6 +156,62 @@ private[nodal] object InterfaceMlir:
     private lazy val selectedRuntimeExpressions = snapshot.analogRegions.flatMap(_.expressions)
       .map(_.path).toSet ++ snapshot.digitalExpressions.map(_.path)
 
+    // Independent bridge-only proof-work bound: not a construction-policy allowance.
+    // It is monotonic across every selected drive and authored-context obligation.
+    private var selectedInputWork = 0L
+    private val selectedInputContexts = mutable.ArrayBuffer.empty[
+      (String, String, KernelGeneratedMemberSnapshot)
+    ]
+    private def selectedInputVisit(): Unit =
+      selectedInputWork += 1L
+      requireValid(selectedInputWork <= 65536L,
+        "selected Interface input proof exceeds its 65536 scan-work bound", "interface")
+    private def selectedInputScan[A](values: IterableOnce[A]): Iterator[A] =
+      values.iterator.map: value =>
+        selectedInputVisit()
+        value
+
+    /** Write-specific proof; selected reads retain their existing broader admission. */
+    private def validateSelectedInputDrive(
+        endpoint: KernelInterfaceSnapshot,
+        member: KernelInterfaceMemberSnapshot,
+        effect: KernelDigitalConnectivitySnapshot
+    ): Unit =
+      selectedInputVisit()
+      val boundary = endpoint.boundary.get
+      val selection = boundary.selection.get
+      val owner = modules(endpoint.owner)
+      val instance = boundary.instance.flatMap(path => selectedInputScan(owner.instances).find(_.path == path))
+        .getOrElse(fail("selected Interface drive needs its actual child instance", effect.path))
+      val child = endpoints(boundary.endpoint)
+      val family = selectedInputScan(snapshot.generatedRegions).find(_.path == selection.family)
+        .getOrElse(fail("selected Interface drive family is absent", effect.path))
+      val scalar = actualType(endpoint, member) == "Bool" ||
+        actualType(endpoint, member).matches("(?:UInt|Bits)\\([1-9][0-9]*\\)")
+      requireValid(
+        effect.region.isEmpty && endpoint.dimensions.isEmpty && boundary.region.isEmpty &&
+          declarations(endpoint.path)._2.generatedScope.isEmpty &&
+          declarations(child.path)._2.generatedScope.isEmpty &&
+          declarations(child.path)._2.kind == "interface-port" && child.boundary.isEmpty &&
+          child.owner == instance.childModule && endpoint.domain.nonEmpty &&
+          selection.selectionPrefix.isEmpty && selection.familyInput.isEmpty &&
+          !selection.member.contains(".") && family.parent.isEmpty &&
+          family.lexicalParent.isEmpty && family.digitalBody.nonEmpty &&
+          family.yieldedArea.nonEmpty && family.owner == endpoint.owner &&
+          Vector(family.lower, family.upperExclusive, family.step).forall(_.toLongOption.nonEmpty) &&
+          family.maximumTripCount > 0 && selection.ordinal.toLongOption.exists(ordinal =>
+            selection.ordinal == ordinal.toString && ordinal >= 0L &&
+              ordinal < family.maximumTripCount.toLong
+          ) && instance.generatedScope.contains(KernelGeneratedScope(family.path, family.induction)) &&
+          selectedInputScan(family.exports).count(value => value.member == selection.member &&
+            value.kind == "instance" && value.target == instance.path) == 1 &&
+          member.protocol == "plain" && member.access == "in" && member.mode.isEmpty &&
+          member.nestedRoles.isEmpty && member.nestedInterfaces.isEmpty && scalar &&
+          endpoint.role != "monitor" && effect.endpointRole.contains(endpoint.role),
+        "selected Interface drive requires a direct fixed child plain scalar input leaf",
+        effect.path
+      )
+
     /** Independently check selected child capability from original immutable inventories. */
     private def validateSelectedConservativeChild(endpoint: KernelInterfaceSnapshot): Unit =
       val path = endpoint.path
@@ -1115,11 +1171,11 @@ private[nodal] object InterfaceMlir:
                 effect.path
               )
           case "interface-drive" =>
-            requireValid(
-              !endpoint.boundary.exists(_.selection.nonEmpty),
-              "selected Interface writes require exact selection-qualified driver proof",
-              effect.path
-            )
+            if endpoint.boundary.exists(_.selection.nonEmpty) then
+              validateSelectedInputDrive(endpoint, target, effect)
+              selectedInputVisit()
+              selectedInputContexts += ((endpoint.owner, endpoint.boundary.get.instance.get,
+                endpoint.boundary.get.selection.get))
             requireValid(
               effect.source.isEmpty && effect.value.nonEmpty &&
                 (if target.protocol == "resolved" then target.access == "drive"
@@ -1320,6 +1376,45 @@ private[nodal] object InterfaceMlir:
         case _ => Vector.empty
     .groupBy(identity).foreach: (path, drivers) =>
       requireValid(drivers.size == 1, "interface leaf has multiple ordinary drivers", path)
+    // Derive complete declared input-leaf obligations only when selected drives exist.
+    // Entirely unauthored lane coverage remains the native Interface driver's obligation.
+    if selectedInputContexts.nonEmpty then
+      selectedInputScan(selectedInputContexts).toVector.distinct.foreach:
+        (owner, instancePath, selection) =>
+          selectedInputVisit()
+          val instance = selectedInputScan(modules(owner).instances).find(_.path == instancePath).get
+          selectedInputScan(snapshot.interfaceContracts).filter(endpoint =>
+            endpoint.owner == instance.childModule && endpoint.boundary.isEmpty
+          ).foreach: child =>
+            selectedInputScan(child.members).filter(_.access == "in").foreach: leaf =>
+              val aliases = selectedInputScan(snapshot.interfaceContracts).filter(_.boundary.exists(boundary =>
+                boundary.instance.contains(instancePath) && boundary.endpoint == child.path
+              )).toVector
+              val paths = selectedInputScan(aliases).flatMap(endpoint =>
+                selectedInputScan(endpoint.members).filter(_.name == leaf.name).map(_.path)
+              ).toSet + leaf.path
+              def sameLane(endpoint: KernelInterfaceSnapshot): Boolean =
+                endpoint.boundary.flatMap(_.selection).exists(value =>
+                  value.family == selection.family && value.member == selection.member &&
+                    value.selectionPrefix == selection.selectionPrefix && value.ordinal == selection.ordinal
+                )
+              val lanePaths = selectedInputScan(aliases).filter(sameLane).flatMap(endpoint =>
+                selectedInputScan(endpoint.members).filter(_.name == leaf.name).map(_.path)
+              ).toSet
+              val effects = selectedInputScan(snapshot.digitalConnectivity).filter(effect =>
+                (effect.kind == "interface-drive" || effect.kind == "interface-connect") &&
+                  (paths(effect.target) || effect.kind == "interface-connect" && effect.source.exists(paths))
+              ).toVector
+              val writers = selectedInputScan(effects).filter(effect => lanePaths(effect.target)).toVector
+              requireValid(
+                selectedInputScan(effects).forall(effect => effect.kind == "interface-drive" &&
+                  selectedInputScan(aliases).exists(endpoint => endpoint.boundary.exists(_.selection.nonEmpty) &&
+                    selectedInputScan(endpoint.members).exists(_.path == effect.target))) && writers.size == 1,
+                "selected Interface input needs one drive per declared leaf and no template or connect writer",
+                child.path + "." + leaf.name
+              )
+              val (endpoint, member) = members(writers.head.target)
+              validateSelectedInputDrive(endpoint, member, writers.head)
     snapshot.digitalExpressions.filter(expression =>
       Set("digital_net_write_view", "digital_net_enable_view").contains(expression.operation)
     ).foreach: expression =>

@@ -454,3 +454,36 @@ model 131072 evidence is diagnostic parity only. The original failed receiver
 helper run is preserved; only its later consuming test-use location was corrected.
 No new Verilog-* export, simulation, full qualification or performance claim is
 made; held exporter and downstream operations remain unrun.
+
+## Selected generated Interface-input amendment — 2026-10-23
+
+[Checkpoint 79](../implementation/increment58-readiness.md#checkpoint-79-selected-generated-child-interface-input-routing)
+extends checkpoint 78's dated boundary only for explicit `driveMember` writes to
+whole ordinary scalar input leaves of original child Interface endpoints in a
+direct fixed nonempty generated Instance family. Bool, literal UInt and Bits
+leaves retain their original role, type, domain, endpoint and static lane identity.
+This is not general selected-view write permission, Interface `connect`, role
+inversion or array/nested Interface support.
+
+The existing Interface Model owns one combined dependency/selected-input collector.
+Activation requires an actual selected drive; every required input leaf of every
+original endpoint on that activated child must have complete exact lane coverage,
+including unaccessed leaves and unprojected sibling endpoints. Actual RHS/effects,
+omitted aliases and template/connect collisions remain in the canonical inventory.
+The existing Assignment hierarchy transfer carries all represented nodes, unused
+cycles, observations and samples into actual contexts. Interface work is cumulative
+within its own unchanged limit, independent of Assignment/target counters; no
+per-leaf reset, refund, second registry or budget increase is introduced.
+
+A standalone selected input observation is nonwriting and emits no SSA input
+carrier. Canonical ownership/permission verification and the target's exact
+original identity/type/certified selection checks precede its consumption as a
+zero-result static effect. Observation alone cannot activate coverage; arbitrary
+selected input reads remain rejected. Lane comparisons consume target work.
+
+Focused evidence and preserved failures are recorded in checkpoint 79. Broader
+roles/protocols, selected arrays, direct generated Interface declarations,
+symbolic/nested selected writes, state/aggregate/crossing source profiles and
+Verilog export remain outside this amendment. B.2.2 and Foundation 58 stay open;
+this adds no Extended policy, default whole-model capacity claim or downstream
+qualification credit.

@@ -90,7 +90,9 @@ public:
                                           SmallVectorImpl<DependencyGuard> *guardOutput = nullptr,
                                           SmallVectorImpl<std::pair<Operation *, Operation *>>
                                               *selectedInputOutput = nullptr,
-                                          unsigned *selectedInventoryWork = nullptr) {
+                                          unsigned *selectedInventoryWork = nullptr,
+                                          SmallVectorImpl<DigitalSelectedInterfaceInput>
+                                              *selectedInterfaceOutput = nullptr) {
     DigitalDependencyGraph result;
     for (auto [value, use] : seeds) {
       Operation *localRoot = value ? value.getDefiningOp() : nullptr;
@@ -105,6 +107,8 @@ public:
     }
     if (failed(verify()))
       return failure();
+    if (selectedInterfaceOutput)
+      selectedInterfaceOutput->append(selectedInterfaceInputs.begin(), selectedInterfaceInputs.end());
     if (selectedInputOutput) {
       DenseSet<std::pair<Operation *, Operation *>> seen;
       unsigned selected = 0;
@@ -281,6 +285,7 @@ private:
   llvm::DenseMap<Operation *, SmallVector<unsigned, 2>> writers;
   llvm::DenseMap<Value, SmallVector<std::pair<Value, Operation *>, 2>> interfaceDependencies;
   llvm::DenseMap<Value, FlatSymbolRefAttr> interfaceDomains;
+  SmallVector<DigitalSelectedInterfaceInput> selectedInterfaceInputs;
   llvm::DenseSet<Value> externalContributions;
   DigitalResolvedTopology resolved;
   llvm::DenseMap<std::pair<Value, Value>, bool> relations;
@@ -1203,8 +1208,10 @@ LogicalResult AssignmentQuery::verify() {
   }
   SmallVector<DigitalInterfaceValueDependencies> interface;
   SmallVector<DigitalInterfaceObservationGroup> interfaceObservations;
+  unsigned interfaceWorkConsumed = 0;
   if (failed(collectDigitalInterfaceDependencies(module, interface, &interfaceObservations,
-                                                 &resolved)))
+                                                 &resolved, selectedInterfaceInputs,
+                                                 interfaceWorkConsumed)))
     return failure();
   for (auto &entry : interface) {
     interfaceDependencies.try_emplace(entry.value, std::move(entry.sources));
@@ -1499,6 +1506,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
         instanceInterfaces;
     DenseMap<Operation *, DigitalInterfaceMember> interfaceFacts;
     SmallVector<DigitalSelectedInputAssignment, 4> selectedInputs;
+    SmallVector<DigitalSelectedInterfaceInput> selectedInterfaceInputs;
   };
   DenseMap<Operation *, unsigned> indexes;
   SmallVector<LocalGraph, 0> definitions;
@@ -1567,7 +1575,8 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     LocalGraph local;
     unsigned inventoryWork = 0;
     auto localGraph = AssignmentQuery(context.module, limits)
-                          .graph(seeds, &local.guards, &selectedInputKeys, &inventoryWork);
+                          .graph(seeds, &local.guards, &selectedInputKeys, &inventoryWork,
+                                 &local.selectedInterfaceInputs);
     if (failed(localGraph))
       return failure();
     local.graph = std::move(*localGraph);
@@ -1885,22 +1894,23 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   DenseMap<std::pair<unsigned, Operation *>, unsigned> transferIndexes;
   for (auto [at, occurrence] : llvm::enumerate(hierarchy->occurrences())) {
     const auto &local = definitions[indexes.lookup(occurrence.module)];
-    for (const auto &fact : local.selectedInputs) {
-      if (failed(spendSelection(fact.instance)))
+    auto transferInput = [&](Operation *instance, Operation *family,
+                             ArrayRef<std::pair<Operation *, Operation *>> lanes) -> LogicalResult {
+      if (failed(spendSelection(instance)))
         return failure();
       if (!occurrence.generatedScopes.empty())
-        return reject(fact.instance, "selected input execution forbids nested generated products");
-      auto key = std::make_pair(static_cast<unsigned>(at), fact.family);
+        return reject(instance, "selected input execution forbids nested generated products");
+      auto key = std::make_pair(static_cast<unsigned>(at), family);
       auto [position, inserted] = transferIndexes.try_emplace(key, transfers.size());
       if (inserted)
-        transfers.push_back({static_cast<unsigned>(at), fact.family, {}});
+        transfers.push_back({static_cast<unsigned>(at), family, {}});
       SmallVector<unsigned, 4> contexts;
-      for (const auto &lane : fact.lanes) {
-        if (failed(spendSelection(lane.assignment)))
+      for (auto [effect, selection] : lanes) {
+        if (failed(spendSelection(effect)))
           return failure();
-        // The complete query proved an exact whole target operand. Reinspect
-        // that actual selection through the existing charged context owner.
-        auto context = selectedContext(lane.assignment->getOperand(0).getDefiningOp(), 0, at);
+        // The canonical writer owner supplies the exact selection ingress.
+        // Interface MemberAccess operand zero is not an InstancePort selection.
+        auto context = selectedContext(selection, 0, at);
         if (failed(context) || !*context)
           return failure();
         contexts.push_back(*context);
@@ -1909,9 +1919,25 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       if (inserted)
         transfer.contexts = std::move(contexts);
       else if (transfer.contexts != contexts)
-        return reject(fact.instance, "selected input facts disagree on exact family execution contexts");
+        return reject(instance, "selected input facts disagree on exact family execution contexts");
+      return success();
+    };
+    for (const auto &fact : local.selectedInputs) {
+      SmallVector<std::pair<Operation *, Operation *>, 4> lanes;
+      for (const auto &lane : fact.lanes)
+        lanes.emplace_back(lane.assignment, lane.assignment->getOperand(0).getDefiningOp());
+      if (failed(transferInput(fact.instance, fact.family, lanes)))
+        return failure();
+    }
+    for (const auto &fact : local.selectedInterfaceInputs) {
+      SmallVector<std::pair<Operation *, Operation *>, 4> lanes;
+      for (const auto &lane : fact.lanes)
+        lanes.emplace_back(lane.effect, lane.selection);
+      if (failed(transferInput(fact.instance, fact.family, lanes)))
+        return failure();
     }
   }
+
   const unsigned noTransfer = std::numeric_limits<unsigned>::max();
   auto transferFor = [&](unsigned occurrence, Operation *owner) -> FailureOr<unsigned> {
     const auto &actual = hierarchy->occurrences()[occurrence];

@@ -334,6 +334,7 @@ public:
   FailureOr<SmallVector<DigitalInterfaceTemplateDriver, 4>>
   templateDrivers(ArrayRef<std::pair<Value, Operation *>> seeds);
   LogicalResult verify();
+  LogicalResult selectedInputs(SmallVectorImpl<DigitalSelectedInterfaceInput> &result);
   LogicalResult endpoints(SmallVectorImpl<DigitalInterfaceEndpoint> &result);
   LogicalResult memberAccesses(SmallVectorImpl<DigitalInterfaceAccess> &result);
   LogicalResult topology(DigitalResolvedTopology &result);
@@ -403,6 +404,7 @@ private:
   llvm::DenseSet<Value> usedDrivers;
   llvm::DenseSet<Operation *> seenAbi;
   std::map<PhysicalMember, SmallVector<OrdinaryDriver, 2>> ordinaryDrivers;
+  std::set<Operation *> selectedInputChildren;
   SmallVector<std::pair<unsigned, Operation *>> conditionalDrivers;
   SmallVector<std::pair<unsigned, Operation *>> splits;
 };
@@ -1376,6 +1378,9 @@ Model::PhysicalMember Model::physicalMember(const Access &access) const {
 }
 LogicalResult Model::addOrdinaryDriver(const Access &access, Value target, Value source,
                                        Operation *operation) {
+  if (llvm::isa<InterfaceDriveOp>(operation) && access.instance->childInstance &&
+      access.instance->selection)
+    selectedInputChildren.insert(access.instance->childInstance);
   auto &drivers = ordinaryDrivers[physicalMember(access)];
   for (const OrdinaryDriver &previous : drivers) {
     if (++work > digitalTypeMaximumNodes)
@@ -1396,6 +1401,172 @@ LogicalResult Model::addOrdinaryDriver(const Access &access, Value target, Value
                     "ordinary Interface member has overlapping or unproved selected drivers");
   }
   drivers.push_back({target, source, operation, access.instance->operation});
+  return success();
+}
+
+LogicalResult Model::selectedInputs(SmallVectorImpl<DigitalSelectedInterfaceInput> &result) {
+  // Activation comes from the complete canonical effect inventory, not observed
+  // reads. Required leaves come from original declarations, never access keys.
+  if (selectedInputChildren.empty())
+    return success();
+  SmallVector<DigitalSelectedInterfaceInput> collected;
+  llvm::DenseMap<Operation *, uint64_t> capacities;
+  llvm::DenseMap<Operation *, int64_t> checkedOrdinals;
+  llvm::DenseSet<Operation *> admittedEffects;
+  auto charge = [&](Operation *at) {
+    return ++work <= digitalTypeMaximumNodes
+               ? success()
+               : reject(at, "selected Interface input exceeds finite structural work budget");
+  };
+  auto scalar = [](Type type) {
+    return llvm::isa<BitsType, UIntType>(type) || type.isSignlessInteger(1);
+  };
+  auto literal = [](const InstantiatedIntegerExpression &value) {
+    return value.root && value.root->kind == InstantiatedIntegerNode::Kind::Literal;
+  };
+  for (Operation *childInstance : selectedInputChildren) {
+    Operation *family = childInstance->getParentOp();
+    Operation *childModule = resolveInstanceModuleDefinition(childInstance);
+    if (failed(charge(childInstance)) || !llvm::isa_and_nonnull<GenerateOp>(family) ||
+        family->getParentOp() != module || !childModule)
+      return reject(childInstance, "selected Interface input requires a direct generated child");
+    auto capacity = capacities.find(family);
+    if (capacity == capacities.end()) {
+      unsigned remaining = digitalTypeMaximumNodes - work, before = remaining;
+      auto domain = resolveGeneratedDomain(family, remaining);
+      work += before - remaining;
+      if (failed(domain) || !literal(domain->lower) || !literal(domain->upperExclusive) ||
+          !literal(domain->step) || !domain->maximumTripCount || !domain->attainedInductionBounds)
+        return reject(family, "selected Interface input requires a fixed nonempty family");
+      capacity = capacities.try_emplace(family, domain->maximumTripCount).first;
+    }
+    auto imported = childDefinitions.find(childModule);
+    if (imported == childDefinitions.end())
+      return reject(childInstance, "selected Interface input lost its original declarations");
+    Model &child = *imported->second;
+    for (Operation &declaration : childModule->getRegion(0).front()) {
+      if (failed(charge(&declaration)))
+        return failure();
+      if (!llvm::isa<InterfaceInstanceOp>(declaration) || !marked(&declaration))
+        continue;
+      // Include even an endpoint never projected by the parent. Import through
+      // the existing declaration owner and account for this additional work.
+      if (!child.instances.count(&declaration)) {
+        unsigned before = child.work;
+        auto status = child.instance(&declaration);
+        unsigned spent = child.work - before;
+        if (spent > digitalTypeMaximumNodes - work)
+          return reject(&declaration, "selected Interface declaration inventory exceeds budget");
+        work += spent;
+        if (failed(status))
+          return failure();
+      }
+      const Instance &original = child.instances.find(&declaration)->second;
+      for (Operation &memberOp : original.definition->operation->getRegion(0).front()) {
+        if (failed(charge(&memberOp)))
+          return failure();
+        if (!llvm::isa<InterfaceMemberOp>(memberOp))
+          continue;
+        auto member = original.definition->members.find(symbol(&memberOp));
+        auto role = original.role->entries.find(symbol(&memberOp));
+        if (member == original.definition->members.end() || role == original.role->entries.end())
+          return reject(&memberOp, "selected Interface input lost its original role leaf");
+        if (role->second.access != "in")
+          continue;
+        if (!original.dimensions.empty() || !role->second.nestedRoles.empty() ||
+            !role->second.nestedInterfaces.empty() || member->second.protocol != "plain" ||
+            !scalar(member->second.type))
+          return reject(&memberOp, "selected Interface input requires ordinary scalar plain leaves");
+        auto bucket = ordinaryDrivers.find({&declaration, childInstance, symbol(&memberOp).str()});
+        if (bucket == ordinaryDrivers.end() || bucket->second.size() != capacity->second)
+          return reject(&declaration, "selected Interface input requires complete declared leaf coverage");
+        DigitalSelectedInterfaceInput fact;
+        fact.instance = childInstance;
+        fact.endpoint = &declaration;
+        fact.member = &memberOp;
+        fact.family = family;
+        fact.path = memberOp.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+        for (const OrdinaryDriver &driver : bucket->second) {
+          if (failed(charge(driver.operation)))
+            return failure();
+          auto access = accesses.find(driver.target);
+          if (access == accesses.end())
+            return reject(driver.operation, "selected Interface input lost its actual target");
+          const Instance &endpoint = *access->second.instance;
+          Operation *selection = endpoint.selection;
+          Operation *target = driver.target.getDefiningOp();
+          Operation *source = driver.source.getDefiningOp();
+          if (!llvm::isa<InterfaceDriveOp>(driver.operation) ||
+              driver.operation->getParentOp() != module || !target || target->getParentOp() != module ||
+              !source || source->getParentOp() != module || !selection ||
+              selection->getParentOp() != module || selection->getNumOperands() != 2 ||
+              endpoint.childInstance != childInstance || endpoint.childEndpoint != &declaration ||
+              access->second.entry->access != "in" || !endpoint.domain ||
+              driver.operation->getOperand(0) != driver.target ||
+              driver.operation->getOperand(1) != driver.source || !scalar(driver.target.getType()) ||
+              !scalar(driver.source.getType()))
+            return reject(driver.operation, "selected Interface input requires whole parent-local drive effects");
+          // Shape's established subsidiary limits remain unchanged; the actual
+          // invocation is charged here as well as the represented writer above.
+          if (failed(charge(driver.operation)))
+            return failure();
+          auto shape = resolveStaticShapeProjection(driver.target, driver.operation);
+          if (failed(shape) || shape->root != driver.target || !shape->projections.empty())
+            return reject(driver.operation, "selected Interface input forbids partial writes");
+          if (fact.type && fact.type != driver.target.getType())
+            return reject(driver.operation, "selected Interface input lanes disagree on actual scalar type");
+          fact.type = driver.target.getType();
+          auto checked = checkedOrdinals.find(selection);
+          if (checked == checkedOrdinals.end()) {
+            unsigned remaining = digitalTypeMaximumNodes - work, before = remaining;
+            SmallVector<Operation *, 2> uses;
+            auto proof = inspectGeneratedSelection(selection->getOperand(0), selection->getOperand(1),
+                                                    text(selection, "member"), selection, uses, remaining);
+            auto ordinal = succeeded(proof)
+                               ? resolveStructuralIntegerExpression(selection->getOperand(1), selection,
+                                                                    remaining)
+                               : FailureOr<StructuralIntegerFacts>(failure());
+            work += before - remaining;
+            auto exported = succeeded(proof) ? inspectGeneratedExportSymbol(proof->exportOperation)
+                                            : FailureOr<Operation *>(failure());
+            if (failed(proof) || failed(exported) || *exported != childInstance ||
+                proof->family != family || proof->selections.size() != 1 ||
+                proof->selections.front().family != family ||
+                proof->selections.front().ordinal != selection->getOperand(1) ||
+                selection->getOperand(0) != family->getResult(0) || uses.size() != 1 ||
+                uses.front() != selection || failed(ordinal) || !ordinal->expression ||
+                !literal(*ordinal->expression))
+              return reject(selection, "selected Interface input requires exact ordered child selection");
+            int64_t ordinalValue = ordinal->expression->root->literal;
+            if (ordinalValue < 0 || static_cast<uint64_t>(ordinalValue) >= capacity->second)
+              return reject(selection, "selected Interface input ordinal is outside its family");
+            checked = checkedOrdinals.try_emplace(selection, ordinalValue).first;
+          }
+          int64_t lane = checked->second;
+          admittedEffects.insert(driver.operation);
+          fact.lanes.push_back({lane, driver.target, driver.source, driver.operation, selection});
+        }
+        llvm::sort(fact.lanes, [](const auto &a, const auto &b) { return a.ordinal < b.ordinal; });
+        for (auto [index, lane] : llvm::enumerate(fact.lanes))
+          if (lane.ordinal != static_cast<int64_t>(index))
+            return reject(lane.effect, "selected Interface input requires unique complete lane coverage");
+        collected.push_back(std::move(fact));
+      }
+    }
+  }
+  // An alternate role view must not hide a selected drive outside the original
+  // declaration's required input inventory.
+  for (const auto &[identity, drivers] : ordinaryDrivers)
+    for (const auto &driver : drivers) {
+      if (failed(charge(driver.operation)))
+        return failure();
+      const auto &access = accesses.find(driver.target)->second;
+      if (access.instance->childInstance && access.instance->selection &&
+          llvm::isa<InterfaceDriveOp>(driver.operation) &&
+          !admittedEffects.contains(driver.operation))
+        return reject(driver.operation, "selected Interface drive is outside its original input role");
+    }
+  result.append(std::make_move_iterator(collected.begin()), std::make_move_iterator(collected.end()));
   return success();
 }
 
@@ -2653,6 +2824,38 @@ LogicalResult collectDigitalInterfaceDependencies(
     return failure();
   if (topology)
     *topology = std::move(collected);
+  return success();
+}
+LogicalResult collectDigitalInterfaceDependencies(
+    Operation *module, SmallVectorImpl<DigitalInterfaceValueDependencies> &dependencies,
+    SmallVectorImpl<DigitalInterfaceObservationGroup> *observations,
+    DigitalResolvedTopology *topology,
+    SmallVectorImpl<DigitalSelectedInterfaceInput> &selectedInputs,
+    unsigned &interfaceWorkConsumed) {
+  Model model(module); // The Interface counter is independent and starts at zero.
+  SmallVector<DigitalInterfaceValueDependencies> collectedDependencies;
+  SmallVector<DigitalInterfaceObservationGroup> collectedObservations;
+  SmallVector<DigitalSelectedInterfaceInput> collectedInputs;
+  DigitalResolvedTopology collectedTopology;
+  auto status = [&]() -> LogicalResult {
+    if (failed(model.verify()) || (topology && failed(model.topology(collectedTopology))) ||
+        failed(model.dependencies(collectedDependencies, observations ? &collectedObservations : nullptr)) ||
+        failed(model.selectedInputs(collectedInputs)))
+      return failure();
+    return success();
+  }();
+  interfaceWorkConsumed = model.consumedWork();
+  if (failed(status))
+    return failure();
+  dependencies.append(std::make_move_iterator(collectedDependencies.begin()),
+                      std::make_move_iterator(collectedDependencies.end()));
+  if (observations)
+    observations->append(std::make_move_iterator(collectedObservations.begin()),
+                         std::make_move_iterator(collectedObservations.end()));
+  if (topology)
+    *topology = std::move(collectedTopology);
+  selectedInputs.append(std::make_move_iterator(collectedInputs.begin()),
+                        std::make_move_iterator(collectedInputs.end()));
   return success();
 }
 } // namespace nodal

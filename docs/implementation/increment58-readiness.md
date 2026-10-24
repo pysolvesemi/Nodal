@@ -3698,3 +3698,78 @@ capacity and public Extended policy remain unresolved separately. No held
 firtool/Verilog exporter, comparator repair, installation, simulator, formal lane,
 CI or full qualification was run. No universal scale/performance or generated
 Verilog-* acceptance claim is made.
+
+
+## Checkpoint 80: Area yield and staged-if integration
+
+On 2026-10-23, F-159.A.6.2 is accepted as a bounded source/compiler integration
+reconciliation against canonical checkpoint 79,
+`75fa7c1d5aec9191da222ed3ceab916fa8eba30b`. This closes the Area amendment's
+existing yield/staged-if child, not general mixed-effect partitioning, generated
+hierarchy completion or target qualification. No public API or implementation
+changes are introduced.
+
+### Required clauses and executed evidence
+
+- **Typed yields and structural index conditions:** `HdlRange.map` in
+  `GeneratedAreaApi.scala` returns `GeneratedAreas[A]`; ConstructionSession's
+  `generatedAreas` captures one owned template and checks its yielded Area.
+  `Increment58GeneratedAreaTests` and the public
+  `Increment58GeneratedLaneRegisters.scala` witnesses retain exact Bits storage,
+  per-lane enable/reset, index-dependent structural `if`, behavioral `when` and
+  static member selection. Checkpoint 13 records 14 passing generated groups and
+  six actual shared-classpath default-native replays, not target waveforms.
+- **Finite bounds and compatible forms:** the same suite rejects negative,
+  upper, empty, runtime and default-only selection, and checks empty capture,
+  nonzero lower/step ordinals and callback/yield overload compatibility.
+  Checkpoint 7 records the original two-/three-/four-argument callbacks and
+  predecessor-compiled JAR execution. Ordinary Scala host loops remain
+  elaboration-only; no host-loop implementation is replaced. F55's
+  [structural acceptance](increment55-readiness.md#final-structural-checkpoint-acceptance)
+  records affected loop predecessors, ordinary host controls, bytecode checks
+  and procedural-index rejection, including actual structural value results.
+- **Helpers, separate compilation and host effects:** `tests/scala/areas/run.py`
+  compiles producer/factory/consumer JARs and executes typed saved/nested
+  references. Checkpoint 23 records its seven lexical, five generated and nine
+  guarded effect/metadata negative fixtures, plus actual separately compiled
+  helper admission. Host mutation, pure/procedural/sequential misuse and
+  missing/forged/unknown summaries fail closed. StructuralFamily's checked
+  effect profile does not grant arbitrary host effects or widen older callback
+  permissions. The approved GeneratedAreas and StructuralIf gates specify these
+  boundaries; unsupported helpers require valid supported summaries or reject.
+
+Read-only inspection reconfirmed retained executions, not fresh HEAD passes:
+`.work/f58-generated-areas/shared-checkpoint/receipt.json` has six zero-status
+native gates on `ef01aec4...`; `n2a/shared-promoted/receipt.json` under the same
+Area directory has four zero-status guarded/nested/helper/empty gates on
+`83d54e05...`. The retained `n2a/harness.log` reports the separate-JAR harness
+success above. `.work/f58-guarded-source-shared/tests.log` records the 49-group
+source batch; `.work/f58-guarded-artifact/result.txt` records successful tests and
+manifest checks for checkpoint 23's overlapping 13-group batch. Counts are not
+added together or attributed to today's expanded runners. Original failures and
+compiler/source identities remain in their historical checkpoint records.
+
+### Current ownership review and acceptance limits
+
+`git diff e3da389..75fa7c1` is empty for `core/scala/frontend/plugin` and the API
+files `AreaConstruction.scala`, `GeneratedAreaApi.scala`,
+`GeneratedAreaDerivation.scala` and `StructuralIfRuntime.scala`.
+ConstructionSession has changed substantially, including checkpoints 78-79;
+this is not a claim that the complete runtime owner is unchanged or that all
+historical fixtures freshly passed at HEAD. Its current yield entry still
+uses canonical generated-region capture, actual Area ownership and export
+inventory. The shared construction, iteration, structural/effect and naming
+owners remain authoritative, without a second evaluator or per-lane cloning.
+
+This documentation-only reconciliation requires document/link, clause/checklist
+and diff checks, not a new build or runtime/target campaign. No new scale or
+performance claim applies. Default 65536 construction and independent native
+proof limits are unchanged. F-058.B.2.2, F-159.B.4.2, F-159.C.3.2, F-153.B.1,
+F-065.B.3.4, F-066.D.2.2, F-067.D.4.2 and their open parents remain open.
+No held exporter/firtool, comparator repair, installation, CI or broader
+qualification is run or credited here.
+
+The current increment does not affect generated Verilog-*.
+It reconciles an existing source/compiler deliverable; the maintained lane
+source and historical native replays above are the existing demonstration,
+not newly generated RTL or portable Verilog-2005 acceptance.

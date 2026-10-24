@@ -1974,3 +1974,34 @@ receipt retention and sampled allocation preserve the 36 MiB owned cap and
 235 MiB reserve. No CI or full qualification ran. Pending geometry/context/source
 order, broader selected/backend profiles and the remaining Foundation 58 work
 remain open; this is a partial checkpoint, not increment completion.
+
+## Checkpoint 58: maintained mapper contract controls
+
+The focused mapper controls are now maintained as a standalone source/fixture
+bundle with an explicit-existing-probe runner. Thirteen corrected inputs cover
+legacy and invariant-anchor mapping, nonunit coordinates, holes/endpoints,
+provenance/refusal, failure immutability and bounded work. The runner checks all
+1,796 assertions, exit status and exact output hashes. These are the same mapper
+cases already reported in checkpoint 57, not an additional semantic acceptance
+count or a new broad qualification suite. The runner's fresh replay passes all
+thirteen against the accepted executable.
+
+Pinned formatting of the proposed C++ source passes. A single-TU compilation
+using the same flags/includes wrote only to anonymous memory; its 71,960-byte
+object is byte-identical to the previously accepted object. Thus the unchanged
+executable composition remains matched without relinking or retaining another
+object/binary copy. Historical absolute-path build commands, library hashes and
+execution receipts stay in ignored scratch; only maintained source, fixture
+expectations, runner and portable dependency guidance are committed.
+
+The controls deliberately parse raw inputs without whole-module verification.
+They do not establish backend admission of unsupported raw profiles. In
+particular, captured-operand preflight still returns Invalid and scalar-to-lane
+inversion remains refused. Mapper state-limit controls are not connectivity
+state-ceiling evidence. Initial invalid harnesses and unrelated later array-root
+experiments are excluded. See [the focused guide](../../tests/compiler/fixtures/increment58/shape-anchor-mapper/README.md)
+for these limits and matching build requirements. The small handoff retains
+278,528 allocated bytes, within its revised 384 KiB allowance; sampled native
+owned allocation remains below 36 MiB, with borrowed preexisting source inodes
+reported separately and the 235 MiB free-space reserve preserved. No CI, target
+consumer run or held CIRCT repair was performed. Foundation 58 remains incomplete.

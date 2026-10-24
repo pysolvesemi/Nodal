@@ -1,0 +1,202 @@
+{
+  "source_sha256": "3ef4683f734c7c60c5cc519561626d728d77f2976be2b9304eb527a9b418c869",
+  "expected_calls": 13,
+  "expected_checks": 1796,
+  "cases": [
+    {
+      "file": "fixtures/nonunit-shared-scalar.mlir",
+      "mode": "anchor",
+      "sha256": "8bbb3cc8b0f33fe6a77807330ec188dca3f11ab3cb4bb18d8060ac5ce58567f3",
+      "checks": 196,
+      "stdout_sha256": "e299ec89997bccfef479ac1aac30dc7941d9a39f469f93d29c6a7b8acc8a5a65",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/nonunit-shared-scalar.mlir",
+        "mode": "anchor",
+        "source": ".work/f58-generated-conservative-continuation/nonunit-map/nonunit-shared-scalar.mlir",
+        "sha256": "8bbb3cc8b0f33fe6a77807330ec188dca3f11ab3cb4bb18d8060ac5ce58567f3",
+        "kind": "byte-identical existing native fixture"
+      }
+    },
+    {
+      "file": "fixtures/nonunit-sibling-loops.mlir",
+      "mode": "paired",
+      "sha256": "d20a1077bbe4744634c7ab022f1605f580cd5714987b1cc9d9edf29b2e0031c4",
+      "checks": 309,
+      "stdout_sha256": "e3e681c845e572c92f3b93ea1417c51fe9c8023a8be7dd421635bc459ff6fd2c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/nonunit-sibling-loops.mlir",
+        "mode": "paired",
+        "source": ".work/f58-generated-conservative-continuation/nonunit-map/nonunit-sibling-loops.mlir",
+        "sha256": "d20a1077bbe4744634c7ab022f1605f580cd5714987b1cc9d9edf29b2e0031c4",
+        "kind": "byte-identical existing native fixture"
+      }
+    },
+    {
+      "file": "fixtures/lower2-step2.mlir",
+      "mode": "paired",
+      "sha256": "4c09bbd8da37a82d0452241a1bdf7a02679635b799296cf610b6de643541d6ed",
+      "checks": 305,
+      "stdout_sha256": "fbf3723e5573589a40cf106936acd6a788e6405e4e374836a367bd08401b65ef",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/lower2-step2.mlir",
+        "mode": "paired",
+        "source": ".work/f58-generated-conservative-continuation/nonunit-map/lower2-step2.mlir",
+        "sha256": "4c09bbd8da37a82d0452241a1bdf7a02679635b799296cf610b6de643541d6ed",
+        "kind": "byte-identical existing native fixture"
+      }
+    },
+    {
+      "file": "fixtures/last-coordinate.mlir",
+      "mode": "paired",
+      "sha256": "a107fa58edc92afb5aa00f1452b05f1e35e52e0f56d898da609a4764b39bfe22",
+      "checks": 305,
+      "stdout_sha256": "fbf3723e5573589a40cf106936acd6a788e6405e4e374836a367bd08401b65ef",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/last-coordinate.mlir",
+        "mode": "paired",
+        "source": ".work/f58-generated-conservative-continuation/nonunit-map/last-coordinate.mlir",
+        "sha256": "a107fa58edc92afb5aa00f1452b05f1e35e52e0f56d898da609a4764b39bfe22",
+        "kind": "byte-identical existing native fixture"
+      }
+    },
+    {
+      "file": "fixtures/residue-hole.mlir",
+      "mode": "outside",
+      "sha256": "66bbdef92fb2a404f2dfaab99aa283c6162dbb2f2e0dfef8eba1eb81a344b86b",
+      "checks": 33,
+      "stdout_sha256": "a3308c40e26b8b723d54091f68ad375549a63077b2352bf90038b215f8a3d7f0",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/residue-hole.mlir",
+        "mode": "outside",
+        "source": ".work/f58-generated-conservative-continuation/nonunit-map/residue-hole.mlir",
+        "sha256": "66bbdef92fb2a404f2dfaab99aa283c6162dbb2f2e0dfef8eba1eb81a344b86b",
+        "kind": "byte-identical existing native fixture"
+      }
+    },
+    {
+      "file": "fixtures/below-image.mlir",
+      "mode": "outside",
+      "sha256": "18c860fb73548e03f723e98befe42bc28b3c967eed7d17834eef0d7ebcf50f8f",
+      "checks": 33,
+      "stdout_sha256": "a3308c40e26b8b723d54091f68ad375549a63077b2352bf90038b215f8a3d7f0",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/below-image.mlir",
+        "mode": "outside",
+        "source": ".work/f58-generated-conservative-continuation/nonunit-map/below-image.mlir",
+        "sha256": "18c860fb73548e03f723e98befe42bc28b3c967eed7d17834eef0d7ebcf50f8f",
+        "kind": "byte-identical existing native fixture"
+      }
+    },
+    {
+      "file": "fixtures/above-image.mlir",
+      "mode": "outside",
+      "sha256": "cb2895b6f0379cf57050c5ade6e19b6cc44e06219d246150bfd4843d43f613e1",
+      "checks": 33,
+      "stdout_sha256": "a3308c40e26b8b723d54091f68ad375549a63077b2352bf90038b215f8a3d7f0",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/above-image.mlir",
+        "mode": "outside",
+        "source": ".work/f58-generated-conservative-continuation/nonunit-map/above-image.mlir",
+        "sha256": "cb2895b6f0379cf57050c5ade6e19b6cc44e06219d246150bfd4843d43f613e1",
+        "kind": "byte-identical existing native fixture"
+      }
+    },
+    {
+      "file": "fixtures/raw-cross-coordinate.mlir",
+      "mode": "paired",
+      "sha256": "1c5e9073b2cf7f0ea2c257ba69f612b39f083ee2150d71c1f1d276837d0202da",
+      "checks": 155,
+      "stdout_sha256": "2a2954db0183c52a700baa181e3af4d2e8f1095c6f877756980041903a19f4fe",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/raw-cross-coordinate.mlir",
+        "mode": "paired",
+        "source": ".work/f58-generated-conservative-continuation/occurrence-map/raw-cross-coordinate.mlir",
+        "sha256": "1c5e9073b2cf7f0ea2c257ba69f612b39f083ee2150d71c1f1d276837d0202da",
+        "kind": "byte-identical existing native fixture"
+      }
+    },
+    {
+      "file": "fixtures/shared-scalar.mlir",
+      "mode": "anchor",
+      "sha256": "9a8f459bbe6de0862ad17f440feeb593679e181798d4c3c04743ef54f39c0769",
+      "checks": 196,
+      "stdout_sha256": "e299ec89997bccfef479ac1aac30dc7941d9a39f469f93d29c6a7b8acc8a5a65",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/shared-scalar.mlir",
+        "mode": "anchor",
+        "source": ".work/f58-generated-conservative-continuation/relations/shared-scalar.mlir",
+        "sha256": "9a8f459bbe6de0862ad17f440feeb593679e181798d4c3c04743ef54f39c0769",
+        "kind": "byte-identical existing native fixture"
+      }
+    },
+    {
+      "file": "fixtures/raw-fresh-two-views.mlir",
+      "mode": "reject",
+      "sha256": "4a6f09a5ea2dbdad50358d3cec9d3319578ad57cc3aadadbc8a44b1efc116d10",
+      "checks": 65,
+      "stdout_sha256": "a33504dee2d68d73801d13f2ebc30a0ed3ff76fd05c201a1fe200ce222e33822",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/raw-fresh-two-views.mlir",
+        "mode": "reject",
+        "source": ".work/f58-generated-conservative-continuation/relations/raw-fresh-two-views.mlir",
+        "sha256": "4a6f09a5ea2dbdad50358d3cec9d3319578ad57cc3aadadbc8a44b1efc116d10",
+        "kind": "byte-identical existing native fixture"
+      }
+    },
+    {
+      "file": "fixtures/authored-nested.mlir",
+      "mode": "reject",
+      "sha256": "ae76f535ff67904d0288b17d28c5087533fd0bf465c20d09e84b748f077ba972",
+      "checks": 33,
+      "stdout_sha256": "6b32a445729c805e66b80f4b20116b7b97eb728191ec874c9889b81d411738ce",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/authored-nested.mlir",
+        "mode": "reject",
+        "sha256": "ae76f535ff67904d0288b17d28c5087533fd0bf465c20d09e84b748f077ba972",
+        "kind": "authored native Shape query fixture, NOT generated output",
+        "source": "prepare-fixtures.py; grammar idioms from core/compiler/test/Unit/ShapeIterationImageTest.cpp"
+      }
+    },
+    {
+      "file": "fixtures/authored-capture.mlir",
+      "mode": "capture",
+      "sha256": "49112a0c4195308cb74e2b163b45449be8f8b720ef916f2c80ab29ff01e2b75a",
+      "checks": 33,
+      "stdout_sha256": "472aeb32a10057333a9c8034f405b63e33505f3c55c9846ffd31704145b3550c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/authored-capture.mlir",
+        "mode": "capture",
+        "sha256": "49112a0c4195308cb74e2b163b45449be8f8b720ef916f2c80ab29ff01e2b75a",
+        "kind": "authored native Shape query fixture, NOT generated output",
+        "source": "prepare-fixtures.py; grammar idioms from core/compiler/test/Unit/ShapeIterationImageTest.cpp"
+      }
+    },
+    {
+      "file": "fixtures/authored-singleton-anchor.mlir",
+      "mode": "anchor",
+      "sha256": "4a76252d208bb25044d196750b09ec696d0290bf1bdaf66f96c69ee6ff0b8102",
+      "checks": 100,
+      "stdout_sha256": "6a715847d0afd3d1a31f6ec14561225b58a53d3732934618bce428aef313412b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin": {
+        "path": ".work/f58-conservative-anchor-proof/mapper-tests/authored-singleton-anchor.mlir",
+        "mode": "anchor",
+        "sha256": "4a76252d208bb25044d196750b09ec696d0290bf1bdaf66f96c69ee6ff0b8102",
+        "kind": "authored native Shape query fixture, NOT generated output",
+        "source": "prepare-fixtures.py; grammar idioms from core/compiler/test/Unit/ShapeIterationImageTest.cpp"
+      }
+    }
+  ]
+}

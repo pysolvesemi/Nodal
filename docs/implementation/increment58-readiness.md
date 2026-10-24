@@ -2144,3 +2144,38 @@ source, recipe, manifest and dependency verification; their historical recipes
 require restoration. Compile warnings, fixture/recipe mistakes and each genuine
 capacity refusal remain recorded honestly. Foundation 58 is incomplete. No CI,
 broad qualification, publication retry or held target-consumer action was run.
+
+## Checkpoint 62: avoid unused semantic-operation suffix work
+
+A four-line change in the existing semantic-origin owner defers pure suffix
+computation that metadata operations never consume. Construction-exact mode
+charges the lazy cell and all suffix work whenever a consuming branch executes.
+FIFO, pipe, delay and operation- or owner-based FSM branches retain the same
+values. Legacy mode forces evaluation at its original point before branch probes.
+No source reads, freshness checks, naming passes or budget coefficients are
+removed, and no stem, locale, digest or cross-invocation cache is introduced.
+
+The maintained runner freshly compiles three sources and passes all six resolver
+cases. These deliberately API-classified fixtures assert real captured spans and
+API identities, but are resolver-unit diagnostics rather than authored hardware.
+Complete in-process result equality, generated categories, unused metadata work,
+used-suffix failure, nested restoration and legacy failure order are checked.
+Counting-callback sentinels are not whole-Session exhaustion evidence. Twelve
+serialized-result and legacy-charge lines match between baseline and successor
+using identical compiled fixtures; serialization orders maps and sets without
+omitting values. Lazy evaluation may add an exception frame, so identical helper
+stack bytes are not promised. Sixteen retained predecessor groups and fourteen
+raw output comparisons pass; those consumers were not recompiled. See the
+[maintained suffix guide](../../tests/scala/domain-hierarchy/dead-operation-suffix/DEAD_OPERATION_SUFFIX.md).
+
+All 97 effective inputs match the committed source closure. Verified raw-plus-ZIP
+coexistence measured 51,400,704 owned bytes within the existing 62 MiB cap, with
+442,441,728 bytes free above the unchanged reserve. Archive verification preceded
+raw cleanup; sampled measurements are not a continuous-peak guarantee.
+
+The unchanged direct-port witness now completes final naming but still exhausts
+the 65,536-unit budget during actual publication relationship-index grouping.
+This remains an expected-positive capacity failure, not an accepted refusal.
+No relationship-index reuse or budget change is included. Full direct-port
+publication, generalized contexts, public callbacks and Foundation 58 completion
+remain open. No CI, broad qualification or held action was retried.

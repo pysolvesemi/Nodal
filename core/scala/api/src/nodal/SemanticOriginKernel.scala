@@ -1946,7 +1946,10 @@ private[nodal] final class SemanticOriginBuilder:
       val owner = generatedStem(capture.site.apiOwner)
       val operation = generatedStem(capture.site.apiOperation)
       val module = modulePaths(capture.module)
-      val suffix = sourceSuffix(capture.site)
+      canonicalVisit() // The exact path pays for the lazy suffix cell before allocation.
+      lazy val suffix = sourceSuffix(capture.site)
+      if !canonicalAccounting then
+        val _ = suffix // Preserve legacy eager evaluation before the branch probes.
       if canonicalProbe(operation == "fifo") then
         canonicalVisit()
         generated +=

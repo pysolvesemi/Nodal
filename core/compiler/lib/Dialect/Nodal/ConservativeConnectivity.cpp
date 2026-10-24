@@ -1610,10 +1610,63 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
           !value.getValue().isFinite())
         return failure();
     }
-    for (Operation &candidate : *structuralBody(proof->family))
-      if (llvm::isa<ParameterOverrideOp>(candidate) &&
-          candidate.getAttrOfType<FlatSymbolRefAttr>("instance") == reference)
+    // This low-level admission query independently checks direct parent Real
+    // references. Evaluation and constraint semantics remain in ParameterModel.
+    auto uniqueParameter = [](Block *body, llvm::StringRef name) -> Operation * {
+      if (!body || name.empty())
+        return nullptr;
+      Operation *result = nullptr;
+      for (Operation &candidate : *body) {
+        if (textAttr(&candidate, "sym_name") != name)
+          continue;
+        if (result || !llvm::isa<ParameterOp>(candidate))
+          return nullptr;
+        result = &candidate;
+      }
+      return result;
+    };
+    auto ordinaryReal = [](Operation *parameter, Operation *owner) {
+      auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+      return parameter && parameter->getParentOp() == owner && type && type.getValue().isF64() &&
+             !parameter->hasAttr("unit") && !parameter->hasAttr("generated_owner") &&
+             !parameter->hasAttr("generated_induction") && getParameterKind(parameter) == "real" &&
+             getParameterClassification(parameter) == "ordinary";
+    };
+    Operation *parent = operation->getParentOp();
+    Block *parentBody = structuralBody(parent);
+    Block *familyBody = structuralBody(proof->family);
+    if (!parentBody || !familyBody)
+      return failure();
+    llvm::StringSet<> symbolicFormals;
+    for (Operation &candidate : *familyBody) {
+      if (!llvm::isa<ParameterOverrideOp>(candidate) ||
+          candidate.getAttrOfType<FlatSymbolRefAttr>("instance") != reference)
+        continue;
+      if (candidate.getNumOperands() != 1 || candidate.getNumResults() != 0 ||
+          resolveStructuralInstance(&candidate, reference) != instance ||
+          failed(verifyGeneratedStructuralOwnership(&candidate)) ||
+          failed(verifyGeneratedStructuralOwnership(instance)))
         return failure();
+      auto formalReference = candidate.getAttrOfType<FlatSymbolRefAttr>("parameter");
+      Operation *formal =
+          formalReference ? uniqueParameter(body, formalReference.getValue()) : nullptr;
+      Operation *actual = candidate.getOperand(0).getDefiningOp();
+      if (!formalReference || !ordinaryReal(formal, module) ||
+          textAttr(formal, "variability") != "symbolic" ||
+          !symbolicFormals.insert(formalReference.getValue()).second ||
+          bindings.get(formalReference.getValue()) ||
+          !llvm::isa_and_nonnull<ConstParameterRefOp>(actual) || actual->getParentOp() != parent ||
+          actual->getNumOperands() != 0 || actual->getNumResults() != 1 ||
+          !candidate.getOperand(0).getType().isF64() || actual->hasAttr("unit") ||
+          actual->hasAttr("generated_owner") || actual->hasAttr("generated_induction") ||
+          !structurallyPrecedes(actual, &candidate))
+        return failure();
+      auto sourceReference = actual->getAttrOfType<FlatSymbolRefAttr>("parameter");
+      Operation *source =
+          sourceReference ? uniqueParameter(parentBody, sourceReference.getValue()) : nullptr;
+      if (!ordinaryReal(source, parent))
+        return failure();
+    }
     declaration = childSymbols.lookup(textAttr(operation, "endpoint"));
     if (!llvm::isa_and_nonnull<InterfaceInstanceOp>(declaration) ||
         declaration->getParentOp() != module)

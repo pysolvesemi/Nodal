@@ -7059,17 +7059,34 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           literal.kind == "real" && literal.value.toDoubleOption.exists(_.isFinite)
         ) && CandidateRuntime.expressionUnit(expression).forall(_.isEmpty)
       case _ => false
+    def ordinaryDimensionlessReal(parameter: DeclarationRecord): Boolean =
+      parameter.kind == KernelSignalKind.Parameter && parameter.dataType.exists(
+        CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Real")
+      ) && parameter.attributes.iterator.map(_._1).toSet.size == parameter.attributes.size &&
+        parameter.attributes.find(_._1 == "classification").forall(_._2 == "ordinary") &&
+        parameter.attributes.find(_._1 == "unit").forall(_._2 == "")
+    def directParentReal(value: Any): Boolean = value match
+      case parameter: Param[?] =>
+        // Admit the exact declaration, not its default or a derived expression.
+        Option(declarationIds.get(parameter)).exists: reference =>
+          reference.module == currentModule.handle &&
+            currentModule.declarations.lift(reference.index).exists(declaration =>
+              (declaration.reference eq reference) && (declaration.value eq parameter) &&
+                ordinaryDimensionlessReal(declaration)
+            ) && !currentModule.generatedRegions.exists(_.declarations.contains(reference))
+      case _ => false
     val parameters = child.declarations.filter(_.kind == KernelSignalKind.Parameter)
     if !parameters.forall(parameter =>
-        parameter.dataType.exists(
-          CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Real")
-        ) &&
-          parameter.attributes.find(_._1 == "default").exists(entry => realLiteral(entry._2)) &&
-          parameter.attributes.find(_._1 == "classification").forall(_._2 == "ordinary") &&
-          parameter.attributes.find(_._1 == "unit").forall(_._2 == "")
-      ) || !instance.parameterOverrides.forall((_, value) => realLiteral(value))
+        ordinaryDimensionlessReal(parameter) &&
+          parameter.attributes.find(_._1 == "default").exists(entry => realLiteral(entry._2))
+      ) || !instance.parameterOverrides.forall((_, value) =>
+        realLiteral(value) || directParentReal(value)
+      )
     then
-      invalid("selected conservative child parameters require ordinary dimensionless Real literals")
+      invalid(
+        "selected conservative child parameters require ordinary dimensionless Real literals " +
+          "or direct parent Real references, with literal child defaults"
+      )
     val analysis = new StructuralBoundAnalysis(
       currentModule.handle,
       "NODAL-INTERFACE-058-ANALOG",

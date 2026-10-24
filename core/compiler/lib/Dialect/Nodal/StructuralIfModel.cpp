@@ -329,14 +329,17 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
                                 attribute.getName().getValue()))
           return reject(op, "generated parameter override carries an unsupported field");
       if (failed(boundary) || boundary->instance->getParentOp() != family || !parameter ||
-          !declared || !declared.getValue().isSignlessInteger(64) || op->getNumOperands() != 1 ||
+          !declared || op->getNumOperands() != 1 ||
           op->getOperand(0).getType() != declared.getValue() || failed(mlir::verify(op, false)) ||
-          failed(resolveGeneratedInstanceIntegerParameterFacts(
-              boundary->instance, parameter,
-              isStructuralParameter(parameter) ? ParameterIntegerMode::Storage
-                                               : ParameterIntegerMode::MathematicalSigned64)))
+          (!isGeneratedParentRealParameterOverride(op, boundary->instance, parameter) &&
+           (!declared.getValue().isSignlessInteger(64) ||
+            failed(resolveGeneratedInstanceIntegerParameterFacts(
+                boundary->instance, parameter,
+                isStructuralParameter(parameter) ? ParameterIntegerMode::Storage
+                                                 : ParameterIntegerMode::MathematicalSigned64)))))
         return reject(op, "generated child parameter override requires exact all-lane Integer "
-                          "formal/actual proof");
+                          "formal/actual proof or exact direct parent ordinary dimensionless "
+                          "Real reference");
       return success();
     }
     if (llvm::isa<InstanceDomainBindingOp>(op))

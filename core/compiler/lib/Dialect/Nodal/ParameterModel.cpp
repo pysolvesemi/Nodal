@@ -181,6 +181,45 @@ Operation *findDirectSymbol(Operation *module, llvm::StringRef name,
   return nullptr;
 }
 
+bool isDirectParentRealReference(Value value, Operation *parent, Operation *child,
+                                 Operation *formal) {
+  Operation *reference = value ? value.getDefiningOp() : nullptr;
+  if (!llvm::isa_and_nonnull<nodal::ConstParameterRefOp>(reference) ||
+      reference->getParentOp() != parent || reference->getNumOperands() != 0 ||
+      reference->getNumResults() != 1 || !value.getType().isF64() || reference->hasAttr("unit") ||
+      reference->hasAttr("generated_owner") || reference->hasAttr("generated_induction"))
+    return false;
+
+  // Resolve by exact direct declaration identity, never by a rendered path or
+  // the referenced default value. Ambiguous symbols are not a forwarding proof.
+  auto uniqueParameter = [](Operation *module, llvm::StringRef name) -> Operation * {
+    Block *body = structuralBody(module);
+    if (!body || name.empty())
+      return nullptr;
+    Operation *result = nullptr;
+    for (Operation &candidate : *body) {
+      if (symbolName(&candidate) != name)
+        continue;
+      if (result || !llvm::isa<nodal::ParameterOp>(candidate))
+        return nullptr;
+      result = &candidate;
+    }
+    return result;
+  };
+  auto parameter = reference->getAttrOfType<FlatSymbolRefAttr>("parameter");
+  Operation *source = parameter ? uniqueParameter(parent, parameter.getValue()) : nullptr;
+  auto ordinaryReal = [](Operation *parameter, Operation *owner) {
+    auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+    return parameter && parameter->getParentOp() == owner && type && type.getValue().isF64() &&
+           !parameter->hasAttr("unit") && !parameter->hasAttr("generated_owner") &&
+           !parameter->hasAttr("generated_induction") &&
+           nodal::getParameterKind(parameter) == "real" &&
+           nodal::getParameterClassification(parameter) == "ordinary";
+  };
+  return ordinaryReal(source, parent) && ordinaryReal(formal, child) &&
+         uniqueParameter(child, symbolName(formal)) == formal;
+}
+
 ConstantKind kindForType(Type type) {
   if (type.isF64())
     return ConstantKind::Real;
@@ -3286,6 +3325,31 @@ Operation *nodal::resolveInstanceModuleDefinition(Operation *instance) {
   return reference ? findTopLevelSymbol(instance, reference.getValue(), "nodal.module") : nullptr;
 }
 
+bool nodal::isGeneratedParentRealParameterOverride(Operation *operation, Operation *instance,
+                                                   Operation *formal) {
+  if (!llvm::isa_and_nonnull<ParameterOverrideOp>(operation) ||
+      !llvm::isa_and_nonnull<InstanceOp>(instance) || !llvm::isa_and_nonnull<ParameterOp>(formal) ||
+      operation->getNumOperands() != 1 || operation->getNumResults() ||
+      operation->getNumRegions() || operation->getNumSuccessors())
+    return false;
+  Operation *family = operation->getParentOp();
+  Operation *parent = family ? family->getParentOp() : nullptr;
+  if (!llvm::isa_and_nonnull<GenerateOp>(family) || !llvm::isa_and_nonnull<ModuleOp>(parent) ||
+      instance->getParentOp() != family || !structuralBody(family) || !structuralBody(parent))
+    return false;
+  auto instanceReference = operation->getAttrOfType<FlatSymbolRefAttr>("instance");
+  auto formalReference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
+  Operation *child = resolveInstanceModuleDefinition(instance);
+  if (!formalReference || !child ||
+      resolveStructuralInstance(operation, instanceReference) != instance ||
+      formal->getParentOp() != child || formalReference.getValue() != symbolName(formal))
+    return false;
+  return isDirectParentRealReference(operation->getOperand(0), parent, child, formal) &&
+         operation->getOperand(0).getDefiningOp()->isBeforeInBlock(family) &&
+         succeeded(verifyGeneratedStructuralOwnership(operation)) &&
+         succeeded(verifyGeneratedStructuralOwnership(instance));
+}
+
 LogicalResult nodal::verifyGeneratedBoundForm(Operation *operation) {
   const unsigned boundOperands = operation->getNumOperands();
   const bool hasLower = static_cast<bool>(operation->getAttr("lower"));
@@ -4297,7 +4361,8 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
         return operation.emitOpError(
             "NODAL-PARAMETER-OVERRIDE-001: fixed parameter cannot be overridden");
       if (isNamed(operation.getParentOp(), "nodal.generate") &&
-          instance->getParentOp() == operation.getParentOp()) {
+          instance->getParentOp() == operation.getParentOp() &&
+          !isGeneratedParentRealParameterOverride(&operation, instance, parameter)) {
         auto declared = parameter->getAttrOfType<TypeAttr>("type");
         if (!declared || !declared.getValue().isSignlessInteger(64) ||
             operation.getNumOperands() != 1 ||
@@ -4310,6 +4375,8 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
               "NODAL-PARAMETER-OVERRIDE-001: generated override lacks all-lane formal proof");
         continue;
       }
+      // Direct parent Real forwarding bypasses only the generated Integer
+      // proof. Its default still passes through the shared parameter contract.
       Operation *actual =
           operation.getNumOperands() == 1 ? operation.getOperand(0).getDefiningOp() : nullptr;
       if (!actual || actual->getParentOp() != owner)

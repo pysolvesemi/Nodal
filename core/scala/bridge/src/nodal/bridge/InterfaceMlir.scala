@@ -136,7 +136,9 @@ private[nodal] object InterfaceMlir:
       val path = endpoint.path
       val boundary = endpoint.boundary.get
       val selection = boundary.selection.get
-      val owner = modules(endpoint.owner)
+      val owner = snapshot.modules.filter(_.path == endpoint.owner) match
+        case Vector(owner) => owner
+        case _ => fail("selected conservative endpoint requires its unique owning Module", path)
       val instance = boundary.instance.flatMap(value => owner.instances.find(_.path == value))
         .getOrElse(fail("selected conservative endpoint requires its actual child instance", path))
       val child = endpoints.getOrElse(
@@ -165,22 +167,33 @@ private[nodal] object InterfaceMlir:
       // Immutable snapshot admission only; canonical parameter transport owns binding semantics.
       val parameters = modules(instance.childModule).declarations.filter(_.kind == "parameter")
       val parameterNames = parameters.iterator.map(_.name).toSet
+      val parentDeclarations = owner.declarations.groupBy(_.path)
+      val bindingsByName = instance.parameterBindings.groupBy(_._1)
       def literal(value: String): Boolean = value.toDoubleOption.exists(_.isFinite)
+      def ordinaryDimensionlessReal(parameter: KernelDeclarationSnapshot): Boolean =
+        val attributes = parameter.attributes
+        val uniqueKeys = attributes.iterator.map(_._1).toSet.size == attributes.size
+        if !uniqueKeys then false
+        else
+          val values = attributes.toMap
+          parameter.kind == "parameter" && parameter.dataType.contains("Real") &&
+          values.get("classification").forall(_ == "ordinary") &&
+          values.get("unit").forall(_.isEmpty)
+      def directParentReal(value: String): Boolean = parentDeclarations.get(value) match
+        case Some(Vector(parameter)) =>
+          parameter.generatedScope.isEmpty && ordinaryDimensionlessReal(parameter)
+        case _ => false
       requireValid(
-        parameters.forall { parameter =>
-          val attributes = parameter.attributes
-          val uniqueKeys = attributes.iterator.map(_._1).toSet.size == attributes.size
-          if !uniqueKeys then false
-          else
-            val values = attributes.toMap
-            parameter.dataType.contains("Real") &&
-            values.get("default").exists(literal) &&
-            values.get("classification").forall(_ == "ordinary") &&
-            values.get("unit").forall(_.isEmpty)
-        } && instance.parameterBindings.forall((name, value) =>
-          parameterNames.contains(name) && literal(value)
+        parameterNames.size == parameters.size && parameters.forall(parameter =>
+          ordinaryDimensionlessReal(parameter) &&
+            parameter.attributes.find(_._1 == "default").exists(entry => literal(entry._2))
+        ) && instance.parameterBindings.forall((name, value) =>
+          // Preserve literal duplicate transport; symbolic bindings must have one representation.
+          parameterNames.contains(name) && (literal(value) ||
+            (bindingsByName(name).size == 1 && directParentReal(value)))
         ),
-        "selected conservative child parameters require ordinary dimensionless Real literals",
+        "selected conservative child parameters require ordinary dimensionless Real literals " +
+          "or direct parent Real references, with literal child defaults",
         path
       )
       val indices = Vector(

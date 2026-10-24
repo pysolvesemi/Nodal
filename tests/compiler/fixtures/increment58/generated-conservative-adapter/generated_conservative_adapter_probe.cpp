@@ -1,3 +1,4 @@
+#include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
 #include "circt/Dialect/HW/HWDialect.h"
@@ -15,6 +16,34 @@ int main(int argc, char **argv) {
   context.loadDialect<nodal::NodalDialect, circt::hw::HWDialect>();
   auto parsed=mlir::parseSourceFile<mlir::ModuleOp>(argv[1], &context);
   if (!parsed || mlir::failed(mlir::verify(*parsed))) return 3;
+  // Candidate 2 test-only modes. Existing modes and their dispatch remain unchanged.
+  if (std::string(argv[2]) == "parameter-contract")
+    return mlir::failed(nodal::verifyParameterModel(*parsed)) ? 14 : 0;
+  if (std::string(argv[2]) == "materialized-scalar") {
+    std::string before;
+    llvm::raw_string_ostream beforeStream(before);
+    parsed->print(beforeStream);
+    beforeStream.flush();
+    std::string previous;
+    for (unsigned repetition = 0; repetition < 2; ++repetition) {
+      std::string target, after;
+      llvm::raw_string_ostream output(target), afterStream(after);
+      auto status = nodal::emitBackend(*parsed, nodal::BackendKind::VerilogA, output, nullptr,
+                                       nodal::HierarchyEmission::MaterializedScalar);
+      output.flush();
+      parsed->print(afterStream);
+      afterStream.flush();
+      if (mlir::failed(status))
+        return 15;
+      if (after != before || (repetition && target != previous)) {
+        llvm::errs() << "materialized-scalar changed source or was nondeterministic\n";
+        return 16;
+      }
+      previous = target;
+    }
+    llvm::outs() << previous;
+    return 0;
+  }
   if (std::string(argv[2]) == "child-pairs") {
     std::string before, after; llvm::raw_string_ostream beforeStream(before), afterStream(after);
     parsed->print(beforeStream); beforeStream.flush();

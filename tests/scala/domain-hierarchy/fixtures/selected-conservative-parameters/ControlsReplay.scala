@@ -17,11 +17,6 @@ object ReplayLiteralControls:
     )
     val cases: Vector[(String, () => Module, String)] = Vector(
       (
-        "parent-reference",
-        () => new SelectedLiteralParentReference,
-        "ordinary dimensionless Real literals"
-      ),
-      (
         "expression-actual",
         () => new SelectedLiteralExpressionActual,
         "ordinary dimensionless Real literals"

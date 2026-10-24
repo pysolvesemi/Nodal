@@ -26,9 +26,12 @@ At least 237 MiB free plus the indicated temporary allowance is required.
 Each probe invocation has a fixed 60-second timeout. A timeout propagates as
 a failed run, never an accepted result or a successful summary. Two budget
 inputs are generated one at a time and removed even on assertion failure or
-probe timeout. There is no native build target yet. The preserved probe source is
-byte-identical to the accepted source; compiling it against a fresh build is a
-separate integration task and is not claimed by this preservation check.
+probe timeout. There is no native build target yet. The originally preserved probe source was
+byte-identical to the accepted source. Checkpoint 68 adds two explicit modes as
+described below; the five historical mode implementations remain unchanged.
+Compiling the probe requires matching native artifacts and is not performed by
+this preservation runner. Its historical 125-execution result is not a claim that
+the extended probe or new parameter selection passed this entire runner.
 
 ## Ownership and source provenance
 
@@ -39,9 +42,8 @@ mode, expected status and output digest. It contains no timing, actual results,
 absolute paths or old binary references. Every one of the 125 checks runs,
 including repeated checks of one input in different groups.
 
-`generated_conservative_adapter_probe.cpp` preserves the accepted
-child-summary probe exactly. Its exercised modes are verify, adapt, emit,
-transaction and child-pairs. The runner also retains the ten selected-child
+`generated_conservative_adapter_probe.cpp` retains the accepted child-summary
+probe's verify, adapt, emit, transaction and child-pairs modes unchanged. The runner also retains the ten selected-child
 structural checks: real children/ports/arrays, correspondence targets,
 discipline/access/orientation, loop bounds and authored-operation invariance
 for counts 1/3/1000. Refusal cases retain empty-output hashes, diagnostic checks
@@ -102,3 +104,27 @@ control-test entry at
 `tests/compiler/test_increment58_generated_conservative_adapter.py`.
 An eventual native probe target needs explicit repository build integration
 review; none is guessed here.
+
+## Direct-parent parameter probe modes
+
+Two additive modes serve the focused
+[parent Real forwarding supplement](../parent-real-forwarding/README.md):
+
+- `parameter-contract` invokes canonical `verifyParameterModel` after normal
+  parsing/operation verification and returns 14 on contract refusal.
+- `materialized-scalar` emits Verilog-A twice with the existing MaterializedScalar
+  policy, requiring deterministic target bytes and preservation of the source
+  before and after both calls. Refusal or changed source/determinism is a failure.
+
+No evaluator, registry, target build, new executable target or alternate parameter
+semantics is introduced. Existing dispatch and the 125-case expectation inventory
+remain unchanged. The sibling supplement supplies ten maintained MLIR inputs for
+twelve invocations; the selected Scala runner supplies its own freshly emitted
+inputs. Their counts and results remain separate from the historical adapter
+selection. Candidate-2 evidence passes twelve supplement calls and composes eight
+retained Scala mains with 49 selected native prefix calls and eight corrected tail
+refusals. One separate ownership-property normalization diagnostic passes too; it
+is excluded from the 57 selected and twelve supplement semantic counts. Complete
+portable-runner invocation, fresh candidate-2 Scala compilation and fresh C++
+unit-suite execution are not claimed. Extracting focused unit inputs does not
+establish a unit-suite pass.

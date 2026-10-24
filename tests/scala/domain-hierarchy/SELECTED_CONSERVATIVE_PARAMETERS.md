@@ -1,4 +1,4 @@
-# Selected conservative literal parameters
+# Selected conservative parameters
 
 This focused runner maintains the selected one-child and shared-anchor two-child conservative parameter
 slices. It does not rebuild a native probe, discover toolchain artifacts, invoke
@@ -9,7 +9,7 @@ consumer/comparator/firtool work.
 
 Use Python 3.11 or newer, with import isolation and bytecode disabled. Supply
 matching already-built artifacts and the canonical source tree containing the
-nine Scala fixtures at `fixtures/selected-conservative-parameters` relative to
+twelve Scala fixtures at `fixtures/selected-conservative-parameters` relative to
 this guide. That source tree must retain `build.mill`, `core/scala`, and `docs`
 markers. It may be a sealed tree or the actual checkout. The runner sets
 `NODAL_WORKSPACE` and the subprocess working directory to that tree.
@@ -57,13 +57,13 @@ missing anchor or missing diagnostic is a failure, never an inferred pass.
 
 ## Maintained assertions
 
-Six Scala entry points compile together with the matching plugin, unused warnings
+Eight Scala entry points compile together with the matching plugin, unused warnings
 and warnings-as-errors. They cover literal/default/alternate source construction,
-six unsupported source forms plus recovery, eight forged snapshot forms, eight
+five retained unsupported source forms plus recovery, eight forged snapshot forms, eight
 duplicate-attribute order cases, duplicate-binding transport, and freshly authored
 two-child topology. No generated two-child input is committed.
 
-The native phase makes 28 invocations: nine one-child verify/adapt/emit calls,
+The retained literal native baseline makes 28 invocations: nine one-child verify/adapt/emit calls,
 twelve named mutation emits, one duplicate-snapshot refusal, three two-child
 verify/adapt/emit calls, and three independent fixed-override emit/transaction
 checks. The original Scala topology and gain-binding assertions remain intact.
@@ -77,6 +77,75 @@ malformed attachment/refusal cases, sixteen additional bindings and a late
 unknown binding, and transactional fixed-override refusals on one-child and two-child inputs. Mutation
 anchors are counted and selected occurrence symbols are derived from fresh MLIR.
 This is a focused text-based boundary regression, not another semantic engine.
+
+## Direct-parent Real continuation
+
+The additional source positives forward parent default 5 to child default 2,
+reuse a child with distinct parent defaults 5/9, and retain distinct source
+identities when both parent defaults are 5. Snapshot identity, exact parent-body
+reference/generated override transport, symbolic Verilog-A, deterministic
+re-emission and conservative topology are asserted. The source expression and
+foreign-actual refusals remain, with twenty forged parent snapshot controls for
+exact owner inventory, declaration attributes and representation.
+
+The selected API and immutable bridge admit only a directly referenced ordinary
+dimensionless Real declaration belonging to the enclosing parent. They do not
+resolve identity from a rendered name, path prefix, equal default or global
+lookup. Existing literal child defaults, fixed scalar one-level topology and
+other selected conservative restrictions remain. Native parameter classification
+has the canonical lexical scope: an otherwise verified one-level Generate
+directly inside a Module. It is not restricted to selected Interfaces or literal
+family bounds. The independent conservative boundary still enforces the narrower
+selected profile and rejects duplicate symbolic actuals and both equal and
+unequal literal/SSA collisions.
+
+The maintained continuation adds 29 native invocations, for 57 total: twelve
+parent positive/determinism calls, two parent expression-default calls and fifteen
+negative emits. Arbitrary actual expressions, generated-local references, foreign
+owners and runtime/type/unit/classification mismatches remain refused. A generated
+f64 block-argument mutation fails the existing operation profile, not an isolated
+low-level Real classifier proof. A symbolic fixed formal fails selected Interface
+admission; the retained literal fixed cases establish transactional backend
+refusal. Excluding 5 from a child whose own default remains 2 checks that forwarded
+parent defaults still reach the existing constraint owner. This is default-based
+Real checking, not proof over every legal Real assignment. Native parent
+expression defaults remain legal without adding Scala Real expression-default
+transport or allowing expression actuals.
+
+Ownership corruption must be represented as a retained discardable attribute on
+ConstParameterRef, outside its inherent-properties dictionary. Unknown keys in
+that dictionary can be discarded by generated property conversion, making such a
+mutation ineffective. The corrected carrier is asserted explicitly; a successful
+emit from the ineffective mutation is preserved as a harness failure, not counted
+as negative coverage. Expected diagnostics identify the actual verifier stage
+rather than assuming all failures reach ParameterModel or conservative adaptation.
+
+The [native supplement](../../compiler/fixtures/increment58/parent-real-forwarding/README.md)
+adds twelve separate general-Generate, generated-Integer and direct scalar
+predecessor invocations through the existing shared probe. It is not included in
+the 57 selected invocations.
+
+## Checkpoint 68 validation status
+
+Focused development evidence composes eight retained Scala mains and 49 native
+prefix calls with eight separately corrected selected refusals: 57 selected
+native invocations in total. A separate twelve-call native supplement also passes:
+69 semantic native checks overall.
+The corrected tail requires nonzero nonsignal status, the exact observed-stage
+diagnostic and empty target output in every case. One additional diagnostic-only
+normalization of the old ineffective ownership mutation confirms that its unknown
+properties disappeared while the same parent reference remained the override
+actual; it is not included in either the 57 or twelve semantic counts.
+
+The exact preserved Scala classes were compiled in the earlier V3 run and replayed; candidate
+2 did not freshly compile them. The corrected tail directly loads the maintained
+runner's mutation definitions and proves unchanged input bytes for seven cases;
+only the corrected retained-attribute ownership carrier changes. Source comparison
+limits the portable selected runner changes to observed diagnostics, that carrier,
+and stronger empty-target checks. Earlier compiler, expectation and carrier
+failures remain recorded rather than relabeled as passes. A complete invocation
+of the corrected portable selected runner, including its fresh compilation path,
+was not run. Composing independently recorded portions is not a whole-run pass.
 
 The three old-native52 comparisons in development evidence are historical only.
 They are deliberately excluded from maintained invocation counts and require no

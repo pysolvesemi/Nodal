@@ -377,6 +377,16 @@ mlir::LogicalResult verifyGeneratedStructuralOwnership(mlir::Operation *operatio
 mlir::Operation *resolveStructuralInstance(mlir::Operation *use, mlir::FlatSymbolRefAttr reference);
 mlir::Operation *resolveInstanceModuleDefinition(mlir::Operation *instance);
 
+/// Classify only an exact direct parent ordinary dimensionless Real reference
+/// into a child formal in a one-level Generate directly owned by a Module.
+/// Rechecks the override's linkage to the supplied instance and formal identities.
+/// The module-body reference must precede its generated family.
+/// This non-evaluating admission query is not a parameter-contract or all-legal-
+/// Real proof: fixed/default/constraint checks remain in verifyParameterModel,
+/// and selected topology restrictions remain independently owned by consumers.
+bool isGeneratedParentRealParameterOverride(mlir::Operation *operation, mlir::Operation *instance,
+                                            mlir::Operation *formal);
+
 /// Read-only facts from the existing checked positive generated-domain proof.
 /// No attained bounds means that the entire domain is proven empty. Otherwise
 /// the closed interval conservatively contains every attained source induction.

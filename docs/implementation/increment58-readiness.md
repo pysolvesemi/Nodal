@@ -2412,3 +2412,105 @@ F-058.F and Foundation 58 remain open, as do default 65,536-unit admission,
 automatic pending-cell completion and broader C2b/C2c. Diagnostic 131,072 remains
 diagnostic. A proposed explicit finite production opt-in is pending a separate
 public-contract decision; it is not implemented or inferred from these tests.
+
+## Checkpoint 68: direct-parent ordinary Real forwarding
+
+This bounded F-058.B continuation extends the existing generated Instance.param
+path without a new public API or capacity decision. The canonical Session admits
+an exact direct reference to an ordinary dimensionless Real declaration belonging
+to the enclosing parent; the immutable bridge independently checks that original
+owner inventory, declaration attributes and unique binding/formal identity.
+Existing literal child defaults and selected scalar one-level conservative
+restrictions remain. Source identity is never inferred from names, path prefixes,
+equal defaults or a second registry.
+
+Native review found that generated override admission has two semantic consumers:
+ParameterModel and StructuralIf. A first candidate reached the latter's unchanged
+Integer-only gate and failed a genuine positive. The correction introduces one
+non-evaluating, operation-target-aware ParameterModel query used by both owners.
+It proves exact override/instance/child-formal linkage, a direct parent-body f64
+ConstParameterRef to an ordinary unitless Real declaration, and reference order
+before the family. Its native scope is an otherwise verified one-level Generate
+directly inside a Module, not only selected Interfaces or literal-bound families.
+StructuralIf retains its attribute whitelist, operation verification, exact
+hierarchy boundary and original Integer all-lane fallback. ParameterModel's Real
+exception bypasses only that Integer proof and falls through existing evaluation,
+normalization, fixed/default/constraint and canonical-binding checks.
+
+ConservativeConnectivity remains an independent trust-boundary check rather than
+calling a whole-model/Interface verifier or an evaluator. It requires the existing
+selected topology and literal child defaults, exact ordinary parent reference,
+unique symbolic formal and no equal or unequal literal/SSA collision. Canonical
+Verilog-A expression rendering and direct scalar materialization remain the
+existing downstream owners. The additive header declaration changes no existing
+signature, layout, inline definition, include or macro. The matched targeted native
+rebuild/relink retains existing exports and excludes stale archive implementations;
+this is checked object/header lineage, not a blanket claim that any header edit
+permits partial rebuilding. Eight inherited ParameterModel unused-variable warnings
+remain; the build is not warning-clean. No performance improvement is claimed.
+
+The maintained source selection includes six production paths, four changed/new
+Scala fixtures, the selected portable runner and guide, the extended existing
+probe and its guide, and a sibling ten-fixture/twelve-invocation native supplement.
+The other eight Scala fixtures are byte-identical to checkpoint 67. Existing
+readiness text is preserved, and no mixed-worktree source is substituted. See the
+[selected parameter guide](../../tests/scala/domain-hierarchy/SELECTED_CONSERVATIVE_PARAMETERS.md)
+and [native supplement](../../tests/compiler/fixtures/increment58/parent-real-forwarding/README.md)
+for reproduction and the explicit matching-artifact contract.
+
+Focused evidence is composed, not a complete corrected runner pass. Eight retained
+Scala mains and 49 native prefix calls passed in the candidate-2 replay before a
+harness diagnostic mismatch. Those exact preserved classes were freshly compiled in the earlier
+V3 run, not recompiled for candidate 2. Eight corrected selected refusals now pass
+with exact stage diagnostics, nonzero nonsignal status and empty target output,
+completing the 57-call selected semantic composition. A separate native supplement
+passes all twelve invocations, including general non-Interface forwarding, causal
+default constraint fallthrough, generated-Integer predecessors and deterministic
+named/materialized scalar forwarding. One additional diagnostic-only normalization
+passes, separately counted from the 57 selected and twelve supplement calls
+(69 semantic native checks overall).
+
+The corrected tail directly loads the maintained selected runner's mutation
+function, verifies exact retained bytes for seven inputs, and changes only the
+ineffective ownership carrier for the eighth. Source comparison retains its other
+semantics while correcting observed diagnostic stages and strengthening empty-target
+assertions. The portable supplement changes only scratch-receipt provenance setup;
+its CASES and full invocation/assertion tail equal the executed script. These
+source-equivalence checks do not establish complete execution of either adapted
+portable runner. No fresh candidate-2 Scala compilation or full C++ unit-suite
+execution is inferred from retained classes or reused fixture sources.
+
+Earlier failures remain evidence: initial source/plugin/expectation mismatches,
+the real StructuralIf admission omission, later diagnostic-stage mismatches and
+an ineffective forged-owner fixture. The last placed unknown ownership keys in
+ConstParameterRef's inherent-properties dictionary, where generated conversion
+discarded them; successful emission from that input is not counted as a refused
+ownership mutation. The separate normalization witness confirms that both unknown
+keys disappear while the same parent reference still feeds the override. The
+corrected discardable-attribute carrier is retained in the actual override operand
+source and now rejects at selected Interface admission with empty target output.
+
+The source positives preserve actual symbolic Verilog-A forwarding for parent 5
+versus child 2, two reused children with parent defaults 5/9, and distinct parent
+identities with equal defaults 5/5. Constraints inspect defaults, not every legal
+Real assignment. Parent expression defaults remain native-supported without new
+Scala expression-default transport; expression actuals remain unsupported. The
+block-argument case is an operation-profile refusal and symbolic fixed formals
+fail selected Interface admission, while literal fixed transactional witnesses
+remain separate. No unsupported case is relabeled as a deeper proof.
+
+This bounded result preserves all earlier historical failures and checklist
+states. Foundation 58, F-058.B.1/B.2 and broader dependent work remain open. No
+ExtendedAPI, production-capacity/default-budget change, CIRCT comparator/firtool
+pipeline, install, CI or full qualification is included. Publication remains
+explicitly held; no denied operation is retried. Generated logs, receipts, targets
+and archives remain ignored scratch artifacts.
+
+The final corrected-test sample uses 29,474,816 owned bytes and 83,218,432 combined
+bytes, with 404,107,264 bytes free. These are sampled observations, not continuous
+peaks or the later source-finalization allocation. The frozen draft remains intact;
+the final flat documentation successor is separately admitted at no more than
+224 KiB within unchanged 32 MiB owned and 94 MiB combined stage caps and the existing
+246,808,576-byte free reserve. The reviewed source increment is 1.5 MiB, including
+both document versions and bounded finalization receipts; no production or fixture
+source is duplicated.

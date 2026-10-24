@@ -3363,3 +3363,123 @@ portable Verilog-2005 or universal generated-hierarchy certification.
 The current increment does not affect generated Verilog-*. It only reconciles
 current contract references and composed historical prototype evidence; no new
 output is claimed or required for this documentation-only child closure.
+
+## Checkpoint 77: named downstream tool handoff
+
+F-058.D.2 is accepted as a focused handoff, not downstream qualification. This
+2026-10-23 documentation-only crosswalk was reviewed against checkpoint 76,
+`ffb9ced603799bd74dd173e8501f8b5c7db9d79c`. It names the representative affected
+consumer cases and preserves executed versus unexecuted boundaries. D.1, D,
+B.1/B.2 and Foundation 58 remain open. No tool execution is added here.
+
+### F65/66: hierarchy and stack parse/simulation cases
+
+Use checkpoint 2's `shared` hierarchy case: one reusable child definition with
+independently owned state. The adjacent `nested`, `material`, `resetless` and
+`inherited-release` profiles cover forwarding, material clock/reset variants and
+release behavior. Historical `HIERARCHY_TARGET_PASS shared` and the other four
+Icarus results are retained under `.work/f58-hierarchy-target-checkpoint/`, with
+its `manifest.json` and per-command logs. Exact shared witness SHA-256 pins:
+
+- input: `6a1e1739dd75a2ee836b3d80fc5a7e0699a64ea51d2957864ce7fdf0efbfb287`;
+- nodalc: `2125c01fdc146894cf5e4a2e9a58dfc52b9f56b6590022268a728a5442eacbe7`;
+- generated `shared.sv`: `31abde5628cce3c1d7d014d8216ff42f559e1ea0e68f9f4a630bc74ce1c1bd46`.
+
+The maintained recipe is `tests/scala/domain-hierarchy/run_target.py --case shared
+--input .work/f58-hierarchy-source --nodalc .work/f58-native-checkpoint/nodalc
+--firtool .work/circt-toolchain/bin/firtool --iverilog .work/tools/iverilog/bin/iverilog
+--vvp .work/tools/iverilog/bin/vvp --out NEW_IGNORED_OUTPUT`. This records a
+historical reproduction route, not authorization to invoke the held exporter.
+
+The second named case is checkpoint 24/71's bounded-stack `trap`, with separately
+retained `required` and `composed` companions. The maintained public model is
+`core/scala/testkit/test/src/nodal_external/Increment58StackFsmSource.scala`.
+Expected behavior includes continuation frames, overflow/underflow, invalid
+pointer/frame handling, pause, actions, cancellation/restart, recovery and reset.
+Historical `STACK_TARGET_PASS` is not a fresh checkpoint-76 source execution;
+checkpoint 71 explains the checkpoint-24/25 source history. Exact SHA-256 pins:
+
+- historical Scala source: `e813edb8e9054e76be7778f5cfd325bddb0cd23563de81c7c1ccf3b4eda00d5f`;
+- `trap.mlir`: `26feb0be42b35882ce3f6e4dad806e5148d7077f77dd889e1d57fb16567748bf`;
+- construction snapshot: `e24d01e1603195acac3603378bf33854c332cfa5dfb0ac714a84f31df25bbe84`;
+- nodalc: `5ec53036d0ccc2c9f14898e5d6e21c76693651b0dab564a75e0b19236d99375b`;
+- firtool: `fa6f67c3a291cb0dc097e87c7e68fe133113ab32e2c7f2f39da9c5057daee224`;
+- iverilog: `422bcdaf5f4e4b07dd7a80c3f788e02f2e7960b3a7bf06b242e4bb6f89f94f8c`;
+- vvp: `ed71d0d93fcad62222b1dc172453b895c1e8f2a6f60bd7a6203d953aa3c9898d`;
+- generated `stack.sv`: `1a852dc06406db8237a9775d4f219686debbf2e1cea9deb061503402a9390290`.
+
+The exact historical argv is retained in
+`.work/f58-statecharts/stack/shared-accept/target-trap.command.json`: it invokes
+`tests/scala/reusable-fsm/run_stack_target.py --profile trap`, the sibling
+`replay/trap.mlir` and `replay/trap.construction.json`,
+`.work/f58-statecharts/stack/native/nodalc3` and the tools pinned above. Any later
+replay uses a fresh ignored output directory and first verifies retained inputs
+and tool identities; this handoff does not execute it. Preserve the historical
+AssertHold Icarus parse failure without removing its assertions and the unsupported
+Stack Gray profile. These are SystemVerilog/two-state witnesses where documented,
+not portable IEEE1364-2005 or broad four-state qualification.
+
+### F67: named synthesis, equivalence and core-proof inputs
+
+Hand off the exact `shared.sv` and stack `trap`/`required`/`composed` artifacts
+above to the existing [digital verification plan](../roadmap/digital-verilog-open-source-verification-plan.md).
+Its Yosys, equivalence and SBY owners supply capability-specific harnesses and
+executable pins. Expected checks are:
+
+- synthesis: resolved hierarchy and child references, no accidental latches,
+  driver conflicts or combinational loops, independently owned stack/state storage;
+- equivalence: compare preserved/lowered RTL and netlists by semantic state and
+  lane identity, not an assumed common state encoding; retain reset/hold/action
+  and nested completion behavior;
+- core proof: legal state, stack-pointer/frame bounds, reset convergence,
+  completion/return and overflow/underflow safety under explicit legal inputs.
+
+Status: **not executed for this F58 handoff**. No Yosys, equivalence, SBY or other
+formal result/tool pin is established by these F58 receipts. Native verifier
+checks are not formal proofs. A future consumer's harness or parent completion
+is not a reverse prerequisite for this named F58 handoff.
+
+### F72: actual conservative AMS-output case
+
+Hand off checkpoint 75's two-level fixed conservative InterfaceArray case from
+`core/scala/testkit/test/src/nodal_external/Increment58ConservativeArraySource.scala`,
+accepted in source commit `d8929f1942bf4f30f2d9047fa69a3a37a6761ad1`.
+Expected structure is compact positive fixed rank-one Electrical Connect vectors,
+exact independent p/n correspondence through top/middle/leaf, once-only complete
+child coverage and shared definitions, not per-lane module expansion. Pins:
+
+- actual source-input MLIR: `3e4d30dcc98039a2c1e21d634d76e22ff0be15af8afa90326e076736e3954bc9`;
+- matched native probe: `94f1e3442a4256065f4669e1ec90cd60367cf87f4464c5011795306b72465b84`;
+- actual Verilog-A: `0e8efd22829cfe15164b745d74abb4c43acdee6a4c37180c5278d864780b3f20`.
+
+The accepted receipt is
+`.work/f58-conservative-interface-array/test-output/native-v2/two-level-emit.result.json`.
+The recorded command uses
+`.work/f58-conservative-interface-array/scalar-revision2/bin/conservative-interface-array-probe-v2`
+with `.work/f58-conservative-interface-array/test-output/scala-v2/two-level.mlir emit`;
+`tests/compiler/fixtures/increment58/conservative-interface-array/check_outputs.py`
+checks the native-v2 output directory with `--two-level`. Checkpoint 74's nested
+literal output is an adjacent two-axis companion, with its exact commands/pins
+retained there. Lossless retained-product archives may require verified restoration
+before a future replay; no replay or restoration occurred for this handoff.
+
+Status: actual Nodal Verilog-A generation and structural checks passed at the
+recorded checkpoints. OpenVAF, ngspice, AMS simulation, numerical KCL/convergence
+qualification and F72 completion are **not established**. Binding source_location
+remains unknown in the checkpoint-75 target; semantic correspondence is retained.
+Broader symbolic/rank-two forwarding, pending construction policy and independent
+native proof limits remain separate open constraints.
+
+### Focused review and applicability
+
+Read-only receipt/command/hash inspection and independent handoff review cover
+the named consumer mapping; focused document/link, diff and checklist checks
+cover this two-document change. The existing owners and retained artifacts are
+reused without another registry, harness or runtime component. No new scale or
+performance claim applies. CIRCT comparator repair, firtool/exporter/check.py,
+installation, CI and downstream qualification remain unrun under their existing
+holds. D.2's handoff acceptance neither waives an implementation requirement nor
+turns an unavailable consumer into a passing result.
+
+The current increment does not affect generated Verilog-*. It only names existing
+actual output witnesses and future consumer expectations; it generates no new HDL.

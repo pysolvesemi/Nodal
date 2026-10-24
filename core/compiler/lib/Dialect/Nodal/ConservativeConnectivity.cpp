@@ -2490,6 +2490,7 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
   // Retain all root connectivity even for certified families. Child uncertainty,
   // cycles, parallel paths and unproved maps prevent this sufficient proof.
   llvm::DenseMap<Operation *, llvm::DenseMap<Value, bool>> familyTrees;
+  bool certificateResourceLimit = false;
   auto certifiedOccurrenceTree = [&](Operation *scope, Value root, llvm::ArrayRef<Edge> proofEdges) {
     auto cached = familyTrees.find(scope);
     if (cached == familyTrees.end()) {
@@ -2554,12 +2555,109 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
               vertex.endpoint->shape.projection.root == b)
             unsupported.insert(tree.find(index));
       // Multiple shared roots are safe only with independently checked
-      // injective scalar maps for this same direct actual Generate. Keep the
+      // injective scalar maps for the same actual occurrence vector. Keep the
       // original one-shared-root fresh-tree proof unchanged. This sufficient
-      // profile deliberately refuses shifted, permuted, nested and invariant
+      // profile deliberately refuses shifted, permuted and invariant
       // shared mappings rather than interpreting expressions here.
       llvm::DenseMap<unsigned, bool> exactMaps;
       llvm::DenseMap<unsigned, StaticShapePoint> referencePoints;
+      auto nestedMap = [&](const ConservativeEndpoint &endpoint, Operation *site,
+                           StaticShapeRegion &image, StaticShapePoint &point) {
+        Operation *outer = scope->getParentOp();
+        auto shaped = llvm::dyn_cast<ShapedType>(endpoint.shape.projection.root.getType());
+        if (!llvm::isa<GenerateOp>(scope) || !llvm::isa_and_nonnull<GenerateOp>(outer) ||
+            outer->getParentOp() != module || site->getParentOp() != scope ||
+            endpoint.declarationScope != module || !shaped)
+          return false;
+        llvm::SmallVector<llvm::StringRef, 2> dimensions;
+        shaped.getDimensions().split(dimensions, ',', -1, true);
+        if (dimensions.size() != 2)
+          return false;
+        auto charge = [&](uint64_t amount = 1) {
+          if (amount > maximumWork - std::min(work, maximumWork)) {
+            certificateResourceLimit = true;
+            return false;
+          }
+          work += amount;
+          return true;
+        };
+        // Charge each opaque public proof at its unchanged bounded allowance.
+        // No nested certificate gets an uncharged default-sized query.
+        constexpr uint64_t allowance = 512;
+        if (!charge(allowance))
+          return false;
+        auto imageStatus = resolveStaticShapeIterationImage(
+            endpoint.shape.projection, site, image, {allowance, 64});
+        if (imageStatus == ShapeRegionProofStatus::ResourceLimit)
+          certificateResourceLimit = true;
+        if (imageStatus != ShapeRegionProofStatus::Proved || image.iterationCount() != 2 ||
+            image.axes.size() != 2 || image.iterationAt(0).loop != outer ||
+            image.iterationAt(1).loop != scope)
+          return false;
+        if (!charge(allowance))
+          return false;
+        auto pointStatus = resolveStaticShapePoint(endpoint.shape.projection, site, point,
+                                                   {allowance, 64});
+        if (pointStatus == ShapeRegionProofStatus::ResourceLimit)
+          certificateResourceLimit = true;
+        if (pointStatus != ShapeRegionProofStatus::Proved || point.coordinates.size() != 2)
+          return false;
+        auto literal = [](const InstantiatedIntegerExpression &expression, int64_t value) {
+          return expression.root &&
+                 expression.root->kind == InstantiatedIntegerNode::Kind::Literal &&
+                 expression.root->literal == value;
+        };
+        auto literalOperand = [](Value value) -> std::optional<int64_t> {
+          auto op = value.getDefiningOp<ConstLiteralOp>();
+          auto attr = op ? op->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+          if (!attr || !value.getType().isInteger(64) || !attr.getValue().isSignedIntN(64))
+            return std::nullopt;
+          return attr.getValue().getSExtValue();
+        };
+        for (unsigned axis = 0; axis != 2; ++axis) {
+          if (!charge())
+            return false;
+          const auto &map = image.iterationAt(axis);
+          Operation *family = map.loop;
+          const auto &coordinate = point.coordinates[axis];
+          if (family->getNumOperands() != 3 || family->getNumRegions() != 1 ||
+              !family->getRegion(0).hasOneBlock() ||
+              family->getRegion(0).front().getNumArguments() != 1 ||
+              map.domain.module != module ||
+              map.domain.induction != family->getRegion(0).front().getArgument(0) ||
+              literalOperand(family->getOperand(0)) != 0 ||
+              literalOperand(family->getOperand(2)) != 1 || map.varyingAxis != axis ||
+              map.stride != 1 || map.empty || !map.domain.attainedInductionBounds ||
+              !literal(map.domain.lower, 0) || !literal(map.domain.step, 1) ||
+              !literal(map.offset, 0) || !literal(map.occurrenceWidth, 1) ||
+              !literal(image.axes[axis].lower, 0) ||
+              !equivalentInstantiatedIntegerExpressions(map.tripCount, map.domain.upperExclusive) ||
+              !equivalentInstantiatedIntegerExpressions(image.axes[axis].upperExclusive,
+                                                        map.domain.upperExclusive) ||
+              !coordinate.root || coordinate.root->kind != InstantiatedIntegerNode::Kind::OpaqueValue ||
+              coordinate.root->identity != map.domain.induction)
+            return false;
+          Operation *upper = family->getOperand(1).getDefiningOp();
+          const auto &bound = map.domain.upperExclusive;
+          if (!upper || !structurallyPrecedes(upper, family) || bound.bounds.lower <= 0)
+            return false;
+          if (auto value = literalOperand(family->getOperand(1))) {
+            if (!literal(bound, *value) || dimensions[axis] != std::to_string(*value))
+              return false;
+          } else {
+            auto reference = upper->getAttrOfType<FlatSymbolRefAttr>("parameter");
+            if (!llvm::isa<ConstParameterRefOp>(upper) || upper->getParentOp() != module ||
+                !reference || !bound.root ||
+                bound.root->kind != InstantiatedIntegerNode::Kind::ParentParameter ||
+                !llvm::isa_and_nonnull<ParameterOp>(bound.root->parameter) ||
+                bound.root->parameter->getParentOp() != module ||
+                dimensions[axis] != reference.getValue() ||
+                SymbolTable::lookupSymbolIn(module, reference) != bound.root->parameter)
+              return false;
+          }
+        }
+        return true;
+      };
       for (auto [index, vertex] : llvm::enumerate(vertices)) {
         const auto &endpoint = *vertex.endpoint;
         unsigned component = tree.find(index);
@@ -2575,6 +2673,8 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
             image.iteration->loop == scope &&
             resolveStaticShapePoint(endpoint.shape.projection, site, point) ==
                 ShapeRegionProofStatus::Proved && !point.coordinates.empty();
+        if (!valid && shared[component].size() > 1)
+          valid = nestedMap(endpoint, site, image, point);
         flag->second &= valid;
         if (!valid)
           continue;
@@ -2604,6 +2704,8 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
   for (unsigned i = 0; i < families.size(); ++i)
     certifiedFamilies[i] = certifiedOccurrenceTree(familyScopes[i], families[i].first,
                                              hiddenEdges.find(familyScopes[i])->second);
+  if (certificateResourceLimit)
+    return Alias::ResourceLimit;
   // Other occurrences of a visible repeated template can join shared roots
   // too. Retain the exact current edge for Equal proofs, but never treat that
   // one occurrence as a global injective family.
@@ -2626,7 +2728,10 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
       };
       if (domain->maximumTripCount > 1 &&
           (sharedAcross(edge.left.declarationScope) || sharedAcross(edge.right.declarationScope))) {
-        if (certifiedOccurrenceTree(scope, edge.left.shape.projection.root, edges))
+        bool certified = certifiedOccurrenceTree(scope, edge.left.shape.projection.root, edges);
+        if (certificateResourceLimit)
+          return Alias::ResourceLimit;
+        if (certified)
           continue;
         families.push_back({edge.left.shape.projection.root, edge.right.shape.projection.root});
         familyScopes.push_back(scope);

@@ -647,6 +647,16 @@ target_link_libraries(nodal-shape-iteration-image-unit-tests PRIVATE
 add_test(NAME nodal.native.shape-iteration-image-unit COMMAND nodal-shape-iteration-image-unit-tests)
 set_tests_properties(nodal.native.shape-iteration-image-unit PROPERTIES TIMEOUT 60)
 
+# Only the accepted literal groundwork mode is registered. The retained broader
+# no-argument probe includes symbolic obligations that are still open.
+add_executable(nodal-nested-conservative-proof-unit-tests NestedConservativeProofTest.cpp)
+llvm_update_compile_flags(nodal-nested-conservative-proof-unit-tests)
+target_link_libraries(nodal-nested-conservative-proof-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.nested-conservative-proof-unit
+  COMMAND nodal-nested-conservative-proof-unit-tests --literal-groundwork)
+set_tests_properties(nodal.native.nested-conservative-proof-unit PROPERTIES TIMEOUT 60)
+
 add_executable(nodal-digital-assignment-guard-unit-tests DigitalAssignmentGuardTest.cpp)
 llvm_update_compile_flags(nodal-digital-assignment-guard-unit-tests)
 target_link_libraries(nodal-digital-assignment-guard-unit-tests PRIVATE

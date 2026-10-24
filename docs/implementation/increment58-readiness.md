@@ -2865,3 +2865,94 @@ Only document/link/checklist consistency and independent evidence/source review
 apply to this commit. No CI, full qualification, held CIRCT consumer, comparator,
 firtool, installation or target replay ran. The default 65,536 construction gap,
 diagnostic-only 131,072 profile and pending Extended API choice remain unchanged.
+
+## Checkpoint 72 — nested conservative literal proof groundwork
+
+This native-only checkpoint accepts literal two-axis proof groundwork, not
+Interface-family integration or Foundation 58 completion. The mapper retains
+rank-two NodeArrays, independent induction SSA, ordered zero/unit-step axes,
+Module-owned roots and exact dimension identity. It checks complete source tuples,
+root/flat consistency, bounds, inversion/roundtrip and destination mapping.
+The actual `ConservativeConnectivity` caller uses independently proved images.
+Module scalar anchors remain one-way; they receive no ad-hoc exact-map certificate.
+The new certificate applies only to multiple shared roots, preserving fresh trees.
+
+One private query-local checked-context owner stores successful exact-SSA facts.
+Borrowers check its Module; insertion follows complete capture/header/scope
+validation and hits charge one unit. Failures, partial captures, equal types,
+caller summaries and unbudgeted pre-authentication cannot seed it. There is no
+cross-query reuse. Existing dimension caches and actual-use verifiers remain.
+The enhanced mapper reuses its same-query destination only through unchanged
+completeness checks. No evaluator, occurrence registry, header layout, public API
+or capacity change is introduced.
+
+### Focused execution and measured boundary
+
+The manually compiled and linked native probe passed **585 checks, zero failures**
+(exit zero, empty stderr), running exactly:
+
+```sh
+.work/f58-nested-conservative-proof/literal/proof-probe --literal-groundwork
+```
+
+The maintained source is
+[`NestedConservativeProofTest.cpp`](../../core/compiler/test/Unit/NestedConservativeProofTest.cpp).
+Its standalone CMake target `nodal-nested-conservative-proof-unit-tests` registers
+`nodal.native.nested-conservative-proof-unit` with `--literal-groundwork`, linking
+only the existing native dialect and MLIR/LLVM support owners. This registration
+was source-reviewed; **the CMake build/CTest route was not executed**. The exact
+same probe bytes passed the manual build/link/run above. The broader no-argument
+assertions remain intact, but were not run on the corrected candidate and are not
+registered or reported as passing.
+
+Actual topology checks cover repeated/equal tuples, either or both axes differing,
+and shared-anchor convergence. Both mapper directions, root/flat contradictions,
+malformed axes/bounds/steps, tiny budgets, transactional failures, distinct SSA,
+between-query mutation/restoration, fresh-tree and ordinary nonunit predecessors
+pass. Early verifier refusals are boundary tests, not cache-hit isolation.
+Cross-root different-tuple comparisons remain `Unknown`.
+
+Minimum sufficient **public allowances**, searched only within 512 at 64 states,
+are 415 for paired forward/reverse mappings (old and enhanced), 223 for the
+one-way anchor, and 161/203 for the old/enhanced ordinary nonunit predecessor.
+These are not internal-work or CPU measurements. The semantic signed-64 product
+witness `46341 * 46341` passes without narrowing Module NodeArray semantics to a
+future signed-32 adapter profile. Existing mapper limits 512/64 and global caller
+limits 16384/1024 remain unchanged.
+
+### Provenance, preserved failures and remaining work
+
+The source base is HEAD71 `d46bc353b107be6ada0de41377917da76405c7e6`.
+Exact accepted SHA-256 inputs are:
+
+- `ShapeModel.cpp`: `f8387569e9b1411c36e49daaf5e6b9b9170ef0a631dfcbad2bb633307371b2aa`.
+- `ConservativeConnectivity.cpp`: `d582a3fd711066d9ef473bc289787ad6867932c5bf0c51fadc75e94481978842`.
+- Maintained probe: `068f578f5eb7a3c3d4fff945456c92f11885dbe45e210a65cad102ef963ba66d`.
+
+The retained literal runtime receipt is
+`.work/f58-nested-conservative-proof/literal/runtime.result.json`, SHA-256
+`c3615809834593fa30b6b71eadfcbeee602f778bcaab3d1ab978d580bf2e5098`;
+it pins executable `43f0150dab2307da8a47dc272552f0d616df0c55c5741e53fddd53282bc3faee`,
+source freeze, link receipt and outputs. Independent source/outcome review accepted
+only this native literal scope.
+
+The original broader run (512 checks, 80 failures) and its failed candidate remain
+preserved. A same-budget diagnostic reproduced its semantic stdout/stderr and
+exit status exactly, with six balanced, untruncated charged-unit ledgers. It
+measured literal image work 419 (projection 283, dimensions 95), then destination
+projection exhaustion; symbolic image projection exhausted before dimensions.
+This justified canonical validation reuse, not a larger budget. The diagnostic
+parity receipt is `diagnostic/runtime.result.json` under the same stage, SHA-256
+`9860642c3debedcece264df8f40673d8f5259b76583580608ae30056c2caa56a`.
+
+Symbolic two-axis completion remains blocked. A source-derived lower bound of
+at least 609 charged units for the existing context-only symbolic route exposes
+repeated canonical dimension/parameter proofs; it is **not a runtime pass or a
+claim that the literal repair fits symbolic queries**. Canonical parameter-proof
+reuse requires its own scoped review. Frontend/bridge/Interface-adapter widening,
+generated target handoff, signed-32 product/stride checks and nested Verilog-A
+emission remain pending. No new generated HDL demonstration is claimed. No
+frontend replay, adapter/Verilog-A run, CMake/CTest run, full suite, qualification,
+CI, held CIRCT consumer/comparator/firtool pipeline or installation ran here.
+The default construction-work gap and diagnostic-only larger construction profile
+are unchanged. F-058.B.1/B.2, their parents and Foundation 58 remain open.

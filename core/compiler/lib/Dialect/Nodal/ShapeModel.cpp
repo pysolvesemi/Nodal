@@ -93,8 +93,19 @@ class RegionQuery;
 // but their semantic-path tokens are not an authority to choose a region.
 class TypedGeometry {
 public:
-  TypedGeometry(Operation *module, unsigned &remainingWork)
-      : module(module), remainingWork(remainingWork) {}
+  // Successful context proofs for exact original SSA values, never equal types
+  // or dimension tokens. The owner is private to one read-only query; the IR
+  // must stay alive and unchanged until that query completes. A borrowed owner
+  // is checked against this geometry's Module on every access.
+  struct CheckedContexts {
+    explicit CheckedContexts(Operation *module) : module(module) {}
+    Operation *module;
+    llvm::DenseMap<Value, Operation *> successful;
+  };
+  TypedGeometry(Operation *module, unsigned &remainingWork,
+                CheckedContexts *sharedContexts = nullptr)
+      : module(module), remainingWork(remainingWork), localContexts(module),
+        checkedContexts(sharedContexts ? sharedContexts : &localContexts) {}
   bool spend() {
     if (!remainingWork)
       return false;
@@ -102,6 +113,14 @@ public:
     return true;
   }
   FailureOr<Operation *> context(Value original) {
+    if (checkedContexts->module != module)
+      return failure();
+    if (auto found = checkedContexts->successful.find(original);
+        found != checkedContexts->successful.end()) {
+      if (!spend())
+        return failure();
+      return found->second;
+    }
     Value value = original;
     for (unsigned depth = 0; value && depth < 128; ++depth) {
       if (!spend())
@@ -134,6 +153,9 @@ public:
       // Ordinary regions retain their previous Module-dimension policy. Their
       // original projection/storage verifiers own admission; digital headers
       // must not newly exclude valid analog/procedural storage producers.
+      // Insert only after the entire original capture/header/scope chain has
+      // succeeded. Partial captures and failed/resource-limited proofs stay out.
+      checkedContexts->successful.try_emplace(original, producer);
       return producer;
     }
     return failure();
@@ -205,6 +227,8 @@ private:
     }
     return result;
   }
+  CheckedContexts localContexts;
+  CheckedContexts *checkedContexts;
   llvm::DenseMap<std::pair<Value, Operation *>, SmallVector<StaticShapeDimension, 4>> cache;
 };
 std::string dimensionExpressionKey(Value value) {
@@ -877,13 +901,14 @@ FailureOr<InstantiatedIntegerExpression> resolveSelectedInstancePathGeneratedOrd
 }
 
 static FailureOr<StaticShapeProjection>
-resolveStaticShapeProjectionImpl(Value reference, Operation *use, unsigned &remainingWork) {
+resolveStaticShapeProjectionImpl(Value reference, Operation *use, unsigned &remainingWork,
+                                 TypedGeometry::CheckedContexts *checkedContexts = nullptr) {
   if (!reference || !use)
     return failure();
   auto module = use->getParentOfType<nodal::ModuleOp>();
   if (!module)
     return failure();
-  TypedGeometry geometry(module, remainingWork);
+  TypedGeometry geometry(module, remainingWork, checkedContexts);
   if (!geometry.spend())
     return failure();
   StaticShapeProjection result;
@@ -1094,7 +1119,7 @@ class RegionQuery {
 public:
   RegionQuery(Operation *use, ShapeRegionProofLimits limits)
       : use(use), module(use ? use->getParentOfType<nodal::ModuleOp>() : nodal::ModuleOp()),
-        limits(limits) {}
+        limits(limits), checkedContexts(module) {}
   bool spend(uint64_t amount = 1) {
     if (amount > limits.maximumWork - std::min(work, limits.maximumWork)) {
       status = RegionStatus::ResourceLimit;
@@ -1182,7 +1207,7 @@ public:
   }
   FailureOr<StaticShapeProjection> projection(Value selected, Operation *proofUse) {
     unsigned remaining = remainingTypeWork(), before = remaining;
-    auto result = resolveStaticShapeProjectionImpl(selected, proofUse, remaining);
+    auto result = resolveStaticShapeProjectionImpl(selected, proofUse, remaining, &checkedContexts);
     spend(before - remaining);
     if (failed(result) && !remaining)
       status = RegionStatus::ResourceLimit;
@@ -1191,7 +1216,7 @@ public:
   std::optional<llvm::SmallVector<IntegerExpression, 4>> dimensions(Value value) {
     unsigned remaining = remainingTypeWork(), before = remaining;
     auto release = llvm::scope_exit([&] { spend(before - remaining); });
-    TypedGeometry geometry(module, remaining);
+    TypedGeometry geometry(module, remaining, &checkedContexts);
     auto context = geometry.context(value);
     if (failed(context)) {
       if (!remaining)
@@ -1371,6 +1396,9 @@ public:
   IntegerExpression one = makeLiteralIntegerExpression(1);
 
 private:
+  // Shared only by this query's bounded projection and dimension owners. Never
+  // seeded from the mapper's separate, unbudgeted actual-use authentication.
+  TypedGeometry::CheckedContexts checkedContexts;
   llvm::DenseMap<std::pair<Value, Operation *>, llvm::SmallVector<IntegerExpression, 4>>
       dimensionCache;
   std::map<Operation *, std::optional<GeneratedDomain>> domains;
@@ -2246,12 +2274,10 @@ ShapeRegionProofStatus resolveStaticShapeRegion(const StaticShapeProjection &pro
 }
 
 namespace {
-RegionStatus deriveCheckedIterationImage(const StaticShapeProjection &projection,
-                                         RegionQuery &query, StaticShapeRegion &result) {
-  StaticShapeRegion candidate;
-  auto status = deriveRegion(projection, query, candidate, true, std::nullopt, true);
-  if (status != RegionStatus::Proved)
-    return status;
+// Private certificate for a successful same-query deriveRegion(..., true,
+// std::nullopt, true) result. It is not an admission path for supplied images.
+RegionStatus checkIterationImageCompleteness(const StaticShapeRegion &candidate,
+                                             RegionQuery &query) {
   if (!candidate.iteration)
     return RegionStatus::Unsupported;
   // Injectivity is over every repeated occurrence between this actual use and
@@ -2274,6 +2300,17 @@ RegionStatus deriveCheckedIterationImage(const StaticShapeProjection &projection
     if (domain->maximumTripCount > 1 && !represented)
       return query.failedStatus();
   }
+  return RegionStatus::Proved;
+}
+RegionStatus deriveCheckedIterationImage(const StaticShapeProjection &projection,
+                                         RegionQuery &query, StaticShapeRegion &result) {
+  StaticShapeRegion candidate;
+  auto status = deriveRegion(projection, query, candidate, true, std::nullopt, true);
+  if (status != RegionStatus::Proved)
+    return status;
+  status = checkIterationImageCompleteness(candidate, query);
+  if (status != RegionStatus::Proved)
+    return status;
   result = std::move(candidate);
   return RegionStatus::Proved;
 }
@@ -3161,6 +3198,152 @@ StaticShapeScalarLocation locateStaticShapeScalar(const StaticShapeProjection &r
   return locateStaticShapeScalar(region, point, use, limits);
 }
 
+// This additional occurrence profile is deliberately coordinate-preserving.
+// General Cartesian images remain owned by deriveCheckedIterationImage; this
+// consumer only admits the two original Module-backed rectangular axes.
+static ShapeRegionProofStatus checkTwoAxisOccurrenceImage(const StaticShapeRegion &region,
+                                                          RegionQuery &query) {
+  if (!query.spend())
+    return query.status;
+  Operation *root = region.root ? region.root.getDefiningOp() : nullptr;
+  if (!root || root->getParentOp() != query.module || region.iterationCount() != 2 ||
+      region.axes.size() != 2)
+    return query.failedStatus();
+  auto dimensions = query.dimensions(region.root);
+  auto shape = physicalShape(region.root.getType());
+  if (!dimensions || dimensions->size() != 2 || !shape || shape->dimensions.size() != 2)
+    return query.failedStatus();
+  Operation *outer = region.iterationAt(0).loop, *inner = region.iterationAt(1).loop;
+  if (!isa_and_nonnull<GenerateOp>(outer) || !isa_and_nonnull<GenerateOp>(inner) ||
+      outer->getParentOp() != query.module || inner->getParentOp() != outer ||
+      query.use->getParentOp() != inner)
+    return query.failedStatus();
+  auto literalOperand = [](Value value) -> std::optional<int64_t> {
+    auto op = value.getDefiningOp<ConstLiteralOp>();
+    auto attr = op ? op->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+    if (!attr || !value.getType().isInteger(64) || !attr.getValue().isSignedIntN(64))
+      return std::nullopt;
+    return attr.getValue().getSExtValue();
+  };
+  for (unsigned axis = 0; axis != 2; ++axis) {
+    if (!query.spend())
+      return query.status;
+    const auto &map = region.iterationAt(axis);
+    Operation *family = map.loop;
+    if (family->getNumOperands() != 3 || family->getNumRegions() != 1 ||
+        !family->getRegion(0).hasOneBlock() ||
+        family->getRegion(0).front().getNumArguments() != 1 ||
+        map.domain.module != query.module ||
+        map.domain.induction != family->getRegion(0).front().getArgument(0) ||
+        literalOperand(family->getOperand(0)) != 0 ||
+        literalOperand(family->getOperand(2)) != 1 || map.varyingAxis != axis ||
+        map.stride != 1 || map.empty || !map.domain.attainedInductionBounds ||
+        !query.equal(map.domain.lower, query.zero) ||
+        !query.equal(map.domain.step, query.one) || !query.equal(map.offset, query.zero) ||
+        !query.equal(map.occurrenceWidth, query.one) ||
+        !query.equal(map.tripCount, map.domain.upperExclusive) ||
+        !query.equal(region.axes[axis].lower, query.zero) ||
+        !query.equal(region.axes[axis].upperExclusive, map.domain.upperExclusive) ||
+        !query.equal((*dimensions)[axis], map.domain.upperExclusive))
+      return query.failedStatus();
+    Operation *upper = family->getOperand(1).getDefiningOp();
+    const auto &bound = map.domain.upperExclusive;
+    if (!upper || !precedesLexically(upper, family) || bound.bounds.lower <= 0)
+      return query.failedStatus();
+    if (auto literal = literalOperand(family->getOperand(1))) {
+      if (RegionQuery::literal(bound) != literal ||
+          shape->dimensions[axis] != std::to_string(*literal))
+        return query.failedStatus();
+    } else {
+      auto reference = upper->getAttrOfType<FlatSymbolRefAttr>("parameter");
+      if (!isa<ConstParameterRefOp>(upper) || upper->getParentOp() != query.module ||
+          !reference || !bound.root ||
+          bound.root->kind != InstantiatedIntegerNode::Kind::ParentParameter ||
+          !isa_and_nonnull<ParameterOp>(bound.root->parameter) ||
+          bound.root->parameter->getParentOp() != query.module ||
+          shape->dimensions[axis] != reference.getValue() ||
+          SymbolTable::lookupSymbolIn(query.module, reference) != bound.root->parameter)
+        return query.failedStatus();
+    }
+  }
+  return query.status;
+}
+
+static ShapeRegionProofStatus mapTwoAxisOccurrencePoint(
+    const StaticShapePoint &point, StaticShapeRegion &source, StaticShapeRegion &destination,
+    bool invariantDestination, RegionQuery &query, StaticShapePoint &result) {
+  if (point.root != source.root)
+    return RegionStatus::Invalid;
+  auto status = checkTwoAxisOccurrenceImage(source, query);
+  if (status != RegionStatus::Proved)
+    return status;
+  if (point.coordinates.size() != 2 ||
+      llvm::any_of(point.coordinates, [](const auto &coordinate) {
+        return !RegionQuery::literal(coordinate);
+      }))
+    return query.failedStatus();
+  auto dimensions = query.dimensions(source.root);
+  StaticShapePoint coordinatesOnly = point;
+  coordinatesOnly.flatOrdinal.reset();
+  auto original = dimensions ? pointFlat(coordinatesOnly, query, *dimensions) : std::nullopt;
+  if (!original)
+    return query.failedStatus();
+  // The public point can carry both representations. Neither takes precedence
+  // over a contradictory other representation at this inverse trust boundary.
+  if (point.flatOrdinal && !query.equal(*point.flatOrdinal, *original))
+    return query.status == RegionStatus::ResourceLimit ? query.status : RegionStatus::Invalid;
+  SmallVector<GeneratedSelection, 2> occurrences;
+  for (unsigned axis = 0; axis != 2; ++axis) {
+    const auto &map = source.iterationAt(axis);
+    const auto &coordinate = point.coordinates[axis];
+    if (!query.less(query.zero, coordinate, true) ||
+        !query.less(coordinate, map.domain.upperExclusive))
+      return query.failedStatus();
+    occurrences.push_back({map.loop, Value(), coordinate});
+  }
+  if (invariantDestination) {
+    Operation *root = destination.root ? destination.root.getDefiningOp() : nullptr;
+    if (!root || root->getParentOp() != query.module || destination.iterationCount() ||
+        isa<ShapedType>(destination.root.getType()))
+      return query.failedStatus();
+  } else {
+    status = checkTwoAxisOccurrenceImage(destination, query);
+    if (status != RegionStatus::Proved)
+      return status;
+    for (unsigned axis = 0; axis != 2; ++axis)
+      if (!query.spend() || source.iterationAt(axis).loop != destination.iterationAt(axis).loop)
+        return query.failedStatus();
+  }
+  status = specializeRegion(source, occurrences, query);
+  if (status != RegionStatus::Proved)
+    return status;
+  StaticShapePoint roundTrip;
+  status = pointFromRegion(source, query, roundTrip);
+  if (status != RegionStatus::Proved)
+    return status;
+  if (roundTrip.coordinates.size() != 2 || !roundTrip.flatOrdinal ||
+      !query.equal(*original, *roundTrip.flatOrdinal))
+    return query.failedStatus();
+  for (unsigned axis = 0; axis != 2; ++axis)
+    if (!query.equal(point.coordinates[axis], roundTrip.coordinates[axis]))
+      return query.failedStatus();
+  if (!invariantDestination) {
+    status = specializeRegion(destination, occurrences, query);
+    if (status != RegionStatus::Proved)
+      return status;
+  }
+  StaticShapePoint mapped;
+  status = pointFromRegion(destination, query, mapped);
+  if (status != RegionStatus::Proved)
+    return status;
+  if (invariantDestination &&
+      (!mapped.flatOrdinal || !query.invariant(*mapped.flatOrdinal) ||
+       llvm::any_of(mapped.coordinates, [&](const auto &value) { return !query.invariant(value); })))
+    return query.failedStatus();
+  result = std::move(mapped);
+  return RegionStatus::Proved;
+}
+
 static ShapeRegionProofStatus
 mapSameOccurrencePoint(const StaticShapeProjection &source, const StaticShapePoint &point,
                        const StaticShapeProjection &destination, Operation *actualRelationUse,
@@ -3198,6 +3381,17 @@ mapSameOccurrencePoint(const StaticShapeProjection &source, const StaticShapePoi
     if (status != RegionStatus::Proved)
       return status;
     invariantDestination = b.iterationCount() == 0;
+  }
+  if (a.iterationCount() == 2) {
+    if (!invariantDestination) {
+      // The enhanced route already derived this exact candidate with the same
+      // query and flags. Reuse only that derivation, not its completeness proof.
+      status = allowInvariantDestination ? checkIterationImageCompleteness(b, query)
+                                         : deriveCheckedIterationImage(destination, query, b);
+      if (status != RegionStatus::Proved)
+        return status;
+    }
+    return mapTwoAxisOccurrencePoint(point, a, b, invariantDestination, query, result);
   }
   if (invariantDestination) {
     Operation *definition = destination.root.getDefiningOp();

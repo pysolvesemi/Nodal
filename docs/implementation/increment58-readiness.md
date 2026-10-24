@@ -2370,3 +2370,45 @@ of 62,308,352 bytes below the 65,011,712-byte stage cap and with the existing
 246,808,576-byte free-space reserve. Reconstructable compaction retained source,
 recipes, failure/diagnostic receipts, both baseline APIs and current raw outputs.
 No CI, full qualification, publication retry or held consumer operation ran.
+
+## Checkpoint 67: bounded eager FSM scale and determinism
+
+Three maintained ordinary eager-construction profiles extend the representative
+F-058.F evidence: one stack leaf at capacity 2, four parallel leaves at capacity 8,
+and depth-three binary composition with four leaves at capacity 32. They capture
+1/5/7 machine occurrences, 2/32/128 frames and 6/80/280 stack-storage bits. Exact
+parent/slot/owner-case topology, unique declaration/control/local/stack ownership,
+authored clock domain, register types and stack arithmetic are checked. Each
+profile compares complete ConstructionSnapshot values and raw representations
+across two fresh Sessions; only counts, sizes and hashes are retained.
+
+Architecture review reuses the existing FsmDef, FsmChild, FlatFsmGraphContract and
+canonical capture/storage owners. There is no new registry, evaluator, production
+code, public API or resource-policy selection. These fixtures use no reservation
+or reduction path and assert that construction boundary work is inactive. Earlier
+standalone-composition and owner-case display-name assumptions failed as fixture
+errors; corrected checks require canonical absent metadata and authored case IDs,
+without weakening production behavior. Failed receipts remain preserved.
+
+Strict-warning compilation and all three profiles pass; a fresh replay through
+the existing manifest runner reproduces identical snapshot hashes. Independent
+review verifies the fixture and pinned inputs. Direct per-Java-process observations
+are 193324/220124/222512 KiB maximum RSS and 1.329/1.971/2.420 seconds elapsed,
+including two captures per process. These are environment-specific observations,
+not limits, comparative speedups or performance guarantees. The maintained wrapper
+is not a per-Java measurement and is excluded from those claims. See the
+[bounded eager FSM guide](../../tests/scala/reusable-fsm/fixtures/scale/README.md)
+for the shared-runner recipe and source-pinning requirements.
+
+The fixture-only allocation remains below 2 MiB; sampled combined owned allocation
+is 53,723,136 bytes, below 65,011,712, with 435,728,384 bytes free against the
+246,808,576-byte reserve. No API/native rebuild, CI, full qualification, publication
+retry or held target-consumer action occurred. The current increment does not
+affect generated Verilog-*: only maintained construction tests and documentation
+change, and no generation or target-execution claim is made.
+
+This accepts only representative eager capture/storage/determinism evidence.
+F-058.F and Foundation 58 remain open, as do default 65,536-unit admission,
+automatic pending-cell completion and broader C2b/C2c. Diagnostic 131,072 remains
+diagnostic. A proposed explicit finite production opt-in is pending a separate
+public-contract decision; it is not implemented or inferred from these tests.

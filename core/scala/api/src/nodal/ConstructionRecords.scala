@@ -712,8 +712,8 @@ private[nodal] final case class KernelSelectedCapture(
 )
 
 private final case class DomainRef(module: Long, index: Int)
-private final case class DeclarationRef(module: Long, index: Int)
-private final case class ExpressionRef(module: Long, index: Int)
+private final case class DeclarationRef(module: Long, index: Int) extends AllocationIdentity
+private final case class ExpressionRef(module: Long, index: Int) extends AllocationIdentity
 
 private final case class DomainRecord(
     reference: DomainRef,
@@ -1005,3 +1005,46 @@ private[nodal] final case class KernelFsmStack(
     underflow: Option[String],
     invalidFrame: Option[String]
 )
+
+/** Private allocation metadata is not a case-class key or serialized ordering field. */
+private[nodal] final case class ConstructionAllocation(
+    session: AnyRef,
+    module: ModuleRecord,
+    serial: Long,
+    region: Option[DigitalValueRegionRecord],
+    generation: Option[GeneratedRegionRecord],
+    area: Option[AreaRecord]
+)
+
+private[nodal] trait AllocationIdentity:
+  private var allocation: Option[ConstructionAllocation] = None
+  private[nodal] final def constructionAllocation: Option[ConstructionAllocation] = allocation
+  private[nodal] final def stampConstructionAllocation(value: ConstructionAllocation): Unit =
+    require(allocation.isEmpty, "canonical identity may be stamped only once")
+    allocation = Some(value)
+
+private[nodal] final case class ConstructionRootIdentity(
+    value: AnyRef,
+    reference: DeclarationRef | ExpressionRef
+)
+
+/** C2b.1 admits only the already supported ordinary-root context, not a callback scope. */
+private[nodal] final case class ConstructionRequestContext(
+    session: AnyRef,
+    module: ModuleRecord,
+    input: Expr[?],
+    inputReference: DeclarationRef | ExpressionRef,
+    resultReference: ExpressionRef,
+    frontier: Long,
+    roots: Vector[ConstructionRootIdentity],
+    sourceSlot: Int
+)
+
+private[nodal] trait ConstructionRequestCarrier:
+  private var request: Option[ConstructionRequestContext] = None
+  private[nodal] final def constructionRequest: Option[ConstructionRequestContext] = request
+  private[nodal] final def attachConstructionRequest(value: ConstructionRequestContext): Unit =
+    require(request.isEmpty, "construction request may be attached only once")
+    request = Some(value)
+
+private[nodal] final case class ConstructionRequestChildren(values: Iterator[?])

@@ -56,7 +56,7 @@ private[nodal] final class KernelExpr[A <: Data] private (
     private val provisionalType: Option[KernelTypeDescriptor],
     private[nodal] val constructionDependencies: Vector[Any],
     private[nodal] val constructionCallback: Option[DigitalCollectionCallback.ReductionBody]
-) extends Expr[A]:
+) extends Expr[A], ConstructionRequestCarrier:
   def this(
       operands: Vector[Any],
       resultType: Option[KernelTypeDescriptor] = None,

@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "default_suites": [
+    "context13"
+  ],
+  "fixtures": [
+    {
+      "name": "C2b1Controls.scala",
+      "maintained_path": "fixtures/reduction-context-c2b1/C2b1Controls.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-context-c2b1/C2b1Controls.scala",
+      "sha256": "8cada86099f9c0a325051621cee35c43e1ff9006818cbed53462bfba46ce3b20"
+    },
+    {
+      "name": "C2b1Root.scala",
+      "maintained_path": "fixtures/reduction-context-c2b1/C2b1Root.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-context-c2b1/C2b1Root.scala",
+      "sha256": "37e22986313d1b9f47f585ce76753bfc372e81c3c5c9d09fd96632d83bf4a65d"
+    }
+  ],
+  "suites": {
+    "context13": {
+      "main": "nodal.internal.testkit.C2b1Controls",
+      "fixtures": [
+        "C2b1Controls.scala",
+        "C2b1Root.scala"
+      ],
+      "success": [
+        "PASS C2b.1 root_frontier_identity",
+        "PASS C2b.1 allocation_reuse",
+        "PASS C2b.1 root_walk_shared_deep",
+        "PASS C2b.1 tamper_input",
+        "PASS C2b.1 tamper_equal_reference",
+        "PASS C2b.1 tamper_foreign_session",
+        "PASS C2b.1 tamper_foreign_module",
+        "PASS C2b.1 tamper_source_slot",
+        "PASS C2b.1 tamper_late_root",
+        "PASS C2b.1 root_walk_seq_option_cycle",
+        "PASS C2b.1 root_walk_expression_cycle",
+        "PASS C2b.1 install_failure",
+        "PASS C2b.1 fresh recovery"
+      ]
+    }
+  }
+}

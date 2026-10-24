@@ -1370,7 +1370,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         module.declarations(reference.index) = declaration.copy(
           attributes = declaration.attributes :+ ("initializer_policy" -> "if_reset")
         )
-    val reference = ExpressionRef(module.handle, module.expressionCount)
+    val reference = allocateExpressionReference(module)
     module.expressionCount += 1
     def projection[A <: Data](operation: String, dataType: KernelTypeDescriptor): KernelExpr[A] =
       val value =
@@ -2016,7 +2016,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val canonical = DigitalEnumContract.abi(selector)
     val bound =
       bindCollectionValue(selector, parent, module.handle).asInstanceOf[Expr[EnumValue[S]]]
-    val reference = ExpressionRef(module.handle, module.expressionCount)
+    val reference = allocateExpressionReference(module)
     module.expressionCount += 1
     val ordinal = parent.map: region =>
       val result = region.assignmentCount
@@ -2495,7 +2495,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def newScaffoldReference(module: ModuleRecord): ExpressionRef =
     if module.scaffoldExpressionCount == Int.MaxValue then
       collectionFailure("private iteration scaffold identity space is exhausted")
-    val reference = ExpressionRef(module.handle, -module.scaffoldExpressionCount - 1)
+    val reference = allocateScaffoldReference(module)
     module.scaffoldExpressionCount += 1
     reference
 
@@ -2670,7 +2670,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val scaffold = role == "induction" && region.loop.exists(_.generated.nonEmpty)
     val reference = if scaffold then newScaffoldReference(module)
     else
-      val result = ExpressionRef(module.handle, module.expressionCount)
+      val result = allocateExpressionReference(module)
       module.expressionCount += 1
       result
     collectionArguments.update(reference, region -> region.arguments.size)
@@ -3154,7 +3154,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val module = currentModule
     val reference = if header.generated.nonEmpty then newScaffoldReference(module)
     else
-      val result = ExpressionRef(module.handle, module.expressionCount)
+      val result = allocateExpressionReference(module)
       module.expressionCount += 1
       result
     val region = new DigitalValueRegionRecord(
@@ -3456,7 +3456,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         expressionRegions.get(predicateRef) != parent
       then
         structuralFailure("structural if predicate belongs to another lexical scope")
-      val reference = ExpressionRef(module.handle, module.expressionCount)
+      val reference = allocateExpressionReference(module)
       module.expressionCount += 1
       val ordinal = parent match
         case Some(region) =>
@@ -3589,7 +3589,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Some(KernelTypeDescriptor("Bool"))
     then behavioralFailure("behavioral guard requires an exact owned Bool value")
     val bound = bindCollectionValue(condition, parent, module.handle).asInstanceOf[Expr[Bool]]
-    val reference = ExpressionRef(module.handle, module.expressionCount)
+    val reference = allocateExpressionReference(module)
     module.expressionCount += 1
     val ordinal = parent match
       case Some(region) =>
@@ -4986,7 +4986,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     if boundaryClosureOwner.nonEmpty || !ordinaryRootConstructionContext ||
       !DigitalReductionContract.Kinds(kind)
     then collectionFailure("C2a construction requires an open ordinary root Module context")
-    val result = reserveReductionConstruction(input, body)
+    val result = reserveRegisteredConstruction(input, body)
     result.registerConstructionIntent(this, kind)
     registeredConstructionAdmission = true
     result
@@ -5007,7 +5007,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       if region.expressionCount >= 4098 then
         collectionFailure("collection body exceeds the 4098 expression budget")
       region.expressionCount += 1
-    val reference = ExpressionRef(module.handle, module.expressionCount)
+    val reference = allocateExpressionReference(module)
     module.expressionCount += 1
     expressionIds.put(result, reference)
     expressionValues.update(reference, result)
@@ -5021,7 +5021,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       owner.markDirty()
     result
 
-  def completeReductionSingleton(
+  private def completeReductionSingletonBody(
       result: KernelExpr[Data],
       input: Expr[Vec[Data]],
       indices: Vector[Dimension]
@@ -5103,7 +5103,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         cardinality = true,
         storageContext = true
       )
-    val reference = ExpressionRef(module.handle, module.expressionCount)
+    val reference = allocateExpressionReference(module)
     module.expressionCount += 1
     val region = new DigitalValueRegionRecord(reference, parent, kind, boundInputs, boundSeed)
     collectionRegions.update(reference, region)
@@ -5251,7 +5251,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         ) > DigitalReductionContract.MaximumWork
       then
         collectionFailure("reduction context preflight exceeds the 65536 analysis-work budget")
-      val reference = ExpressionRef(module.handle, module.expressionCount)
+      val reference = allocateExpressionReference(module)
       module.expressionCount += 1
       val region = new DigitalValueRegionRecord(reference, parent, kind, Vector(input), None)
       collectionRegions.update(reference, region)
@@ -6859,7 +6859,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       case _ => ()
     if declarationIds.containsKey(value) then
       fail("NODAL-OWNERSHIP-016", s"${kind.label} was registered twice")
-    val reference = DeclarationRef(module.handle, module.declarations.size)
+    val reference = allocateDeclarationReference(module)
     module.declarations += DeclarationRecord(
       reference,
       value,
@@ -8621,7 +8621,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def nodeArrayInput(array: NodeArray[?])
       : (DeclarationRef | ExpressionRef, DeclarationRef | ExpressionRef) =
     val module = currentModule.handle
-    val input: DeclarationRef | ExpressionRef = Option(declarationIds.get(array))
+    val input = Option[DeclarationRef | ExpressionRef](declarationIds.get(array))
       .orElse(Option(expressionIds.get(array))).getOrElse(
         fail("NODAL-SHAPE-043-006", "node-array reference has no owned captured identity")
       )
@@ -9868,7 +9868,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         case expression: KernelExpr[?] => expression.operands
         case _ => structuralOperands)
       val reference = retained.getOrElse:
-        val fresh = ExpressionRef(module.handle, module.expressionCount)
+        val fresh = allocateExpressionReference(module)
         module.expressionCount += 1
         fresh
       if completingReserved then
@@ -15356,7 +15356,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     def accepts(kind: String, key: Any): Boolean =
       !incremental || selectedJob.contains(kind -> key)
 
-    private def guard[A](body: => A): A =
+    private[ConstructionSession] def guard[A](body: => A): A =
       if poisoned then reject("boundary closure is poisoned")
       try body
       catch
@@ -16012,7 +16012,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         reject("invalid incremental closure activation")
       incremental = true
       remaining = budget.toLong
-      charge(expressionValues.size.toLong)
+      chargeConstructionActivation(this, expressionValues.size.toLong)
       expressionValues.foreach((reference, value) => captured(reference, value))
 
     def queryForCurrentEpoch(): StructuralParameterBinding.Query = guard:
@@ -16729,3 +16729,271 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
       publicationProbe(closure.verifyPublication())
       publicationProbe(Emission(Vector.empty, report) -> snapshot)
+
+  // Metadata lives on canonical reference identities, never in a second provenance graph.
+  private var constructionAllocationSerial = 0L
+  private var constructionRequestWork = 0L
+
+  private def requestCharge(units: Long = 1L): Unit = boundaryClosureOwner match
+    case Some(owner) if owner.incremental => owner.charge(units)
+    case _ =>
+      if units < 0L || units > 65536L - constructionRequestWork then
+        try collectionFailure("construction request work exceeds the session budget")
+        catch
+          case failure: Throwable =>
+            poisonConstructor(failure, "construction request")
+            throw failure
+      constructionRequestWork += units
+
+  private def stampAllocation[A <: AllocationIdentity](module: ModuleRecord, ref: A): A =
+    if constructionAllocationSerial == Long.MaxValue then
+      collectionFailure("canonical construction allocation serial is exhausted")
+    constructionAllocationSerial += 1L
+    ref.stampConstructionAllocation(ConstructionAllocation(
+      this,
+      module,
+      constructionAllocationSerial,
+      activeValueRegion,
+      activeGeneratedRegion,
+      activeArea
+    ))
+    ref
+
+  private def requestReference(value: AnyRef): DeclarationRef | ExpressionRef =
+    Option(declarationIds.get(value)).getOrElse(
+      Option(expressionIds.get(value)).getOrElse(
+        collectionFailure("construction request requires an existing canonical input")
+      )
+    )
+
+  private def requireRequestIdentity(root: ConstructionRootIdentity, frontier: Long): Unit =
+    requestCharge()
+    val ref = root.reference
+    val module = currentModule
+    val stamp = ref.constructionAllocation.getOrElse(
+      collectionFailure("construction input has no canonical allocation stamp")
+    )
+    if (stamp.session ne this) || stamp.serial > frontier || (stamp.module ne module) ||
+      !records.get(stamp.module.handle).exists(_ eq stamp.module)
+    then collectionFailure("construction input is later or belongs to another session")
+    val canonical = ref match
+      case declaration: DeclarationRef =>
+        Option(declarationIds.get(root.value)).exists(_ eq declaration) &&
+        declaration.module == stamp.module.handle &&
+        stamp.module.declarations.lift(declaration.index).exists(record =>
+          (record.reference eq declaration) && (record.value eq root.value)
+        )
+      case expression: ExpressionRef =>
+        Option(expressionIds.get(root.value)).exists(_ eq expression) &&
+        expression.module == stamp.module.handle &&
+        expressionValues.get(expression).exists(_ eq root.value)
+    if !canonical then collectionFailure("construction input lost its canonical identity")
+    // Physical allocation context may differ from the canonical value scope for lifted static
+    // expressions. Validate both, without treating a child declaration as a parent proxy.
+    stamp.region.foreach: region =>
+      if region.reference.module != module.handle || !allValueRegions.exists(candidate =>
+          requestCharge()
+          candidate eq region
+        )
+      then collectionFailure("construction input lost its allocation region")
+    stamp.generation.foreach: generation =>
+      if generation.owner != module.handle || !module.generatedRegions.exists(candidate =>
+          requestCharge()
+          candidate eq generation
+        )
+      then collectionFailure("construction input lost its allocation generation")
+    stamp.area.foreach: area =>
+      if area.owner != module.handle || !areas.exists(candidate =>
+          requestCharge()
+          candidate eq area
+        )
+      then collectionFailure("construction input lost its allocation Area")
+      area.value.foreach: value =>
+        requestCharge()
+        if !Option(areaRecords.get(value)).exists(_ eq area) then
+          collectionFailure("construction input lost its canonical Area value")
+    // Prepay the existing valueRegion generated membership scans; do not build another index.
+    requestCharge(1L + module.generatedRegions.size.toLong)
+    module.generatedRegions.foreach: generation =>
+      requestCharge(1L + generation.declarations.size.toLong)
+    if valueRegion(ref).nonEmpty then
+      collectionFailure("construction input is not available in its original root scope")
+
+  /** Snapshot original value dependencies only. Finalized boundary types remain owned by C2a's
+    * current-epoch materializer; they are not new authored input roots or frontier exemptions.
+    */
+  private def requestRoots(input: Expr[?], frontier: Long): Vector[ConstructionRootIdentity] =
+    val result = Vector.newBuilder[ConstructionRootIdentity]
+    var rootCount = 0L
+    val active = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+    val done = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+    val pending = mutable.ArrayBuffer.empty[(Any, Boolean)]
+    pending += input -> false
+    def enter(identity: AnyRef, leaving: Boolean)(children: => Iterator[?]): Unit =
+      if leaving then
+        active.remove(identity)
+        done.put(identity, java.lang.Boolean.TRUE)
+      else
+        if active.containsKey(identity) then
+          collectionFailure("construction input dependency cycle")
+        if !done.containsKey(identity) then
+          active.put(identity, java.lang.Boolean.TRUE)
+          pending += identity -> true
+          pending += ConstructionRequestChildren(children) -> false
+    while pending.nonEmpty do
+      requestCharge()
+      val (value, leaving) = pending.remove(pending.size - 1)
+      value match
+        case children: ConstructionRequestChildren =>
+          if children.values.hasNext then
+            requestCharge()
+            val next = children.values.next()
+            pending += children -> false
+            pending += next -> false
+        case expression: Expr[?] =>
+          val identity = expression.asInstanceOf[AnyRef]
+          if !leaving && !done.containsKey(identity) && !active.containsKey(identity) then
+            val root = ConstructionRootIdentity(identity, requestReference(identity))
+            requireRequestIdentity(root, frontier)
+            requestCharge()
+            result += root
+            rootCount += 1L
+          enter(identity, leaving):
+            expression match
+              case kernel: KernelExpr[?] =>
+                if kernel.constructionFinalized then kernel.operands.iterator
+                else
+                  if !kernel.registeredConstructionOwnedBy(this) then
+                    collectionFailure("construction input contains an orphan pending cell")
+                  kernel.constructionDependencies.iterator
+              case _ => Iterator.empty
+        case sequence: Seq[?] => enter(sequence, leaving)(sequence.iterator)
+        case optional: Option[?] => enter(optional, leaving)(optional.iterator)
+        case _: Int | _: Long | _: Boolean | _: String | _: Double => ()
+        // Type metadata is NOT frontier-certified: the unchanged canonical type/boundary proof
+        // owns its dependencies, including later materialized widths for the same boundary.
+        case _: DataType[?] => ()
+        case _ => collectionFailure("construction input has unsupported root metadata")
+    requestCharge(rootCount)
+    result.result()
+
+  private def reserveRegisteredConstruction(
+      input: Expr[?],
+      body: DigitalCollectionCallback.ReductionBody
+  ): KernelExpr[Data] =
+    DigitalCollectionCallback.requireChecked(body.checked)
+    val module = currentModule
+    val bound = bindCollectionValue(input, activeValueRegion, module.handle)
+    requireRegisteredCollectionOperand(bound, module.handle)
+    val frontier = constructionAllocationSerial
+    val roots = requestRoots(bound, frontier)
+    val result = reserveReductionConstruction(bound, body)
+    require(
+      result.constructionDependencies.head.asInstanceOf[AnyRef] eq bound,
+      "registered reservation must retain its actual bound input"
+    )
+    result.attachConstructionRequest(ConstructionRequestContext(
+      this,
+      module,
+      bound,
+      requestReference(bound),
+      expressionIds.get(result),
+      frontier,
+      roots,
+      result.constructionSourceSlot
+    ))
+    result
+
+  /** Both manual precompletion and queued completion use this exact identity check. */
+  private def validateConstructionRequest(result: KernelExpr[?], input: Expr[?]): Boolean =
+    if result.constructionKind.nonEmpty then
+      val request = result.constructionRequest.getOrElse(
+        collectionFailure("registered construction lost its request context")
+      )
+      if (request.session ne this) || !ordinaryRootConstructionContext ||
+        (currentModule ne request.module) || !records.get(
+          request.module.handle
+        ).exists(_ eq request.module) ||
+        (request.input ne input) || (requestReference(input) ne request.inputReference) ||
+        request.sourceSlot != result.constructionSourceSlot
+      then collectionFailure("registered construction lost its original request context")
+      val resultRef = Option(expressionIds.get(result)).getOrElse(
+        collectionFailure("registered construction lost its reserved identity")
+      )
+      val allocation = resultRef.constructionAllocation.getOrElse(
+        collectionFailure("registered construction lost its result allocation")
+      )
+      if (resultRef ne request.resultReference) ||
+        (allocation.session ne this) || (allocation.module ne request.module) ||
+        allocation.serial <= request.frontier ||
+        !expressionValues.get(resultRef).exists(_ eq result)
+      then collectionFailure("registered construction changed its reserved identity")
+      request.roots.foreach(root => requireRequestIdentity(root, request.frontier))
+      val roots = requestRoots(input, request.frontier)
+      if roots.size != request.roots.size then
+        collectionFailure("registered construction changed its original input roots")
+      var index = 0
+      while index < roots.size do
+        requestCharge()
+        val actual = roots(index)
+        val original = request.roots(index)
+        if (actual.value ne original.value) || (actual.reference ne original.reference) then
+          collectionFailure("registered construction changed its original input roots")
+        index += 1
+    true
+
+  /** Installation itself is inside try. Only the three installed stacks are restored; allocation,
+    * work, sealed payloads and canonical registries are deliberately never rolled back.
+    */
+  private def inConstructionRequest[A](result: KernelExpr[?])(body: => A): A =
+    if result.constructionKind.isEmpty then body
+    else
+      val request = result.constructionRequest.getOrElse(
+        collectionFailure("registered construction lost its request context")
+      )
+      val modules = moduleStack.toVector
+      val collections = collectionStack.toVector
+      val generations = generationStack.toVector
+      try
+        installValueScopeChain(request.module.handle, Vector.empty)
+        // A real charged installation step also makes partial-install failure independently testable.
+        requestCharge()
+        body
+      finally
+        moduleStack.clear(); moduleStack ++= modules
+        collectionStack.clear(); collectionStack ++= collections
+        generationStack.clear(); generationStack ++= generations
+
+  private def allocateExpressionReference(module: ModuleRecord): ExpressionRef =
+    stampAllocation(module, ExpressionRef(module.handle, module.expressionCount))
+
+  private def allocateScaffoldReference(module: ModuleRecord): ExpressionRef =
+    stampAllocation(module, ExpressionRef(module.handle, -module.scaffoldExpressionCount - 1))
+
+  private def allocateDeclarationReference(module: ModuleRecord): DeclarationRef =
+    stampAllocation(module, DeclarationRef(module.handle, module.declarations.size))
+
+  // Preserve the original JVM entrypoint and the authored body/source anchors above.
+  def completeReductionSingleton(
+      result: KernelExpr[Data],
+      input: Expr[Vec[Data]],
+      indices: Vector[Dimension]
+  ): Expr[Data] =
+    if result.constructionKind.isEmpty then completeReductionSingletonBody(result, input, indices)
+    else
+      def complete(): Expr[Data] =
+        validateConstructionRequest(result, input)
+        inConstructionRequest(result)(completeReductionSingletonBody(result, input, indices))
+      try
+        boundaryClosureOwner match
+          case Some(owner) => owner.guard(complete())
+          case None => complete()
+      catch
+        case failure: Throwable =>
+          result.failConstruction(this)
+          poisonConstructor(failure, "construction request")
+          throw failure
+
+  private def chargeConstructionActivation(owner: BoundaryClosureOwner, inventory: Long): Unit =
+    owner.charge(constructionRequestWork)
+    owner.charge(inventory)

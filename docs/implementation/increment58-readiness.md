@@ -2051,3 +2051,43 @@ invocation remain open. Public zero, invalid and nonsingleton callback semantics
 are not newly enabled; pending inner geometry is unchanged. Foundation 58 remains
 incomplete. No CI, broad qualification, held target consumer repair or publication
 retry was performed.
+
+## Checkpoint 60: private root request provenance and restoration
+
+The existing root-singleton construction owner now retains private request
+context and allocation-frontier metadata. Every genuinely new canonical
+declaration or expression identity receives one allocation stamp; reference
+reuse does not restamp. Shared manual and queued completion validate canonical
+input/root/lexical identities through charged, stack-safe dependency traversal.
+The frontier does not replace existing cycle, orphan, type or boundary proofs.
+Unknown potentially value-bearing metadata remains unsupported.
+
+Context installation is enclosed by restoration even when installation fails.
+Restoration does not roll back allocations, source identities, budget, registry
+entries or sealed payloads. A partial failure poisons the owning transaction and
+invalidates its tickets. This slice supports only the already-admitted ordinary
+root context, not generalized installation of a different lexical context.
+
+The maintained runner freshly compiles two formatted sources and passes thirteen
+focused controls. A real charged failure after installation but before the
+completion body verifies restoration, unchanged retained identities, exhausted
+budget, poison, stale-ticket refusal, nonpublication and fresh recovery. Thirteen
+separate retained-class predecessor groups pass, including the 29 C2a controls,
+C1 closure controls, 26 eager/pending controls and eleven lifecycle controls. All
+fourteen emitted outputs remain raw-byte-identical; retained compatibility is
+not fresh predecessor compilation. Existing post-seal failure coverage remains
+green, and legacy signatures and original source anchors are preserved. See
+[the maintained context guide](../../tests/scala/domain-hierarchy/REDUCTION_CONTEXT_C2B1.md).
+
+The matched build pins 73 API sources and 24 bridge dependencies. Initial recipe,
+type-inference, local-class warning and maintained-runner preparation failures
+remain recorded, with narrow repairs and no warning suppression. Verified
+raw-plus-archive coexistence was 24,760,320 owned bytes with 248,688,640 bytes free,
+within the 32 MiB stage cap and 246,808,576-byte reserve. Exact archive-size
+admission and complete verification preceded raw cleanup; samples do not prove
+an unobserved continuous peak.
+
+Generalized lexical context, selected-proxy authority, late-source/final-name
+ordering, callbacks and nonsingleton construction remain open. Public pending
+outer geometry is not enabled, and Foundation 58 remains incomplete. No CI,
+broad qualification or held publication/target-consumer action was retried.
